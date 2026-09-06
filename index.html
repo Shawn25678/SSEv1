@@ -115,13 +115,16 @@
             </select>
           </label>
           <div class="rate-pop" id="rate-pop">
-            <button class="rate-pop-btn" id="rate-pop-btn" type="button" aria-describedby="rate-pop-card">Rates</button>
+            <div class="rate-pop-row">
+              <button class="rate-pop-btn" id="rate-pop-btn" type="button" aria-describedby="rate-pop-card">Rates</button>
+              <button class="rate-swap-btn" data-convert-swap type="button" title="Flip this rate. Item prices stay in the currency checked under Convert.">⇄</button>
+            </div>
             <div class="rate-pop-card" id="rate-pop-card" role="tooltip"></div>
           </div>
-          <div class="price-clock" id="price-clock" title="poe.ninja first, then PoE 2 trade for items ninja is missing. Checks every 20 minutes.">
+          <button type="button" class="price-clock" id="price-clock" data-check-prices title="Click to check poe.ninja, then auto-check every drop on the dashboard from PoE 2 trade.">
             <span>Prices</span>
-            <strong id="price-clock-time">—</strong>
-          </div>
+            <strong id="price-clock-time">Check prices</strong>
+          </button>
         </div>
       </header>
 

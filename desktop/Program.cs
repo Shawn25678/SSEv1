@@ -82,12 +82,16 @@ sealed class TrackerWindow : Form
         {
             AutomaticDecompression = DecompressionMethods.All,
             PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+            UseCookies = true,
+            CookieContainer = new CookieContainer(),
         };
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(25) };
         client.DefaultRequestHeaders.TryAddWithoutValidation(
             "User-Agent",
             "OAuth StillSaneExile/1.2 (contact: local-desktop-tracker)");
         client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Origin", "https://www.pathofexile.com");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://www.pathofexile.com/trade2");
         return client;
     }
 
@@ -137,7 +141,7 @@ sealed class TrackerWindow : Form
         }
     }
 
-    async Task FetchTradePrice(string id, string league, string name)
+    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false)
     {
         name = (name ?? "").Trim();
         if (!ValidLeague(league) || name.Length is < 2 or > 80)
@@ -146,7 +150,7 @@ sealed class TrackerWindow : Form
             return;
         }
         var cacheKey = "trade:" + league + ":" + name.ToLowerInvariant();
-        if (Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < CacheFor)
+        if (!bust && Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < CacheFor)
         {
             Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
             return;
@@ -154,17 +158,29 @@ sealed class TrackerWindow : Form
         await Gate.WaitAsync();
         try
         {
-            if (Cache.TryGetValue(cacheKey, out hit) && DateTime.UtcNow - hit.at < CacheFor)
+            if (!bust && Cache.TryGetValue(cacheKey, out hit) && DateTime.UtcNow - hit.at < CacheFor)
             {
                 Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
                 return;
             }
-            var payload = await LookupTradeListing(league, name);
-            var status = payload is null ? 404 : 200;
-            var body = payload ?? "{\"error\":\"no listings\"}";
-            if (payload is not null)
+            var payload = await LookupTradeListing(league, name, thorough);
+            if (payload is { RateLimited: true })
+            {
+                Reply(id, false, 429, "{\"error\":\"rate limited\"}");
+                return;
+            }
+            if (payload is { Forbidden: true })
+            {
+                Reply(id, false, 403, "{\"error\":\"trade blocked\"}");
+                return;
+            }
+            var body = payload?.Json;
+            var status = body is null ? 404 : 200;
+            if (body is not null)
                 Cache[cacheKey] = (DateTime.UtcNow, status, body);
-            Reply(id, payload is not null, status, body);
+            else
+                Cache.TryRemove(cacheKey, out _);
+            Reply(id, body is not null, status, body ?? "{\"error\":\"no listings\"}");
         }
         finally
         {
@@ -172,16 +188,28 @@ sealed class TrackerWindow : Form
         }
     }
 
-    async Task<string?> LookupTradeListing(string league, string name)
+    sealed record TradeLookup(string? Json = null, bool RateLimited = false, bool Forbidden = false);
+
+    async Task<TradeLookup> LookupTradeListing(string league, string name, bool thorough = false)
     {
         var searchUri = "https://www.pathofexile.com/api/trade2/search/poe2/" + Uri.EscapeDataString(league);
-        foreach (var body in TradeQueries(name))
+        foreach (var body in TradeQueries(name, thorough))
         {
-            using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
-            using var searchRes = await TradeHttp.PostAsync(searchUri, content);
-            var searchJson = await searchRes.Content.ReadAsStringAsync();
-            if (!searchRes.IsSuccessStatusCode) continue;
-            using var search = JsonDocument.Parse(searchJson);
+            var (searchJson, searchStatus) = await PostTradeSearch(searchUri, body);
+            if (searchStatus == 429) return new TradeLookup(RateLimited: true);
+            if (searchStatus is 401 or 403) return new TradeLookup(Forbidden: true);
+            if (searchJson is null) continue;
+            JsonDocument search;
+            try
+            {
+                search = JsonDocument.Parse(searchJson);
+            }
+            catch (JsonException)
+            {
+                continue;
+            }
+            using (search)
+            {
             var root = search.RootElement;
             if (!root.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array || result.GetArrayLength() == 0)
                 continue;
@@ -190,61 +218,140 @@ sealed class TrackerWindow : Form
             if (hashes.Length == 0) continue;
             var fetchUrl = "https://www.pathofexile.com/api/trade2/fetch/" + string.Join(",", hashes) + "?query=" + Uri.EscapeDataString(queryId);
             using var fetchRes = await TradeHttp.GetAsync(fetchUrl);
-            if (!fetchRes.IsSuccessStatusCode) continue;
-            var fetchJson = await fetchRes.Content.ReadAsStringAsync();
-            using var fetched = JsonDocument.Parse(fetchJson);
-            if (!fetched.RootElement.TryGetProperty("result", out var listings) || listings.ValueKind != JsonValueKind.Array)
-                continue;
-            string? bestName = null;
-            string? bestCurrency = null;
-            double bestAmount = double.MaxValue;
-            var count = 0;
-            foreach (var row in listings.EnumerateArray())
+            string? fetchJson = null;
+            if ((int)fetchRes.StatusCode == 429)
             {
-                if (!row.TryGetProperty("listing", out var listing) ||
-                    !listing.TryGetProperty("price", out var price) ||
-                    price.ValueKind != JsonValueKind.Object)
-                    continue;
-                var amount = price.TryGetProperty("amount", out var amountEl) && amountEl.TryGetDouble(out var n) ? n : double.NaN;
-                var currency = price.TryGetProperty("currency", out var curEl) ? curEl.GetString() ?? "" : "";
-                if (!NumberIsPositive(amount) || string.IsNullOrWhiteSpace(currency)) continue;
-                count++;
-                if (amount < bestAmount)
-                {
-                    bestAmount = amount;
-                    bestCurrency = currency;
-                    bestName = row.TryGetProperty("item", out var item) && item.TryGetProperty("name", out var nameEl)
-                        ? nameEl.GetString()
-                        : name;
-                }
+                var wait = RetryAfterMs(fetchRes) ?? 4000;
+                await Task.Delay(wait);
+                using var retryFetch = await TradeHttp.GetAsync(fetchUrl);
+                if ((int)retryFetch.StatusCode == 429) return new TradeLookup(RateLimited: true);
+                if (!retryFetch.IsSuccessStatusCode) continue;
+                fetchJson = await retryFetch.Content.ReadAsStringAsync();
             }
-            if (count == 0 || bestCurrency is null) continue;
-            var total = root.TryGetProperty("total", out var totalEl) && totalEl.TryGetInt32(out var listed) ? listed : count;
-            return JsonSerializer.Serialize(new
+            else if ((int)fetchRes.StatusCode is 401 or 403)
             {
-                name = string.IsNullOrWhiteSpace(bestName) ? name : bestName,
-                amount = bestAmount,
-                currency = bestCurrency,
-                listings = total,
-            }, JsonOut);
+                return new TradeLookup(Forbidden: true);
+            }
+            else if (fetchRes.IsSuccessStatusCode)
+            {
+                fetchJson = await fetchRes.Content.ReadAsStringAsync();
+            }
+            if (fetchJson is null) continue;
+            var payload = ReadCheapestListing(fetchJson, name, root);
+            if (payload is not null) return new TradeLookup(payload);
+            }
         }
+        return new TradeLookup();
+    }
+
+    static int? RetryAfterMs(HttpResponseMessage res)
+    {
+        if (res.Headers.RetryAfter?.Delta is TimeSpan delta)
+            return (int)Math.Clamp(delta.TotalMilliseconds, 1000, 20000);
+        if (res.Headers.TryGetValues("Retry-After", out var values) && int.TryParse(values.FirstOrDefault(), out var seconds))
+            return (int)Math.Clamp(seconds * 1000, 1000, 20000);
         return null;
+    }
+
+    async Task<(string? json, int status)> PostTradeSearch(string uri, string body)
+    {
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+            using var searchRes = await TradeHttp.PostAsync(uri, content);
+            var status = (int)searchRes.StatusCode;
+            var searchJson = await searchRes.Content.ReadAsStringAsync();
+            if (status == 429)
+            {
+                if (attempt == 0)
+                {
+                    await Task.Delay(RetryAfterMs(searchRes) ?? 4000);
+                    continue;
+                }
+                return (null, 429);
+            }
+            if (status is 401 or 403) return (null, status);
+            return (searchRes.IsSuccessStatusCode ? searchJson : null, status);
+        }
+        return (null, 0);
+    }
+
+    string? ReadCheapestListing(string fetchJson, string fallbackName, JsonElement searchRoot)
+    {
+        using var fetched = JsonDocument.Parse(fetchJson);
+        if (!fetched.RootElement.TryGetProperty("result", out var listings) || listings.ValueKind != JsonValueKind.Array)
+            return null;
+        string? bestName = null;
+        string? bestCurrency = null;
+        double bestAmount = double.MaxValue;
+        var count = 0;
+        foreach (var row in listings.EnumerateArray())
+        {
+            if (!row.TryGetProperty("listing", out var listing) ||
+                !listing.TryGetProperty("price", out var price) ||
+                price.ValueKind != JsonValueKind.Object)
+                continue;
+            var amount = price.TryGetProperty("amount", out var amountEl) && amountEl.TryGetDouble(out var n) ? n : double.NaN;
+            var currency = price.TryGetProperty("currency", out var curEl) ? curEl.GetString() ?? "" : "";
+            if (!NumberIsPositive(amount) || string.IsNullOrWhiteSpace(currency)) continue;
+            count++;
+            if (amount < bestAmount)
+            {
+                bestAmount = amount;
+                bestCurrency = currency;
+                bestName = ItemDisplayName(row, fallbackName);
+            }
+        }
+        if (count == 0 || bestCurrency is null) return null;
+        var total = searchRoot.TryGetProperty("total", out var totalEl) && totalEl.TryGetInt32(out var listed) ? listed : count;
+        return JsonSerializer.Serialize(new
+        {
+            name = string.IsNullOrWhiteSpace(bestName) ? fallbackName : bestName,
+            amount = bestAmount,
+            currency = bestCurrency,
+            listings = total,
+        }, JsonOut);
+    }
+
+    static string ItemDisplayName(JsonElement row, string fallback)
+    {
+        if (!row.TryGetProperty("item", out var item) || item.ValueKind != JsonValueKind.Object)
+            return fallback;
+        var uniqueName = item.TryGetProperty("name", out var nameEl) ? nameEl.GetString() : null;
+        if (!string.IsNullOrWhiteSpace(uniqueName)) return uniqueName;
+        var typeLine = item.TryGetProperty("typeLine", out var typeEl) ? typeEl.GetString() : null;
+        return string.IsNullOrWhiteSpace(typeLine) ? fallback : typeLine;
     }
 
     static bool NumberIsPositive(double n) => n is > 0 and < 1_000_000_000 && !double.IsNaN(n) && !double.IsInfinity(n);
 
-    static IEnumerable<string> TradeQueries(string name)
+    static IEnumerable<string> TradeQueries(string name, bool thorough = false)
     {
         yield return JsonSerializer.Serialize(new
         {
-            query = new { status = new { option = "securable" }, name },
+            query = new { status = new { option = "any" }, name },
             sort = new Dictionary<string, string> { ["price"] = "asc" },
         });
         yield return JsonSerializer.Serialize(new
         {
+            query = new { status = new { option = "any" }, type = name },
+            sort = new Dictionary<string, string> { ["price"] = "asc" },
+        });
+        if (!name.EndsWith(" Support", StringComparison.OrdinalIgnoreCase) &&
+            (thorough || name.Contains("Support", StringComparison.OrdinalIgnoreCase) || name.Contains("Lineage", StringComparison.OrdinalIgnoreCase)))
+        {
+            yield return JsonSerializer.Serialize(new
+            {
+                query = new { status = new { option = "any" }, type = name + " Support" },
+                sort = new Dictionary<string, string> { ["price"] = "asc" },
+            });
+        }
+        if (!thorough) yield break;
+        yield return JsonSerializer.Serialize(new
+        {
             query = new
             {
-                status = new { option = "securable" },
+                status = new { option = "any" },
                 type = name,
                 filters = new { type_filters = new { filters = new { rarity = new { option = "unique" } } } },
             },
@@ -320,7 +427,9 @@ sealed class TrackerWindow : Form
             {
                 var league = root.TryGetProperty("league", out var leagueEl) ? leagueEl.GetString() ?? "" : "";
                 var itemName = root.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
-                await FetchTradePrice(id ?? "", league, itemName);
+                var skipCache = root.TryGetProperty("bust", out var skipEl) && skipEl.ValueKind == JsonValueKind.True;
+                var thorough = root.TryGetProperty("thorough", out var thoroughEl) && thoroughEl.ValueKind == JsonValueKind.True;
+                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough);
                 return;
             }
             if (type == "backup-info")

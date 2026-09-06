@@ -16,10 +16,12 @@ const ui = {
   editLogId: null,
   dashRollId: null,
   econType: "Currency",
+  econTypes: ["Currency"],
+  econAll: false,
   econSearch: "",
   econMode: "browse",
-  econScope: "cat",
   econChart: null,
+  bossId: "",
 };
 
 let liveKill = { logId: null, bossId: null };
@@ -41,6 +43,10 @@ const prices = {
   tables: {},
   history: {},
   nextAt: 0,
+  cached: false,
+  looking: new Set(),
+  checkedEmpty: new Set(),
+  filling: false,
 };
 
 const NINJA_EXCHANGE = [
@@ -111,6 +117,8 @@ function loadState() {
       claimed: parsed.claimed || {},
       farmBossId: parsed.farmBossId || "",
       quickLog: parsed.quickLog !== false,
+      convertMain: parsed.convertMain || "divine",
+      convertView: parsed.convertView || parsed.convertMain || "divine",
       theme: { ...themeDefaults(), ...(parsed.theme || {}) },
     };
   } catch {
@@ -129,6 +137,8 @@ function defaultState() {
     claimed: {},
     farmBossId: "",
     quickLog: true,
+    convertMain: "divine",
+    convertView: "divine",
     theme: themeDefaults(),
   };
 }
@@ -506,6 +516,58 @@ function visibleBosses() {
   return allBosses().filter((boss) => matchesFilter(boss) && matchesSearch(boss));
 }
 
+const SLIDE_COUNT = 4;
+const SLIDE_WINDOW = 0.92;
+const SLIDE_UI_SCALE = 1.08;
+const SLIDE_ART = "11em";
+
+function slideVars(shown) {
+  return `--slide-count:${shown || SLIDE_COUNT};--slide-window:${SLIDE_WINDOW};--ui-scale:${SLIDE_UI_SCALE};--slide-art:${SLIDE_ART}`;
+}
+
+function updateBossScale() {
+  const root = document.documentElement;
+  if (ui.view !== "bosses") {
+    root.style.setProperty("--boss-scale", "1");
+    return;
+  }
+  const w = root.clientWidth || window.innerWidth || 1280;
+  const h = root.clientHeight || window.innerHeight || 800;
+  const scale = Math.max(0.82, Math.min(1.28, w / 1360, h / 980));
+  root.style.setProperty("--boss-scale", scale.toFixed(3));
+}
+
+window.addEventListener("resize", () => {
+  clearTimeout(updateBossScale.timer);
+  updateBossScale.timer = setTimeout(updateBossScale, 80);
+});
+
+function stagedBoss() {
+  const list = visibleBosses();
+  if (!list.length) return null;
+  return list.find((boss) => boss.id === ui.bossId) || list[0];
+}
+
+function slideWindow() {
+  const list = visibleBosses();
+  if (!list.length) return { list, start: 0, shown: 0, slice: [] };
+  const shown = Math.min(SLIDE_COUNT, list.length);
+  let start = list.findIndex((boss) => boss.id === ui.bossId);
+  if (start < 0) start = 0;
+  const slice = [];
+  for (let i = 0; i < shown; i++) slice.push(list[(start + i) % list.length]);
+  return { list, start, shown, slice };
+}
+
+function stepBoss(delta) {
+  const list = visibleBosses();
+  if (list.length < 2) return;
+  const current = stagedBoss();
+  const i = Math.max(0, list.findIndex((boss) => boss.id === current.id));
+  ui.bossId = list[(i + delta + list.length) % list.length].id;
+  render();
+}
+
 function formatWhen(ts) {
   return new Date(ts).toLocaleString(undefined, {
     month: "short",
@@ -579,9 +641,9 @@ function scoutFetch(league) {
   return webviewJson({ type: "scout", league }, 35000, "poe2scout timed out");
 }
 
-function tradeFetch(name, league) {
+function tradeFetch(name, league, bust = false, thorough = false) {
   if (!window.chrome?.webview) return Promise.reject(new Error("trade needs the desktop app"));
-  return webviewJson({ type: "trade", name, league }, 30000, "PoE 2 trade timed out");
+  return webviewJson({ type: "trade", name, league, bust: !!bust, thorough: !!thorough }, 45000, "PoE 2 trade timed out");
 }
 
 const iconPending = new Map();
@@ -619,13 +681,30 @@ function fetchDbIcon(name) {
   return work;
 }
 
+async function mapLimit(items, limit, fn) {
+  const q = items.slice();
+  const n = Math.min(Math.max(1, limit), q.length || 1);
+  await Promise.all(
+    Array.from({ length: q.length ? n : 0 }, async () => {
+      while (q.length) await fn(q.shift());
+    })
+  );
+}
+
 async function prefetchMissingIcons() {
   const names = new Set();
+  const farm = getBoss(farmBossId());
+  (farm?.uniques || []).forEach((item) => names.add(item.name));
+  const first = [...names].filter((name) => name && !lookupIcon(name));
+  await mapLimit(first, 3, fetchDbIcon);
+  if (first.length) render();
   SEARCH_ITEMS.forEach((item) => names.add(typeof item === "string" ? item : item?.name));
   allBosses().forEach((boss) => (boss.uniques || []).forEach((item) => names.add(item.name)));
-  const missing = [...names].filter((name) => name && !lookupIcon(name));
-  for (const name of missing) await fetchDbIcon(name);
-  if (missing.length) render();
+  const rest = [...names].filter((name) => name && !lookupIcon(name) && !first.includes(name)).slice(0, 48);
+  if (!rest.length) return;
+  mapLimit(rest, 2, fetchDbIcon).then(() => {
+    if (rest.some((name) => lookupIcon(name))) render();
+  });
 }
 
 function fillSuggestIcons(matches, redraw) {
@@ -720,6 +799,8 @@ function lookupKeys(name) {
   const pk = priceKey(name);
   if (pk.startsWith("the ")) add(pk.slice(4));
   else add("the " + pk);
+  if (pk.endsWith(" support")) add(pk.replace(/ support$/, ""));
+  else add(pk + " support");
   if (typeof slug === "function") {
     const s = slug(name);
     if (s) add(s.replace(/-/g, " "));
@@ -959,6 +1040,7 @@ function lookupIcon(name) {
 
 function rememberPrice(name, divine, listings, icon, amount, unit, source) {
   if (!name) return;
+  bustPriceLookup();
   const valid = Number.isFinite(divine) && divine >= 0;
   const resolvedIcon = ninjaIcon(icon);
   if (!valid && !resolvedIcon && !Number.isFinite(amount)) return;
@@ -978,13 +1060,31 @@ function rememberPrice(name, divine, listings, icon, amount, unit, source) {
         listings: listings || 0,
         icon: resolvedIcon || "",
         source: source || "ninja",
+        at: Date.now(),
+        cached: false,
       });
+      continue;
+    }
+    if (prev.cached && valid) {
+      prev.divine = divine;
+      prev.maxDivine = divine;
+      prev.amount = Number.isFinite(amount) ? amount : undefined;
+      prev.maxAmount = Number.isFinite(amount) ? amount : undefined;
+      prev.unit = unit || prev.unit;
+      prev.listings = listings || 0;
+      prev.name = name;
+      prev.source = source || prev.source;
+      prev.cached = false;
+      prev.at = Date.now();
+      if (resolvedIcon) prev.icon = resolvedIcon;
       continue;
     }
     if (valid) {
       if (!Number.isFinite(prev.divine) || divine < prev.divine) {
         prev.divine = divine;
         prev.name = name;
+        prev.at = Date.now();
+        prev.cached = false;
         if (resolvedIcon) prev.icon = resolvedIcon;
         if (source) prev.source = source;
       }
@@ -1011,7 +1111,14 @@ function toDivine(value, primary) {
 
 function sparkFromLine(line) {
   const s = line?.sparkLine || line?.sparkline || {};
-  const data = Array.isArray(s.data) ? s.data.map((v) => (v == null || v === "" ? null : Number(v))) : [];
+  let raw = s.data;
+  if (typeof raw === "string") {
+    raw = raw
+      .trim()
+      .split(/\s+/)
+      .map((v) => (v === "" || v == null ? null : Number(v)));
+  }
+  const data = Array.isArray(raw) ? raw.map((v) => (v == null || v === "" ? null : Number(v))) : [];
   const change = Number(s.totalChange);
   return { data, change: Number.isFinite(change) ? change : 0 };
 }
@@ -1024,8 +1131,8 @@ function sparkPoints(data) {
 
 function sparkSvg(data, change, wide = false) {
   const pts = sparkPoints(data);
-  const w = wide ? 420 : 78;
-  const h = wide ? 120 : 28;
+  const w = wide ? 420 : 120;
+  const h = wide ? 120 : 36;
   if (pts.length < 2) {
     return wide ? `<p class="muted">Not enough history yet this league.</p>` : `<span class="spark empty">—</span>`;
   }
@@ -1099,15 +1206,18 @@ function ingestExchange(data, type) {
   if (rates.chaos && (type === "Currency" || !prices.chaosPerDivine)) prices.chaosPerDivine = rates.chaos;
   const names = new Map();
   for (const item of [...(data.core?.items || []), ...(data.items || [])]) {
-    if (item?.id && item?.name) names.set(String(item.id), { name: item.name, icon: ninjaIcon(item.image || item.icon) });
+    if (!item) continue;
+    const meta = { name: item.name, icon: ninjaIcon(item.image || item.icon) };
+    if (item.id && item.name) names.set(String(item.id), meta);
+    if (item.detailsId && item.name) names.set(String(item.detailsId), meta);
     if (item?.name) rememberIcon(item.name, item.image || item.icon);
   }
   const unit = data.core?.primary || "divine";
   const rows = [];
   for (const line of data.lines || []) {
-    const meta = names.get(String(line.id));
-    const name = meta?.name || line.name || "";
-    const amount = Number(line.primaryValue);
+    const meta = names.get(String(line.id)) || names.get(String(line.detailsId || ""));
+    const name = meta?.name || line.name || line.currencyTypeName || "";
+    const amount = Number(line.primaryValue ?? line.divineValue ?? line.exaltedValue ?? line.chaosValue);
     const divine = toDivine(amount, unit);
     const icon = ninjaIcon(line.icon || line.image) || meta?.icon || "";
     rememberPrice(name, divine, line.listingCount, icon, amount, unit);
@@ -1134,7 +1244,7 @@ function ingestItems(data, type) {
   const unit = data?.core?.primary || "exalted";
   const rows = [];
   for (const line of data?.lines || []) {
-    const amount = Number(line.primaryValue);
+    const amount = Number(line.primaryValue ?? line.divineValue ?? line.exaltedValue ?? line.chaosValue);
     const divine = toDivine(amount, unit);
     rememberPrice(line.name, divine, line.listingCount, line.icon || line.image, amount, unit);
     rememberNinjaLore(line);
@@ -1182,20 +1292,47 @@ function pricedHit(hit) {
   return hit && (Number.isFinite(hit.divine) || Number.isFinite(hit.amount));
 }
 
-function lookupPrice(name) {
-  if (!name) return null;
-  for (const key of lookupKeys(name)) {
-    const hit = prices.byName.get(key);
-    if (pricedHit(hit)) return hit;
-  }
-  const want = foldKey(name);
-  const wantSlug = typeof slug === "function" ? slug(name) : "";
+const priceLookupMemo = new Map();
+let priceFoldIndex = null;
+
+function bustPriceLookup() {
+  priceLookupMemo.clear();
+  priceFoldIndex = null;
+}
+
+function priceFoldMap() {
+  if (priceFoldIndex) return priceFoldIndex;
+  priceFoldIndex = new Map();
   for (const hit of prices.byName.values()) {
     if (!pricedHit(hit) || !hit.name) continue;
-    if (foldKey(hit.name) === want) return hit;
-    if (wantSlug && typeof slug === "function" && slug(hit.name) === wantSlug) return hit;
+    const got = foldKey(hit.name).replace(/ support$/, "");
+    if (!priceFoldIndex.has(got)) priceFoldIndex.set(got, hit);
+    if (typeof slug === "function") {
+      const s = slug(hit.name);
+      if (s && !priceFoldIndex.has("slug:" + s)) priceFoldIndex.set("slug:" + s, hit);
+    }
   }
-  return null;
+  return priceFoldIndex;
+}
+
+function lookupPrice(name) {
+  if (!name) return null;
+  if (priceLookupMemo.has(name)) return priceLookupMemo.get(name);
+  let found = null;
+  for (const key of lookupKeys(name)) {
+    const hit = prices.byName.get(key);
+    if (pricedHit(hit)) {
+      found = hit;
+      break;
+    }
+  }
+  if (!found) {
+    const want = foldKey(name).replace(/ support$/, "");
+    const index = priceFoldMap();
+    found = index.get(want) || (typeof slug === "function" ? index.get("slug:" + slug(name)) : null) || null;
+  }
+  priceLookupMemo.set(name, found);
+  return found;
 }
 
 function formatNum(n) {
@@ -1213,14 +1350,91 @@ function formatAmount(value, unit) {
   return formatNum(value) + suffix;
 }
 
+function allConvertUnits() {
+  return ["divine", "exalted", "chaos"];
+}
+
+function convertUnits() {
+  return allConvertUnits().filter((unit) => unit !== "chaos" || prices.chaosPerDivine);
+}
+
+function nextConvertUnit(unit, step = 1) {
+  const units = allConvertUnits();
+  const i = Math.max(0, units.indexOf(unit));
+  return units[(i + step + units.length * 8) % units.length];
+}
+
+function convertMain() {
+  const units = allConvertUnits();
+  const unit = state.convertMain || "divine";
+  return units.includes(unit) ? unit : "divine";
+}
+
+function convertView() {
+  const units = allConvertUnits();
+  const unit = state.convertView || convertMain();
+  return units.includes(unit) ? unit : convertMain();
+}
+
+function convertQuote() {
+  return nextConvertUnit(convertView(), 1);
+}
+
+function setConvertMain(unit) {
+  if (!allConvertUnits().includes(unit)) return;
+  state.convertMain = unit;
+  state.convertView = unit;
+  save();
+  render();
+}
+
+function swapConvert() {
+  state.convertView = nextConvertUnit(convertView(), 1);
+  save();
+  renderDivineTape();
+}
+
+function amountInDivine(amount, unit) {
+  if (!Number.isFinite(amount)) return NaN;
+  if (!unit || unit === "divine" || unit === "d") return amount;
+  if (unit === "exalted" || unit === "ex") return prices.exaltedPerDivine ? amount / prices.exaltedPerDivine : NaN;
+  if (unit === "chaos" || unit === "c") return prices.chaosPerDivine ? amount / prices.chaosPerDivine : NaN;
+  return amount;
+}
+
+function amountFromDivine(divine, unit) {
+  if (!Number.isFinite(divine)) return NaN;
+  if (!unit || unit === "divine" || unit === "d") return divine;
+  if (unit === "exalted" || unit === "ex") return prices.exaltedPerDivine ? divine * prices.exaltedPerDivine : NaN;
+  if (unit === "chaos" || unit === "c") return prices.chaosPerDivine ? divine * prices.chaosPerDivine : NaN;
+  return divine;
+}
+
+function unitShort(unit) {
+  if (unit === "exalted" || unit === "ex") return "ex";
+  if (unit === "chaos" || unit === "c") return "c";
+  return "d";
+}
+
+function unitLabel(unit) {
+  if (unit === "exalted") return "Exalt";
+  if (unit === "chaos") return "Chaos";
+  return "Divine";
+}
+
+function convertSteps(unit) {
+  if (unit === "divine") return [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1];
+  if (unit === "exalted") return [1, 5, 10, 20, 50, 100, 200, 500];
+  return [1, 10, 20, 50, 100, 200, 500, 1000];
+}
+
 function formatDivine(divine) {
   if (!Number.isFinite(divine)) return "—";
-  if (divine >= 1) return formatAmount(divine, "divine");
-  if (prices.exaltedPerDivine) {
-    const ex = divine * prices.exaltedPerDivine;
-    if (ex >= 0.1) return formatAmount(ex, "exalted");
-  }
-  if (prices.chaosPerDivine) return formatAmount(divine * prices.chaosPerDivine, "chaos");
+  const main = convertMain();
+  const converted = amountFromDivine(divine, main);
+  if (Number.isFinite(converted)) return formatAmount(converted, main);
+  if (main !== "exalted" && prices.exaltedPerDivine) return formatAmount(amountFromDivine(divine, "exalted"), "exalted");
+  if (main !== "chaos" && prices.chaosPerDivine) return formatAmount(amountFromDivine(divine, "chaos"), "chaos");
   return formatAmount(divine, "divine");
 }
 
@@ -1262,37 +1476,53 @@ function currencyForAmount(divine) {
   return "Divine Orb";
 }
 
+function hitDivine(hit) {
+  if (Number.isFinite(hit?.divine)) return hit.divine;
+  if (hit?.unit && Number.isFinite(hit.amount)) return toDivine(hit.amount, hit.unit);
+  return NaN;
+}
+
+function priceChip(name) {
+  const hit = lookupPrice(name);
+  const mark = `data-price-for="${esc(name)}"`;
+  if (pricedHit(hit)) {
+    const low = hitDivine(hit);
+    const high = Number.isFinite(hit.maxDivine) ? hit.maxDivine : low;
+    const spread = Number.isFinite(low) && Number.isFinite(high) && high > low * 1.2;
+    const label = spread ? `${formatDivine(low)}–${formatDivine(high)}` : formatDivine(low);
+    const currency = currencyForAmount(spread ? high : low);
+    return `<span class="price-chip${hit.cached ? " is-cached" : ""}" ${mark} title="${spread ? srcLabel(hit) + " floor–high" : srcLabel(hit)}" ${itemHoverAttr(currency)}>${itemIconHtml(currency)}${esc(label)}</span>`;
+  }
+  if (prices.looking.has(name)) {
+    return `<span class="price-chip is-empty" ${mark}>checking…</span>`;
+  }
+  const checked = prices.checkedEmpty.has(name);
+  return `<span class="price-chip is-empty is-lookup" ${mark} data-price-lookup="${esc(name)}" title="${
+    checked ? "Checked just now — click to try poe.ninja and PoE 2 trade again" : "Click to check poe.ninja and PoE 2 trade"
+  }">${checked ? "no listing" : "no listing"}</span>`;
+}
+
+function paintLivePrices() {
+  for (const el of [...document.querySelectorAll("[data-price-for]")]) {
+    const html = priceChip(el.dataset.priceFor);
+    if (el.outerHTML !== html) el.outerHTML = html;
+  }
+  paintPriceClock();
+}
+
 function valueHtml(divine) {
   const name = currencyForAmount(divine);
   const label = formatDivine(divine);
   return `<span class="value-with-icon" ${itemHoverAttr(name)}>${itemIconHtml(name)}${esc(label)}</span>`;
 }
 
-function priceChip(name) {
-  const hit = lookupPrice(name);
-  if (pricedHit(hit)) {
-    const spread = Number.isFinite(hit.maxDivine) && Number.isFinite(hit.divine) && hit.maxDivine > hit.divine * 1.2;
-    let label;
-    let currency;
-    if (hit.unit && Number.isFinite(hit.amount)) {
-      label =
-        spread && Number.isFinite(hit.maxAmount)
-          ? `${formatAmount(hit.amount, hit.unit)}–${formatAmount(hit.maxAmount, hit.unit)}`
-          : formatAmount(hit.amount, hit.unit);
-      currency = currencyNameForUnit(hit.unit);
-    } else {
-      label = spread ? `${formatDivine(hit.divine)}–${formatDivine(hit.maxDivine)}` : formatDivine(hit.divine);
-      currency = currencyForAmount(spread ? hit.maxDivine : hit.divine);
-    }
-    return `<span class="price-chip" title="${spread ? srcLabel(hit) + " floor–high" : srcLabel(hit)}" ${itemHoverAttr(currency)}>${itemIconHtml(currency)}${esc(label)}</span>`;
-  }
-  if (prices.status === "ready") {
-    return `<span class="price-chip is-empty" title="No listing on poe.ninja or PoE 2 trade yet this league">no listing</span>`;
-  }
-  return "";
-}
-
 function srcLabel(hit) {
+  const when = hit?.at ? " · " + formatWhen(hit.at) : "";
+  if (hit?.cached) {
+    if (hit.source === "trade") return "Last recorded from PoE 2 trade" + when;
+    if (hit.source === "scout") return "Last recorded from poe2scout" + when;
+    return "Last recorded from poe.ninja" + when;
+  }
   if (hit?.source === "trade") return "PoE 2 trade lowest listing";
   if (hit?.source === "scout") return "poe2scout (from PoE 2 trade)";
   if (hit?.source) return hit.source;
@@ -1300,9 +1530,9 @@ function srcLabel(hit) {
 }
 
 function dropValue(drop) {
-  const hit = lookupPrice(drop.name);
-  if (!hit || !Number.isFinite(hit.divine)) return 0;
-  return hit.divine * (drop.qty || 1);
+  const divine = hitDivine(lookupPrice(drop.name));
+  if (!Number.isFinite(divine)) return 0;
+  return divine * (drop.qty || 1);
 }
 
 function logValue(log) {
@@ -1336,17 +1566,191 @@ function linkCatalogPrices() {
   }
   for (const name of catalogNames()) {
     if (pricedHit(lookupPrice(name))) continue;
-    const want = foldKey(name);
+    const want = foldKey(name).replace(/ support$/, "");
     const wantSlug = typeof slug === "function" ? slug(name) : "";
-    const hit = priced.find(
-      (row) => foldKey(row.name) === want || (wantSlug && typeof slug === "function" && slug(row.name) === wantSlug)
-    );
+    const hit = priced.find((row) => {
+      const got = foldKey(row.name).replace(/ support$/, "");
+      return got === want || (wantSlug && typeof slug === "function" && slug(row.name) === wantSlug);
+    });
     if (hit) rememberPrice(name, hit.divine, hit.listings, hit.icon, hit.amount, hit.unit);
   }
 }
 
 const PRICE_REFRESH_MS = 20 * 60 * 1000;
 const PRICE_RETRY_MS = 3 * 60 * 1000;
+const PRICE_CACHE_KEY = "poe2-exile-ledger-prices-v1";
+const PRICE_CACHE_FRESH_MS = 5 * 60 * 1000;
+
+function clonePriceMap(map) {
+  const next = new Map();
+  if (!map) return next;
+  for (const [key, hit] of map.entries()) next.set(key, { ...hit });
+  return next;
+}
+
+function uniquePricedHits(map = prices.byName) {
+  const rows = [];
+  const seen = new Set();
+  for (const hit of map.values()) {
+    if (!hit?.name || seen.has(hit.name) || !pricedHit(hit)) continue;
+    seen.add(hit.name);
+    rows.push({
+      name: hit.name,
+      divine: hit.divine,
+      maxDivine: hit.maxDivine,
+      amount: hit.amount,
+      maxAmount: hit.maxAmount,
+      unit: hit.unit,
+      listings: hit.listings || 0,
+      icon: hit.icon || "",
+      source: hit.source || "ninja",
+      at: hit.at || 0,
+      cached: !!hit.cached,
+    });
+  }
+  return rows;
+}
+
+function compactPriceTables(tables = prices.tables) {
+  const out = {};
+  for (const [type, rows] of Object.entries(tables || {})) {
+    if (!Array.isArray(rows) || !rows.length) continue;
+    out[type] = rows.map((row) => ({
+      name: row.name,
+      divine: row.divine,
+      amount: row.amount,
+      unit: row.unit,
+      listings: row.listings || 0,
+      icon: row.icon || "",
+      baseType: row.baseType || "",
+      ninjaId: row.ninjaId,
+      kind: row.kind,
+      type: row.type || type,
+      spark: row.spark,
+      corrupted: row.corrupted,
+    }));
+  }
+  return out;
+}
+
+function stampPriceHit(name, extra) {
+  if (!name) return;
+  for (const key of lookupKeys(name)) {
+    const hit = prices.byName.get(key);
+    if (!hit) continue;
+    if (extra.at != null) hit.at = extra.at;
+    if (extra.cached != null) hit.cached = extra.cached;
+    if (Number.isFinite(extra.maxDivine)) hit.maxDivine = extra.maxDivine;
+    if (Number.isFinite(extra.maxAmount)) hit.maxAmount = extra.maxAmount;
+    if (extra.source) hit.source = extra.source;
+  }
+}
+
+function applyPriceRow(row, extra = {}) {
+  if (!row?.name) return;
+  rememberPrice(row.name, row.divine, row.listings, row.icon, row.amount, row.unit, row.source);
+  stampPriceHit(row.name, {
+    at: row.at || extra.at || 0,
+    cached: extra.cached != null ? extra.cached : !!row.cached,
+    maxDivine: row.maxDivine,
+    maxAmount: row.maxAmount,
+    source: row.source,
+  });
+}
+
+function readPriceStore() {
+  try {
+    const dump = JSON.parse(localStorage.getItem(PRICE_CACHE_KEY) || "null");
+    if (!dump) return { version: 2, leagues: {} };
+    if (Array.isArray(dump.items)) {
+      const league = dump.league || leagueId();
+      return { version: 2, leagues: { [league]: dump } };
+    }
+    return { version: 2, leagues: dump.leagues && typeof dump.leagues === "object" ? dump.leagues : {} };
+  } catch {
+    return { version: 2, leagues: {} };
+  }
+}
+
+function persistPrices() {
+  const league = prices.league || leagueId();
+  const entry = {
+    league,
+    fetchedAt: prices.fetchedAt || 0,
+    nextAt: prices.nextAt || 0,
+    primary: prices.primary,
+    exaltedPerDivine: prices.exaltedPerDivine,
+    chaosPerDivine: prices.chaosPerDivine,
+    items: uniquePricedHits(),
+    tables: compactPriceTables(),
+  };
+  const store = readPriceStore();
+  store.leagues[league] = entry;
+  const ranked = Object.entries(store.leagues).sort((a, b) => (b[1]?.fetchedAt || 0) - (a[1]?.fetchedAt || 0));
+  store.leagues = Object.fromEntries(ranked.slice(0, 3));
+  try {
+    localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify({ version: 2, leagues: store.leagues }));
+  } catch {
+    try {
+      entry.tables = {};
+      store.leagues[league] = entry;
+      localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify({ version: 2, leagues: store.leagues }));
+    } catch {
+      /* quota */
+    }
+  }
+}
+
+function persistPricesSoon() {
+  clearTimeout(persistPricesSoon.timer);
+  persistPricesSoon.timer = setTimeout(persistPrices, 400);
+}
+
+function hydratePriceCache() {
+  try {
+    const dump = readPriceStore().leagues[leagueId()];
+    if (!dump || !Array.isArray(dump.items) || !dump.items.length) return false;
+    prices.byName = new Map();
+    prices.tables = dump.tables && typeof dump.tables === "object" ? dump.tables : {};
+    prices.history = {};
+    bustPriceLookup();
+    prices.primary = dump.primary || "divine";
+    prices.exaltedPerDivine = Number(dump.exaltedPerDivine) || 0;
+    prices.chaosPerDivine = Number(dump.chaosPerDivine) || 0;
+    prices.league = dump.league || leagueId();
+    prices.fetchedAt = Number(dump.fetchedAt) || 0;
+    prices.nextAt = Number(dump.nextAt) || 0;
+    prices.cached = true;
+    prices.status = "ready";
+    prices.error = "";
+    for (const row of dump.items) applyPriceRow(row, { cached: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function restoreCachedMisses(oldMap) {
+  if (!oldMap?.size) return;
+  const fresh = new Set();
+  for (const hit of prices.byName.values()) {
+    if (hit?.name) fresh.add(priceKey(hit.name));
+  }
+  const seen = new Set();
+  for (const hit of oldMap.values()) {
+    if (!hit?.name || seen.has(hit.name) || !pricedHit(hit)) continue;
+    seen.add(hit.name);
+    if (fresh.has(priceKey(hit.name)) || pricedHit(lookupPrice(hit.name))) continue;
+    applyPriceRow(hit, { cached: true, at: hit.at || prices.fetchedAt });
+  }
+}
+
+function restoreCachedTables(oldTables) {
+  if (!oldTables) return;
+  for (const [type, rows] of Object.entries(oldTables)) {
+    if (!prices.tables[type] && Array.isArray(rows) && rows.length) prices.tables[type] = rows;
+  }
+}
 
 function formatCountdown(ms) {
   const total = Math.max(0, Math.ceil(ms / 1000));
@@ -1357,23 +1761,17 @@ function formatCountdown(ms) {
 
 function paintPriceClock() {
   const el = document.getElementById("price-clock-time");
+  const clock = document.getElementById("price-clock");
+  if (clock) {
+    clock.title = "Click to check poe.ninja, then auto-check every drop on the dashboard from PoE 2 trade.";
+  }
   if (!el) return;
-  if (prices.status === "loading") {
-    el.textContent = "Updating…";
-    return;
-  }
-  const due = prices.nextAt || (prices.fetchedAt ? prices.fetchedAt + PRICE_REFRESH_MS : 0);
-  if (!due) {
-    el.textContent = "Waiting…";
-    return;
-  }
-  const remain = due - Date.now();
-  if (remain <= 0) {
-    el.textContent = "Updating…";
-    if (prices.status !== "loading") refreshPrices();
-    return;
-  }
-  el.textContent = (prices.error ? "Retry " : "Next ") + formatCountdown(remain);
+  let text = "Check prices";
+  if (prices.status === "loading") text = "Checking…";
+  else if (prices.filling || prices.looking.size) text = prices.looking.size ? `Listings ${prices.looking.size}…` : "Checking listings…";
+  else if (prices.fetchedAt) text = (prices.cached ? "Last recorded " : "Checked ") + formatWhen(prices.fetchedAt);
+  else if (prices.byName.size) text = "Last recorded";
+  if (el.textContent !== text) el.textContent = text;
 }
 
 function startPriceClock() {
@@ -1384,19 +1782,28 @@ function startPriceClock() {
 }
 
 async function refreshPrices(force = false) {
-  if (prices.status === "loading") return;
+  if (prices.status === "loading" || prices.filling) return;
   const league = leagueId();
-  if (!force && prices.league === league && prices.nextAt && Date.now() < prices.nextAt) return;
+  const snapshotMap = clonePriceMap(prices.byName);
+  const snapshotTables = prices.tables;
+  const snapshotMeta = {
+    primary: prices.primary,
+    exaltedPerDivine: prices.exaltedPerDivine,
+    chaosPerDivine: prices.chaosPerDivine,
+    league: prices.league,
+    fetchedAt: prices.fetchedAt,
+  };
   prices.status = "loading";
   prices.error = "";
   paintPriceClock();
   render();
   try {
     const q = encodeURIComponent(league);
-    const currency = await ninjaFetch(`/poe2/api/economy/exchange/current/overview?league=${q}&type=Currency`, force);
+    const currency = await ninjaFetch(`/poe2/api/economy/exchange/current/overview?league=${q}&type=Currency`, true);
     prices.byName = new Map();
     prices.tables = {};
     prices.history = {};
+    bustPriceLookup();
     prices.primary = "divine";
     prices.exaltedPerDivine = 0;
     prices.chaosPerDivine = 0;
@@ -1404,12 +1811,12 @@ async function refreshPrices(force = false) {
     const exchangeTypes = NINJA_EXCHANGE.filter((type) => type !== "Currency");
     const rest = await Promise.all([
       ...exchangeTypes.map((type) =>
-        ninjaFetch(`/poe2/api/economy/exchange/current/overview?league=${q}&type=${type}`, force)
+        ninjaFetch(`/poe2/api/economy/exchange/current/overview?league=${q}&type=${type}`, true)
           .then((data) => ({ type, data }))
           .catch(() => null)
       ),
       ...NINJA_ITEMS.map((type) =>
-        ninjaFetch(`/poe2/api/economy/stash/current/item/overview?league=${q}&type=${type}`, force)
+        ninjaFetch(`/poe2/api/economy/stash/current/item/overview?league=${q}&type=${type}`, true)
           .then((data) => ({ type, data, items: true }))
           .catch(() => null)
       ),
@@ -1420,18 +1827,44 @@ async function refreshPrices(force = false) {
       else ingestExchange(pack.data, pack.type);
     });
     if (!prices.byName.size) throw new Error("No poe.ninja prices returned");
+    restoreCachedMisses(snapshotMap);
+    restoreCachedTables(snapshotTables);
     linkCatalogPrices();
     prices.league = league;
     prices.fetchedAt = Date.now();
-    prices.nextAt = prices.fetchedAt + PRICE_REFRESH_MS;
+    prices.nextAt = 0;
+    prices.cached = false;
     prices.status = "ready";
+    prices.checkedEmpty = new Set();
+    persistPrices();
+    render();
+    await fillGapPrices();
     prefetchMissingIcons();
-    fillGapPrices();
   } catch (err) {
     prices.error = err.message || "Could not reach poe.ninja";
-    prices.nextAt = Date.now() + PRICE_RETRY_MS;
-    prices.status = prices.byName.size ? "ready" : "error";
-    if (prices.byName.size) fillGapPrices();
+    prices.nextAt = 0;
+    if (snapshotMap.size && snapshotMeta.league === league) {
+      prices.byName = snapshotMap;
+      prices.tables = snapshotTables;
+      bustPriceLookup();
+      prices.primary = snapshotMeta.primary || prices.primary;
+      prices.exaltedPerDivine = snapshotMeta.exaltedPerDivine || prices.exaltedPerDivine;
+      prices.chaosPerDivine = snapshotMeta.chaosPerDivine || prices.chaosPerDivine;
+      prices.league = snapshotMeta.league;
+      if (snapshotMeta.fetchedAt) prices.fetchedAt = snapshotMeta.fetchedAt;
+      prices.cached = true;
+      prices.status = "ready";
+      render();
+      await fillGapPrices();
+    } else if (prices.byName.size) {
+      prices.cached = true;
+      prices.status = "ready";
+      persistPricesSoon();
+      render();
+      await fillGapPrices();
+    } else {
+      prices.status = "error";
+    }
   }
   paintPriceClock();
   render();
@@ -1449,22 +1882,50 @@ async function fillGapPrices() {
   } catch {
     /* keep whatever we have */
   }
+  persistPrices();
+}
+
+function wantsGapPrice(name) {
+  return !pricedHit(lookupPrice(name));
+}
+
+function dashboardPriceNames() {
+  const names = [];
+  const seen = new Set();
+  const add = (name) => {
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    names.push(name);
+  };
+  const farm = getBoss(farmBossId());
+  (farm?.uniques || []).forEach((item) => add(item.name));
+  for (const log of state.logs.slice(0, 50)) {
+    for (const drop of log.drops || []) add(drop.name);
+  }
+  return names;
 }
 
 function missingCatalogNames() {
   const farmId = farmBossId();
+  const dash = new Set(dashboardPriceNames());
   const ranked = [];
   const seen = new Set();
   allBosses().forEach((boss) => {
     (boss.uniques || []).forEach((item) => {
-      if (!item?.name || seen.has(item.name) || pricedHit(lookupPrice(item.name))) return;
+      if (!item?.name || seen.has(item.name) || !wantsGapPrice(item.name)) return;
       seen.add(item.name);
       let rank = 3;
-      if (boss.id === farmId) rank = 0;
+      if (dash.has(item.name)) rank = -1;
+      else if (boss.id === farmId) rank = 0;
       else if (item.rarity === "extremely-rare") rank = 1;
       else if (item.rarity === "very-rare") rank = 2;
       ranked.push({ name: item.name, rank });
     });
+  });
+  dashboardPriceNames().forEach((name) => {
+    if (seen.has(name) || !wantsGapPrice(name)) return;
+    seen.add(name);
+    ranked.push({ name, rank: -1 });
   });
   return ranked.sort((a, b) => a.rank - b.rank).map((row) => row.name);
 }
@@ -1476,12 +1937,17 @@ async function fillScoutPrices() {
   for (const item of rows) {
     const name = item.Name || item.name || "";
     const amount = Number(item.CurrentPrice ?? item.currentPrice);
-    if (!name || !(amount > 0) || pricedHit(lookupPrice(name))) continue;
+    if (!name || !(amount > 0)) continue;
+    const hit = lookupPrice(name);
+    if (pricedHit(hit) && !hit.cached) continue;
     const divine = toDivine(amount, "exalted");
     rememberPrice(name, divine, 0, item.IconUrl || item.iconUrl, amount, "exalted", "scout");
     added++;
   }
-  if (added) render();
+  if (added) {
+    persistPricesSoon();
+    paintLivePrices();
+  }
 }
 
 function tradeUnit(currency) {
@@ -1496,27 +1962,138 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fillTradePrices() {
-  const missing = missingCatalogNames().slice(0, 12);
-  if (!missing.length) return;
-  let added = 0;
-  for (const name of missing) {
-    if (pricedHit(lookupPrice(name))) continue;
-    try {
-      const row = await tradeFetch(name, leagueId());
-      const unit = tradeUnit(row?.currency);
-      const amount = Number(row?.amount);
-      if (!Number.isFinite(amount) || amount <= 0) continue;
-      const divine = toDivine(amount, unit);
-      rememberPrice(row.name || name, divine, row.listings || 0, "", amount, unit, "trade");
-      added++;
-      render();
-    } catch {
-      /* skip this name */
-    }
-    await sleep(2200);
+function tradeRateError(err) {
+  const text = String(err?.message || err || "");
+  return /rate|429|too many/i.test(text);
+}
+
+function tradeBlockedError(err) {
+  return /blocked|403|401/i.test(String(err?.message || err || ""));
+}
+
+async function applyTradeRow(name, row) {
+  const unit = tradeUnit(row?.currency);
+  const amount = Number(row?.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return false;
+  const divine = toDivine(amount, unit);
+  rememberPrice(name, divine, row.listings || 0, "", amount, unit, "trade");
+  if (row.name && row.name !== name) rememberPrice(row.name, divine, row.listings || 0, "", amount, unit, "trade");
+  prices.checkedEmpty.delete(name);
+  return true;
+}
+
+async function probeTradePrice(name) {
+  linkCatalogPrices();
+  if (pricedHit(lookupPrice(name))) {
+    prices.checkedEmpty.delete(name);
+    return true;
   }
-  if (added) render();
+  const tableHit = hitFromTables(name);
+  if (tableHit) {
+    rememberPrice(name, tableHit.divine, tableHit.listings, tableHit.icon, tableHit.amount, tableHit.unit, tableHit.source || "ninja");
+    prices.checkedEmpty.delete(name);
+    persistPrices();
+    return true;
+  }
+  if (!window.chrome?.webview) return false;
+  for (const alias of tradeAliases(name)) {
+    try {
+      const row = await tradeFetch(alias, leagueId(), true, true);
+      if (await applyTradeRow(name, row)) {
+        persistPrices();
+        return true;
+      }
+    } catch (err) {
+      if (tradeRateError(err) || tradeBlockedError(err)) throw err;
+      await sleep(350);
+    }
+  }
+  prices.checkedEmpty.add(name);
+  return false;
+}
+
+async function fillTradePrices() {
+  if (!window.chrome?.webview) return;
+  const queue = dashboardPriceNames().filter((name) => wantsGapPrice(name));
+  if (!queue.length) return;
+  prices.filling = true;
+  queue.forEach((name) => prices.looking.add(name));
+  paintPriceClock();
+  render();
+  try {
+    for (const name of queue) {
+      try {
+        await probeTradePrice(name);
+      } catch (err) {
+        if (tradeRateError(err)) {
+          showToast("PoE 2 trade hit a rate limit. Wait a minute, then Check prices again for the rest.");
+          break;
+        }
+        if (tradeBlockedError(err)) {
+          showToast("PoE 2 trade blocked the request. Wait and try Check prices again.");
+          break;
+        }
+        prices.checkedEmpty.add(name);
+      } finally {
+        prices.looking.delete(name);
+        paintLivePrices();
+      }
+      await sleep(1600);
+    }
+  } finally {
+    queue.forEach((name) => prices.looking.delete(name));
+    prices.filling = false;
+    persistPrices();
+    paintPriceClock();
+    render();
+  }
+}
+
+function tradeAliases(name) {
+  const aliases = [];
+  const add = (n) => {
+    if (!n || aliases.some((x) => x.toLowerCase() === n.toLowerCase())) return;
+    aliases.push(n);
+  };
+  add(name);
+  const canon = canonicalName(name);
+  add(canon);
+  if (!/support$/i.test(name)) add(name + " Support");
+  if (/^the /i.test(name)) add(name.replace(/^the /i, ""));
+  else add("The " + name);
+  return aliases;
+}
+
+function hitFromTables(name) {
+  const want = foldKey(name).replace(/ support$/, "");
+  for (const rows of Object.values(prices.tables || {})) {
+    for (const row of rows || []) {
+      if (!row?.name || !pricedHit(row)) continue;
+      if (foldKey(row.name).replace(/ support$/, "") === want) return row;
+    }
+  }
+  return null;
+}
+
+async function lookupOnePrice(name) {
+  if (!name || prices.looking.has(name)) return;
+  prices.looking.add(name);
+  paintLivePrices();
+  try {
+    if (!window.chrome?.webview) {
+      showToast("Price checks need the desktop app.");
+      return;
+    }
+    const found = await probeTradePrice(name);
+    if (!found) showToast("No listing for " + name);
+  } catch (err) {
+    if (tradeRateError(err)) showToast("PoE 2 trade hit a rate limit. Wait a minute and try this item again.");
+    else if (tradeBlockedError(err)) showToast("PoE 2 trade blocked this request. Wait a bit and try again.");
+  } finally {
+    prices.looking.delete(name);
+    persistPricesSoon();
+    paintLivePrices();
+  }
 }
 
 async function loadLeagues() {
@@ -1524,14 +2101,15 @@ async function loadLeagues() {
     const leagues = await ninjaFetch("/poe2/api/economy/leagues");
     const select = document.getElementById("league-input");
     if (!select || !Array.isArray(leagues) || !leagues.length) return;
+    const ids = leagues.map((league) => league.id);
+    if (!state.league || !ids.includes(state.league)) {
+      state.league = leagues[0].id;
+      save();
+    }
     const current = leagueId();
     select.innerHTML = leagues
       .map((league) => `<option value="${esc(league.id)}" ${league.id === current ? "selected" : ""}>${esc(league.name)}</option>`)
       .join("");
-    if (!state.league) {
-      state.league = leagues[0].id;
-      save();
-    }
   } catch {
     /* keep the hardcoded option */
   }
@@ -1663,19 +2241,27 @@ function renderDash() {
     }
   }
   const topLoot = [...tally.values()].sort((a, b) => b.divine - a.divine || b.qty - a.qty).slice(0, 8);
-  const divine = lookupPrice("Divine Orb");
   const ninjaNote =
     prices.status === "ready"
-      ? `Prices · ${esc(prices.league)} · ${itemIconHtml("Divine Orb", "xs")}1d = ${
-          prices.exaltedPerDivine
-            ? `${itemIconHtml("Exalted Orb", "xs")}${esc(prices.exaltedPerDivine.toFixed(1) + "ex")}`
-            : esc(formatDivine(divine?.divine || 1))
-        } · ${esc(formatWhen(prices.fetchedAt))}`
-      : prices.status === "loading"
-        ? "Loading prices…"
-        : prices.status === "error"
-          ? `Prices unavailable${prices.error ? " — " + prices.error : ""}`
-          : "Fetching prices…";
+      ? `Prices · ${esc(prices.league)} · ${itemIconHtml(currencyNameForUnit(convertMain()), "xs")}1${unitShort(convertMain())} = ${
+          itemIconHtml(currencyNameForUnit(nextConvertUnit(convertMain(), 1)), "xs")
+        }${esc(
+          formatAmount(
+            amountFromDivine(amountInDivine(1, convertMain()), nextConvertUnit(convertMain(), 1)),
+            nextConvertUnit(convertMain(), 1)
+          )
+        )} · ${
+          prices.cached ? "last recorded " : ""
+        }${esc(formatWhen(prices.fetchedAt))}`
+      : prices.status === "loading" && prices.byName.size
+        ? "Updating last recorded prices…"
+        : prices.status === "loading"
+          ? "Loading prices…"
+          : prices.status === "error"
+            ? `Prices unavailable${prices.error ? " — " + prices.error : ""}`
+            : prices.byName.size
+              ? "Last recorded prices"
+              : "Fetching prices…";
   const recent = state.logs.slice(0, 8);
   const onKill = new Set((liveForFarm?.drops || []).map((drop) => drop.uniqueId || drop.name));
   const dropTiles = (farm?.uniques || [])
@@ -1827,6 +2413,59 @@ function ninjaTypes() {
   return [...NINJA_EXCHANGE, ...NINJA_ITEMS];
 }
 
+function selectedEconTypes() {
+  if (ui.econAll) return ninjaTypes();
+  const allowed = new Set(ninjaTypes());
+  const types = (ui.econTypes || []).filter((type) => allowed.has(type));
+  return types.length ? types : ["Currency"];
+}
+
+function gatherEconRows() {
+  const rows = [];
+  for (const type of selectedEconTypes()) {
+    for (const row of econRows(type)) rows.push(row);
+  }
+  return rows;
+}
+
+function pickEconCat(type) {
+  if (ui.econMode === "browse") {
+    ui.econAll = false;
+    ui.econTypes = [type];
+    ui.econType = type;
+    return;
+  }
+  if (ui.econAll) {
+    ui.econAll = false;
+    ui.econTypes = [type];
+    ui.econType = type;
+    return;
+  }
+  const next = new Set(ui.econTypes);
+  if (next.has(type)) next.delete(type);
+  else next.add(type);
+  const types = ninjaTypes().filter((item) => next.has(item));
+  if (!types.length) {
+    ui.econAll = true;
+    ui.econType = type;
+    return;
+  }
+  ui.econTypes = types;
+  ui.econType = types[0];
+}
+
+function pickEconAll() {
+  ui.econAll = true;
+}
+
+function syncEconMode(mode) {
+  ui.econMode = mode;
+  if (mode === "browse" && !ui.econAll && selectedEconTypes().length > 1) {
+    ui.econTypes = [selectedEconTypes()[0]];
+    ui.econType = ui.econTypes[0];
+  }
+}
+
 function econRows(type) {
   let rows = (prices.tables[type] || []).map((row) => ({ ...row, type: row.type || type }));
   if (!NINJA_ITEMS.includes(type)) {
@@ -1869,11 +2508,10 @@ function econRowHtml(row, type) {
     .filter(Boolean)
     .join(" · ");
   const priced = Number.isFinite(row.amount) || Number.isFinite(row.divine);
-  return `<button class="econ-row${open ? " is-open" : ""}" type="button" ${itemHoverAttr(row.name)} data-econ-open="${esc(row.name)}" data-econ-id="${esc(String(row.ninjaId ?? ""))}" data-econ-kind="${esc(row.kind || "")}" data-econ-type="${esc(cat)}">
-    ${itemIconHtml(row.name, "lg")}
+  return `<button class="econ-row${open ? " is-open" : ""}" type="button" title="${esc(extra)}" ${itemHoverAttr(row.name)} data-econ-open="${esc(row.name)}" data-econ-id="${esc(String(row.ninjaId ?? ""))}" data-econ-kind="${esc(row.kind || "")}" data-econ-type="${esc(cat)}">
+    ${itemIconHtml(row.name)}
     <span class="econ-copy">
       <span class="${NINJA_ITEMS.includes(cat) ? "unique-name" : "econ-name"}">${esc(row.name)}</span>
-      <span class="muted">${esc(extra)}</span>
     </span>
     ${sparkSvg(spark.data, spark.change)}
     ${changeHtml(spark.change)}
@@ -1938,16 +2576,13 @@ function trendChange(row) {
 }
 
 function trendingLists() {
-  const scoped = ui.econScope === "cat";
-  const types = scoped ? [ui.econType] : ninjaTypes();
-  const rows = [];
-  for (const type of types) {
-    for (const row of econRows(type)) rows.push(row);
-  }
+  const types = selectedEconTypes();
+  const rows = gatherEconRows();
+  const single = !ui.econAll && types.length === 1;
   const byAbs = (a, b) => Math.abs(trendChange(b)) - Math.abs(trendChange(a)) || a.name.localeCompare(b.name);
   const up = rows.filter((row) => trendChange(row) >= 0.05).sort(byAbs);
   const down = rows.filter((row) => trendChange(row) <= -0.05).sort(byAbs);
-  const flat = scoped
+  const flat = single
     ? rows
         .filter((row) => Math.abs(trendChange(row)) < 0.05)
         .sort(
@@ -1956,7 +2591,7 @@ function trendingLists() {
             a.name.localeCompare(b.name)
         )
     : [];
-  if (!scoped) return { up: up.slice(0, 12), down: down.slice(0, 12), flat: [] };
+  if (!single) return { up: up.slice(0, 16), down: down.slice(0, 16), flat: [] };
   return { up, down, flat };
 }
 
@@ -1968,39 +2603,39 @@ function trendCol(title, rows, empty) {
 }
 
 function renderEcon() {
-  if (!ninjaTypes().includes(ui.econType)) ui.econType = "Currency";
-  const chips = ninjaTypes()
-    .map(
+  const types = selectedEconTypes();
+  ui.econType = types[0] || "Currency";
+  const picked = new Set(types);
+  const showBases = types.some((type) => NINJA_ITEMS.includes(type));
+  const chips = [
+    `<button class="chip ${ui.econAll ? "is-active" : ""}" data-econ-all type="button">All items</button>`,
+    ...ninjaTypes().map(
       (type) =>
-        `<button class="chip ${ui.econType === type ? "is-active" : ""}" data-econ-type="${esc(type)}" type="button">${esc(
+        `<button class="chip ${!ui.econAll && picked.has(type) ? "is-active" : ""}" data-econ-cat="${esc(type)}" type="button">${esc(
           NINJA_LABELS[type] || type
         )}</button>`
-    )
-    .join("");
+    ),
+  ].join("");
   const modes = `<div class="econ-modes">
     <button class="chip ${ui.econMode === "browse" ? "is-active" : ""}" data-econ-mode="browse" type="button">Browse</button>
     <button class="chip ${ui.econMode === "trend" ? "is-active" : ""}" data-econ-mode="trend" type="button">Trending</button>
-    ${
-      ui.econMode === "trend"
-        ? `<button class="chip ${ui.econScope === "cat" ? "is-active" : ""}" data-econ-scope="cat" type="button">This category</button>
-           <button class="chip ${ui.econScope === "all" ? "is-active" : ""}" data-econ-scope="all" type="button">All items</button>`
-        : ""
-    }
   </div>`;
   let body = "";
-  if (prices.status === "loading") body = `<p class="muted">Loading prices…</p>`;
-  else if (prices.status === "error") {
-    body = `<p class="muted">Could not load prices${prices.error ? " — " + esc(prices.error) : ""}. Use Refresh prices in the header.</p>`;
+  const haveEcon = Object.keys(prices.tables || {}).length || prices.byName.size;
+  if (prices.status === "loading" && !haveEcon) body = `<p class="muted">Loading prices…</p>`;
+  else if (prices.status === "error" && !haveEcon) {
+    body = `<p class="muted">Could not load prices${prices.error ? " — " + esc(prices.error) : ""}. Use Check prices in the header.</p>`;
   } else if (ui.econMode === "trend") {
     const { up, down, flat } = trendingLists();
     if (!up.length && !down.length && !flat.length) {
-      body = `<p class="muted">${ui.econSearch ? "No matches moving right now." : "No listings in this category yet. Try Refresh prices."}</p>`;
+      body = `<p class="muted">${ui.econSearch ? "No matches moving right now." : "No listings in this category yet. Use Check prices in the header."}</p>`;
     } else {
       const movers = up.length || down.length;
+      const scopeLabel = ui.econAll ? "all items" : NINJA_LABELS[ui.econType] || "this category";
       body = `${
         movers
           ? `<div class="econ-trend">${trendCol("Rising", up, "Nothing rising.")}${trendCol("Falling", down, "Nothing falling.")}</div>`
-          : `<p class="muted">No 7-day price move in ${esc(NINJA_LABELS[ui.econType] || "this category")} yet. Early-league uniques often sit at 0% until poe.ninja has history.</p>`
+          : `<p class="muted">No 7-day price move in ${esc(scopeLabel)} yet. Early-league uniques often sit at 0% until poe.ninja has history.</p>`
       }${
         flat.length
           ? `<div class="econ-trend-flat">
@@ -2012,29 +2647,34 @@ function renderEcon() {
       }`;
     }
   } else {
-    const rows = econRows(ui.econType).sort(
+    const rows = gatherEconRows().sort(
       (a, b) =>
         (Number.isFinite(b.divine) ? b.divine : -1) - (Number.isFinite(a.divine) ? a.divine : -1) || a.name.localeCompare(b.name)
     );
     if (!rows.length) {
-      body = `<p class="muted">${ui.econSearch ? "No matches in this category." : "No listings in this category yet. Try Refresh prices."}</p>`;
+      body = `<p class="muted">${ui.econSearch ? "No matches in this category." : "No listings in this category yet. Use Check prices in the header."}</p>`;
     } else {
-      body = `<div class="econ-list">${rows.map((row) => econRowHtml(row, ui.econType)).join("")}</div>`;
+      body = `<div class="econ-list">${rows.map((row) => econRowHtml(row, row.type)).join("")}</div>`;
     }
   }
+  const searchHint = ui.econMode === "trend" ? "Search trending…" : ui.econAll ? "Search items…" : "Search this category…";
   return `
     <section class="econ">
       <article class="panel">
         <div class="econ-head">
           <div>
             <h2>Economy</h2>
-            <p class="muted">poe.ninja + PoE 2 trade · ${esc(prices.league || leagueId())}${prices.fetchedAt ? " · " + esc(formatWhen(prices.fetchedAt)) : ""}${
-              NINJA_ITEMS.includes(ui.econType) ? " · each base listed separately" : ""
+            <p class="muted">${esc(prices.league || leagueId())}${prices.fetchedAt ? " · " + (prices.cached ? "last recorded " : "") + esc(formatWhen(prices.fetchedAt)) : ""}${
+              prices.status === "loading" && haveEcon ? " · updating" : ""
+            }${
+              showBases ? " · bases listed separately" : ""
             }</p>
           </div>
-          <input id="econ-search" type="search" placeholder="${ui.econMode === "trend" ? "Search trending…" : "Search this category…"}" value="${esc(ui.econSearch)}" />
+          <div class="econ-tools">
+            ${modes}
+            <input id="econ-search" type="search" placeholder="${esc(searchHint)}" value="${esc(ui.econSearch)}" />
+          </div>
         </div>
-        ${modes}
         <div class="filters econ-cats">${chips}</div>
         ${econChartHtml()}
         ${body}
@@ -2199,56 +2839,72 @@ function importData(file) {
   reader.readAsText(file);
 }
 
+function convertMainChecks() {
+  const main = convertMain();
+  return allConvertUnits()
+    .map(
+      (unit) =>
+        `<label class="rate-check${unit === main ? " is-on" : ""}" data-convert-main="${esc(unit)}">
+          <input type="checkbox" ${unit === main ? "checked" : ""}>
+          ${itemIconHtml(currencyNameForUnit(unit), "xs")}
+          <span>${esc(unitLabel(unit))}</span>
+        </label>`
+    )
+    .join("");
+}
+
 function renderDivineTape() {
   const btn = document.getElementById("rate-pop-btn");
   const card = document.getElementById("rate-pop-card");
   if (!btn || !card) return;
-  const dIcon = itemIconHtml("Divine Orb", "xs");
-  const xIcon = itemIconHtml("Exalted Orb", "xs");
-  const cIcon = itemIconHtml("Chaos Orb", "xs");
+  const view = convertView();
+  const quote = convertQuote();
+  const checks = `<p class="muted rate-card-note">Item prices use this currency. The ⇄ button only flips the rate next to Convert.</p>
+    <div class="rate-checks">${convertMainChecks()}</div>`;
   if (prices.status !== "ready" || !prices.exaltedPerDivine) {
     btn.textContent = prices.status === "loading" ? "Rates…" : "Rates";
-    card.innerHTML = `<p class="muted">${
-      prices.status === "loading" ? "Loading divine, exalt, and chaos rates…" : "Refresh prices to see conversions."
-    }</p>`;
+    card.innerHTML = `
+      <div class="rate-card-head">
+        <h3>Convert</h3>
+      </div>
+      ${checks}
+      <p class="muted">${
+        prices.status === "loading" ? "Checking prices…" : "Check prices in the header to fill conversions."
+      }</p>`;
     return;
   }
-  const exPerD = prices.exaltedPerDivine;
-  const cPerD = prices.chaosPerDivine || 0;
-  const cPerEx = cPerD && exPerD ? cPerD / exPerD : 0;
-  const exPerC = cPerD ? exPerD / cPerD : 0;
-  btn.innerHTML = `${dIcon}1d = ${xIcon}${esc(formatAmount(exPerD, "exalted"))}`;
-  const rows = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
-    .map((frac) => {
-      const ex = exPerD * frac;
-      const chaos = cPerD * frac;
+  const oneView = amountFromDivine(amountInDivine(1, view), quote);
+  btn.innerHTML = `${itemIconHtml(currencyNameForUnit(view), "xs")}1${unitShort(view)} = ${itemIconHtml(
+    currencyNameForUnit(quote),
+    "xs"
+  )}${esc(formatAmount(oneView, quote))}`;
+  const cols = allConvertUnits();
+  const summary = `<div class="rate-line">${itemIconHtml(currencyNameForUnit("divine"), "xs")}<b>1d</b>${["exalted", "chaos"]
+    .map(
+      (to) =>
+        `<span>=</span>${itemIconHtml(currencyNameForUnit(to), "xs")}<b>${esc(
+          formatAmount(amountFromDivine(1, to), to)
+        )}</b>`
+    )
+    .join("")}</div>`;
+  const rows = convertSteps("divine")
+    .map((amount) => {
       return `<tr>
-        <td>${frac === 1 ? "1d" : frac + "d"}</td>
-        <td>${esc(formatAmount(ex, "exalted"))}</td>
-        <td>${cPerD ? esc(formatAmount(chaos, "chaos")) : "—"}</td>
+        ${cols
+          .map((unit) => `<td>${esc(formatAmount(amountFromDivine(amount, unit), unit))}</td>`)
+          .join("")}
       </tr>`;
     })
     .join("");
   card.innerHTML = `
-    <h3>Divine · Exalt · Chaos</h3>
-    <div class="rate-lines">
-      <div class="rate-line">${dIcon}<b>1d</b><span>=</span>${xIcon}<b>${esc(formatAmount(exPerD, "exalted"))}</b>${
-        cPerD ? `<span>=</span>${cIcon}<b>${esc(formatAmount(cPerD, "chaos"))}</b>` : ""
-      }</div>
-      <div class="rate-line">${xIcon}<b>1ex</b><span>=</span>${dIcon}<b>${esc(formatAmount(1 / exPerD, "divine"))}</b>${
-        cPerEx ? `<span>=</span>${cIcon}<b>${esc(formatAmount(cPerEx, "chaos"))}</b>` : ""
-      }</div>
-      ${
-        cPerD
-          ? `<div class="rate-line">${cIcon}<b>1c</b><span>=</span>${dIcon}<b>${esc(formatAmount(1 / cPerD, "divine"))}</b><span>=</span>${xIcon}<b>${esc(
-              formatAmount(exPerC, "exalted")
-            )}</b></div>`
-          : ""
-      }
+    <div class="rate-card-head">
+      <h3>Convert</h3>
     </div>
+    ${checks}
+    ${summary}
     <table class="rate-table">
       <thead>
-        <tr><th>Divine</th><th>Exalt</th><th>Chaos</th></tr>
+        <tr>${cols.map((unit) => `<th>${esc(unitLabel(unit))}</th>`).join("")}</tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>`;
@@ -2304,10 +2960,15 @@ function renderBossCard(boss) {
         </div>
         ${badge}
       </div>
-      <div>
+      <div class="card-copy">
         <h3>${esc(boss.name)}</h3>
         <div class="area">${esc(boss.area || "")}</div>
       </div>
+      ${
+        progress.total
+          ? `<div class="drop-pips">${pips}</div>`
+          : `<p class="muted">Custom fight — no unique catalog.</p>`
+      }
       <div class="metrics">
         <div class="metric"><span>Kills</span><strong>${kills}</strong></div>
         <div class="metric"><span>Uniques</span><strong>${
@@ -2315,23 +2976,35 @@ function renderBossCard(boss) {
         }</strong></div>
         <div class="metric"><span>Complete</span><strong>${progress.total ? esc(formatPct(progress.have, progress.total)) : "—"}</strong></div>
       </div>
-      ${
-        progress.total
-          ? `<div class="progress" aria-hidden="true"><i style="width:${progressPct}%"></i></div>
-             <div class="drop-pips">${pips}</div>`
-          : `<p class="muted">Custom fight — no unique catalog.</p>`
-      }
+      ${progress.total ? `<div class="progress" aria-hidden="true"><i style="width:${progressPct}%"></i></div>` : ""}
       </div>
     </article>
   `;
 }
 
 function renderBosses() {
-  const list = visibleBosses();
+  const { list, start, shown, slice } = slideWindow();
   if (!list.length) {
     return `<div class="empty">No bosses match that search.</div>`;
   }
-  return `<section class="grid">${list.map(renderBossCard).join("")}</section>`;
+  const boss = slice[0];
+  ui.bossId = boss.id;
+  const many = list.length > 1;
+  const cards = slice
+    .map((item, i) => `<div class="boss-slide${i === 0 ? " is-current" : ""}">${renderBossCard(item)}</div>`)
+    .join("");
+  return `
+    <div class="boss-stage-slot">
+    <section class="boss-stage" data-count="${shown}" style="${slideVars(shown)}">
+      <button class="boss-arrow" data-boss-step="-1" type="button" aria-label="Previous boss" ${many ? "" : "disabled"}><span>‹</span></button>
+      <div class="boss-stage-main">
+        <div class="boss-stage-track">${cards}</div>
+        <p class="muted boss-stage-count">${start + 1} of ${list.length}</p>
+      </div>
+      <button class="boss-arrow" data-boss-step="1" type="button" aria-label="Next boss" ${many ? "" : "disabled"}><span>›</span></button>
+    </section>
+    </div>
+  `;
 }
 
 function renderLogView() {
@@ -2557,6 +3230,16 @@ function renderBossDialog(boss) {
         </div>
         <button class="close" data-close="boss-dialog" type="button" aria-label="Close">×</button>
       </header>
+      ${
+        uniqueRows
+          ? `<div><h3>Drop table</h3><p class="muted">Drop % is kills that dropped it, not copies. Two of the same item on one kill is 100%, not 200%.</p><div class="unique-list" style="margin-top:10px">${uniqueRows}</div></div>`
+          : `<p class="muted">No exclusive unique table for this fight. Farm it from the dashboard to log whatever dropped.</p>`
+      }
+      ${
+        extraRows
+          ? `<div><h3>Other logged drops</h3><div class="unique-list" style="margin-top:10px">${extraRows}</div></div>`
+          : ""
+      }
       <div class="metrics">
         <div class="metric"><span>Kills</span><strong>${kills}</strong></div>
         <div class="metric"><span>Drops found</span><strong>${
@@ -2568,16 +3251,6 @@ function renderBossDialog(boss) {
         <button class="btn gold" data-farm="${esc(boss.id)}" type="button">Farm this</button>
         ${boss.category === "custom" ? `<button class="btn danger" data-remove-custom="${esc(boss.id)}" type="button">Remove boss</button>` : ""}
       </div>
-      ${
-        uniqueRows
-          ? `<div><h3>Drop table</h3><p class="muted">Drop % is kills that dropped it, not copies. Two of the same item on one kill is 100%, not 200%.</p><div class="unique-list" style="margin-top:10px">${uniqueRows}</div></div>`
-          : `<p class="muted">No exclusive unique table for this fight. Farm it from the dashboard to log whatever dropped.</p>`
-      }
-      ${
-        extraRows
-          ? `<div><h3>Other logged drops</h3><div class="unique-list" style="margin-top:10px">${extraRows}</div></div>`
-          : ""
-      }
       ${rollHistory}
       ${rewards ? `<div><h3>First-kill rewards</h3><div class="check-grid" style="margin-top:10px">${rewards}</div></div>` : ""}
       <div>
@@ -3060,6 +3733,7 @@ function render() {
   if (ui.view === "hunt") ui.view = "dash";
   const onTitle = ui.view === "title";
   document.body.classList.toggle("on-title", onTitle);
+  document.body.classList.toggle("view-bosses", ui.view === "bosses");
   const title = document.getElementById("title-screen");
   if (title) {
     title.hidden = !onTitle;
@@ -3078,10 +3752,13 @@ function render() {
   });
   syncBackupUi();
   document.getElementById("boss-toolbar").style.display = ui.view === "bosses" ? "flex" : "none";
-  document.getElementById("stats").style.display = ui.view === "dash" || ui.view === "settings" || ui.view === "econ" || onTitle ? "none" : "grid";
+  document.getElementById("stats").style.display =
+    ui.view === "dash" || ui.view === "settings" || ui.view === "econ" || ui.view === "bosses" || onTitle ? "none" : "grid";
 
   if (onTitle) {
     if (shown) hideItemTip();
+    updateBossScale();
+    paintPriceClock();
     return;
   }
 
@@ -3117,6 +3794,8 @@ function render() {
     if (el) showItemTip(el, shown);
     else hideItemTip();
   }
+  updateBossScale();
+  paintPriceClock();
 }
 
 function setMenuOpen(open) {
@@ -3156,6 +3835,30 @@ function onClick(event) {
     if (toast) toast.hidden = true;
     if (toastAct.dataset.toast === "undo") deleteLog(toastAct.dataset.log);
     if (toastAct.dataset.toast === "loot") openLoot(toastAct.dataset.boss, toastAct.dataset.log);
+    return;
+  }
+  const priceLookup = event.target.closest("[data-price-lookup]");
+  if (priceLookup) {
+    event.preventDefault();
+    event.stopPropagation();
+    lookupOnePrice(priceLookup.dataset.priceLookup);
+    return;
+  }
+  if (event.target.closest("[data-convert-swap]")) {
+    event.preventDefault();
+    event.stopPropagation();
+    swapConvert();
+    return;
+  }
+  const convertMainBtn = event.target.closest("[data-convert-main]");
+  if (convertMainBtn) {
+    event.preventDefault();
+    event.stopPropagation();
+    setConvertMain(convertMainBtn.dataset.convertMain);
+    return;
+  }
+  if (event.target.closest("[data-check-prices]")) {
+    refreshPrices(true);
     return;
   }
   const farmNext = event.target.closest("[data-farm-next]");
@@ -3222,6 +3925,12 @@ function onClick(event) {
     openLoot(loot.dataset.loot);
     return;
   }
+  const step = event.target.closest("[data-boss-step]");
+  if (step) {
+    event.stopPropagation();
+    stepBoss(Number(step.dataset.bossStep));
+    return;
+  }
   const open = event.target.closest("[data-open]");
   if (open) {
     openBoss(open.dataset.open);
@@ -3233,21 +3942,21 @@ function onClick(event) {
     render();
     return;
   }
-  const econType = event.target.closest("[data-econ-type]");
-  if (econType) {
-    ui.econType = econType.dataset.econType;
+  const econAll = event.target.closest("[data-econ-all]");
+  if (econAll) {
+    pickEconAll();
+    render();
+    return;
+  }
+  const econCat = event.target.closest("[data-econ-cat]");
+  if (econCat) {
+    pickEconCat(econCat.dataset.econCat);
     render();
     return;
   }
   const econMode = event.target.closest("[data-econ-mode]");
   if (econMode) {
-    ui.econMode = econMode.dataset.econMode;
-    render();
-    return;
-  }
-  const econScope = event.target.closest("[data-econ-scope]");
-  if (econScope) {
-    ui.econScope = econScope.dataset.econScope;
+    syncEconMode(econMode.dataset.econMode);
     render();
     return;
   }
@@ -3339,10 +4048,25 @@ function onClick(event) {
 }
 
 function onChange(event) {
+  const convertMainBox = event.target.closest("[data-convert-main]");
+  if (convertMainBox) {
+    setConvertMain(convertMainBox.dataset.convertMain);
+    return;
+  }
   if (event.target.id === "league-input") {
+    persistPrices();
     state.league = event.target.value;
     save();
-    refreshPrices(true);
+    if (!hydratePriceCache()) {
+      prices.byName = new Map();
+      prices.tables = {};
+      bustPriceLookup();
+      prices.cached = false;
+      prices.status = "idle";
+      prices.fetchedAt = 0;
+      prices.nextAt = 0;
+    }
+    render();
     return;
   }
   if (event.target.id === "farm-boss") {
@@ -3466,6 +4190,7 @@ document.addEventListener("submit", (event) => {
     });
     save();
     ui.filter = "custom";
+    ui.bossId = state.customBosses.at(-1).id;
     event.target.reset();
     document.getElementById("custom-dialog").close();
     render();
@@ -3487,6 +4212,11 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") hideItemTip();
   if (event.target.closest("input, textarea, select, dialog")) return;
   if (document.querySelector("dialog[open]")) return;
+  if (ui.view === "bosses" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+    event.preventDefault();
+    stepBoss(event.key === "ArrowRight" ? 1 : -1);
+    return;
+  }
   if (event.key === "k" || event.key === "K" || event.code === "Space") {
     event.preventDefault();
     finishFarmKill();
@@ -3618,7 +4348,12 @@ function seedReliquaryLore() {
 }
 
 seedReliquaryLore();
+hydratePriceCache();
 refreshBackupInfo();
 render();
 startPriceClock();
-loadLeagues().then(() => refreshPrices());
+loadLeagues().then(() => {
+  if (!prices.byName.size) hydratePriceCache();
+  paintPriceClock();
+  render();
+});
