@@ -2270,9 +2270,7 @@ function renderDivineTape() {
 }
 
 function renderStats() {
-  const bosses = allBosses();
   const totalKills = state.logs.length;
-  const bossesKilled = bosses.filter((boss) => killCount(boss.id) > 0).length;
   let uniqueDrops = 0;
   for (const log of state.logs) {
     for (const drop of log.drops || []) uniqueDrops += drop.qty || 1;
@@ -2280,7 +2278,6 @@ function renderStats() {
   const killsWithLoot = state.logs.filter((log) => (log.drops || []).length > 0).length;
   document.getElementById("stats").innerHTML = `
     <article class="stat"><span>Total kills</span><b>${totalKills}</b></article>
-    <article class="stat"><span>Bosses touched</span><b>${bossesKilled}</b></article>
     <article class="stat"><span>Logged drops</span><b>${uniqueDrops}</b></article>
     <article class="stat"><span>Loot value</span><b>${valueHtml(totalLootValue())}</b></article>
     <article class="stat"><span>Loot rate</span><b>${esc(formatPct(killsWithLoot, totalKills))}</b></article>
