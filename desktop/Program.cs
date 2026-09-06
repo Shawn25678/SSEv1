@@ -261,6 +261,7 @@ sealed class TrackerWindow : Form
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ExileLedger");
         Directory.CreateDirectory(userData);
+        InstallJsonFolder();
 
         try
         {
@@ -410,9 +411,7 @@ sealed class TrackerWindow : Form
         return dir;
     }
 
-    static string LastBackupFolderFile() => Path.Combine(AppDataDir(), "last-backup-folder.txt");
-
-    const string SseFolderName = "SSE";
+    static string LastBackupFolderFile() => Path.Combine(AppDataDir(), "json-folder.txt");
 
     static bool SamePath(string a, string b)
     {
@@ -429,64 +428,78 @@ sealed class TrackerWindow : Form
         }
     }
 
-    static string SseFolderIn(string parent)
+    static string InstallDir()
     {
-        if (string.IsNullOrWhiteSpace(parent))
-            parent = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var trimmed = Path.TrimEndingDirectorySeparator(parent);
-        if (string.Equals(Path.GetFileName(trimmed), SseFolderName, StringComparison.OrdinalIgnoreCase))
+        var path = Environment.ProcessPath;
+        var dir = !string.IsNullOrWhiteSpace(path) ? Path.GetDirectoryName(path) : AppContext.BaseDirectory;
+        return string.IsNullOrWhiteSpace(dir) ? AppDataDir() : dir;
+    }
+
+    static bool CanWriteFolder(string dir)
+    {
+        try
         {
-            Directory.CreateDirectory(trimmed);
-            return trimmed;
+            Directory.CreateDirectory(dir);
+            var probe = Path.Combine(dir, ".sse-write-test");
+            File.WriteAllText(probe, "ok");
+            File.Delete(probe);
+            return true;
         }
-        var dir = Path.Combine(trimmed, SseFolderName);
+        catch
+        {
+            return false;
+        }
+    }
+
+    static string InstallJsonFolder()
+    {
+        var dir = Path.Combine(InstallDir(), "json");
+        if (CanWriteFolder(dir)) return dir;
+        dir = Path.Combine(AppDataDir(), "json");
         Directory.CreateDirectory(dir);
         return dir;
     }
 
-    static string DocumentsRoot()
+    static bool IsLegacyPresetFolder(string saved)
     {
-        var dir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        return Directory.Exists(dir) ? dir : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-    }
-
-    static string DesktopRoot()
-    {
-        var dir = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-        return Directory.Exists(dir) ? dir : DocumentsRoot();
-    }
-
-    static string DownloadsRoot()
-    {
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-        return Directory.Exists(dir) ? dir : DocumentsRoot();
-    }
-
-    static string DocumentsFolder() => SseFolderIn(DocumentsRoot());
-    static string DesktopFolder() => SseFolderIn(DesktopRoot());
-    static string DownloadsFolder() => SseFolderIn(DownloadsRoot());
-
-    static string LastBackupFolder()
-    {
-        try
+        string Root(Environment.SpecialFolder folder)
         {
-            var saved = File.ReadAllText(LastBackupFolderFile()).Trim();
-            if (Directory.Exists(saved))
+            var dir = Environment.GetFolderPath(folder);
+            return Directory.Exists(dir) ? dir : "";
+        }
+        var docs = Root(Environment.SpecialFolder.MyDocuments);
+        var desk = Root(Environment.SpecialFolder.DesktopDirectory);
+        var downs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        foreach (var root in new[] { docs, desk, downs })
+        {
+            if (string.IsNullOrWhiteSpace(root)) continue;
+            if (SamePath(saved, root)) return true;
+            if (SamePath(saved, Path.Combine(root, "SSE"))) return true;
+        }
+        return false;
+    }
+
+    static string? CustomBackupFolder()
+    {
+        foreach (var file in new[] { LastBackupFolderFile(), Path.Combine(AppDataDir(), "last-backup-folder.txt") })
+        {
+            try
             {
-                if (SamePath(saved, DocumentsRoot()) || SamePath(saved, DesktopRoot()) || SamePath(saved, DownloadsRoot()))
-                {
-                    saved = SseFolderIn(saved);
-                    RememberFolder(saved);
-                }
+                if (!File.Exists(file)) continue;
+                var saved = File.ReadAllText(file).Trim();
+                if (string.IsNullOrWhiteSpace(saved) || !Directory.Exists(saved)) continue;
+                if (IsLegacyPresetFolder(saved)) continue;
                 return saved;
             }
+            catch
+            {
+                /* try the next settings file */
+            }
         }
-        catch
-        {
-            /* fall through to Documents\SSE */
-        }
-        return DocumentsFolder();
+        return null;
     }
+
+    static string LastBackupFolder() => CustomBackupFolder() ?? InstallJsonFolder();
 
     static void RememberFolder(string folder)
     {
@@ -501,6 +514,19 @@ sealed class TrackerWindow : Form
         }
     }
 
+    static void ForgetCustomFolder()
+    {
+        try
+        {
+            var file = LastBackupFolderFile();
+            if (File.Exists(file)) File.Delete(file);
+        }
+        catch
+        {
+            /* stay on the install json folder */
+        }
+    }
+
     static string PlacesJson(bool cancelled = false, string? path = null, string? json = null)
     {
         return JsonSerializer.Serialize(new
@@ -509,19 +535,9 @@ sealed class TrackerWindow : Form
             path = path ?? "",
             json = json ?? "",
             folder = LastBackupFolder(),
-            documents = DocumentsFolder(),
-            desktop = DesktopFolder(),
-            downloads = DownloadsFolder(),
+            install = InstallJsonFolder(),
         });
     }
-
-    static string FolderFor(string where) => where switch
-    {
-        "documents" => DocumentsFolder(),
-        "desktop" => DesktopFolder(),
-        "downloads" => DownloadsFolder(),
-        _ => LastBackupFolder(),
-    };
 
     string? PickBackupFolder()
     {
@@ -567,21 +583,19 @@ sealed class TrackerWindow : Form
     {
         try
         {
-            string? folder;
-            if (where == "browse")
+            if (where == "default")
             {
-                folder = PickBackupFolder();
-                if (folder is null)
-                {
-                    Reply(id, true, 200, PlacesJson(cancelled: true));
-                    return;
-                }
-                folder = SseFolderIn(folder);
+                ForgetCustomFolder();
+                Reply(id, true, 200, PlacesJson());
+                return;
             }
-            else
+            var folder = PickBackupFolder();
+            if (folder is null)
             {
-                folder = FolderFor(where);
+                Reply(id, true, 200, PlacesJson(cancelled: true));
+                return;
             }
+            Directory.CreateDirectory(folder);
             RememberFolder(folder);
             Reply(id, true, 200, PlacesJson());
         }

@@ -24,7 +24,7 @@ const ui = {
 
 let liveKill = { logId: null, bossId: null };
 
-const backupInfo = { folder: "", documents: "", desktop: "", downloads: "" };
+const backupInfo = { folder: "", install: "" };
 
 const sessionStarted = Date.now();
 let toastTimer = 0;
@@ -2068,21 +2068,17 @@ function samePath(a, b) {
 function applyBackupInfo(res) {
   if (!res || typeof res !== "object") return;
   backupInfo.folder = res.folder || backupInfo.folder || "";
-  backupInfo.documents = res.documents || backupInfo.documents || "";
-  backupInfo.desktop = res.desktop || backupInfo.desktop || "";
-  backupInfo.downloads = res.downloads || backupInfo.downloads || "";
+  backupInfo.install = res.install || backupInfo.install || "";
   syncBackupUi();
 }
 
 function backupFolderLabel() {
-  if (backupInfo.folder && samePath(backupInfo.folder, backupInfo.desktop)) return "Desktop\\SSE";
-  if (backupInfo.folder && samePath(backupInfo.folder, backupInfo.downloads)) return "Downloads\\SSE";
-  if (backupInfo.folder && samePath(backupInfo.folder, backupInfo.documents)) return "Documents\\SSE";
+  if (backupInfo.install && samePath(backupInfo.folder, backupInfo.install)) return "json";
   if (backupInfo.folder) {
     const parts = backupInfo.folder.replace(/[\\/]+$/, "").split(/[\\/]/);
     return parts.at(-1) || backupInfo.folder;
   }
-  return "Documents\\SSE";
+  return "json";
 }
 
 function syncBackupUi() {
@@ -2104,18 +2100,9 @@ async function refreshBackupInfo() {
 }
 
 function placeButtons() {
-  const current = backupInfo.folder;
-  const custom =
-    current &&
-    !samePath(current, backupInfo.documents) &&
-    !samePath(current, backupInfo.desktop) &&
-    !samePath(current, backupInfo.downloads);
-  const btn = (id, label) => {
-    const path = backupInfo[id] || "";
-    const active = path && samePath(current, path);
-    return `<button class="btn ${active ? "gold" : "ghost"}" data-backup-where="${id}" type="button">${label}</button>`;
-  };
-  return `${btn("documents", "Documents")}${btn("desktop", "Desktop")}${btn("downloads", "Downloads")}<button class="btn ${custom ? "gold" : "ghost"}" data-backup-where="browse" type="button">Choose folder…</button>`;
+  const onInstall = backupInfo.install && samePath(backupInfo.folder, backupInfo.install);
+  return `<button class="btn ghost" data-backup-where="browse" type="button">Choose folder…</button>
+    <button class="btn ${onInstall ? "gold" : "ghost"}" data-backup-where="default" type="button">Install folder</button>`;
 }
 
 let backupBusy = false;
@@ -2432,14 +2419,14 @@ function renderSettings() {
     <section class="settings">
       <div>
         <h2 class="section-title">Settings</h2>
-        <p class="muted">Tweaks save on this PC. Set a default folder, then Export writes there.</p>
+        <p class="muted">Tweaks save on this PC. JSON backups go in a json folder next to the app unless you pick another folder.</p>
       </div>
       <article class="panel">
         <h3>Default save folder</h3>
         ${
           window.chrome?.webview
-            ? `<p class="muted" style="margin-top:8px">JSON backups go in an SSE folder (short for Still Sane, Exile?). Export saves here. Import opens this folder.</p>
-        <p class="backup-path">${esc(backupInfo.folder || "Documents\\SSE")}</p>
+            ? `<p class="muted" style="margin-top:8px">Export saves here. Import opens this folder.</p>
+        <p class="backup-path">${esc(backupInfo.folder || "json")}</p>
         <div class="export-places">${placeButtons()}</div>`
             : `<p class="muted" style="margin-top:8px">Save location is set in the desktop app. Browser export still downloads a JSON file.</p>`
         }

@@ -1,6 +1,6 @@
 #define MyAppName "Still Sane, Exile?"
 #define MyAppNameSafe "Still Sane Exile"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.2"
 #define MyAppExeName "StillSaneExile.exe"
 
 [Setup]
@@ -38,6 +38,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+
+[Dirs]
+Name: "{app}\json"; Flags: uninsneveruninstall
 
 [Icons]
 Name: "{autoprograms}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"; Comment: "{#MyAppName}"
