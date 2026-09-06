@@ -11,11 +11,15 @@ namespace ExileLedger;
 
 static class Program
 {
+    static Mutex? SingleInstance;
+
     [STAThread]
     static void Main()
     {
+        SingleInstance = new Mutex(true, @"Local\StillSaneExile.SingleInstance", out _);
         ApplicationConfiguration.Initialize();
         Application.Run(new TrackerWindow());
+        SingleInstance.Dispose();
     }
 }
 
@@ -261,7 +265,6 @@ sealed class TrackerWindow : Form
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ExileLedger");
         Directory.CreateDirectory(userData);
-        InstallJsonFolder();
 
         try
         {
@@ -428,6 +431,14 @@ sealed class TrackerWindow : Form
         }
     }
 
+    static string DownloadsFolder()
+    {
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        if (Directory.Exists(dir)) return dir;
+        dir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        return Directory.Exists(dir) ? dir : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    }
+
     static string InstallDir()
     {
         var path = Environment.ProcessPath;
@@ -435,32 +446,7 @@ sealed class TrackerWindow : Form
         return string.IsNullOrWhiteSpace(dir) ? AppDataDir() : dir;
     }
 
-    static bool CanWriteFolder(string dir)
-    {
-        try
-        {
-            Directory.CreateDirectory(dir);
-            var probe = Path.Combine(dir, ".sse-write-test");
-            File.WriteAllText(probe, "ok");
-            File.Delete(probe);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    static string InstallJsonFolder()
-    {
-        var dir = Path.Combine(InstallDir(), "json");
-        if (CanWriteFolder(dir)) return dir;
-        dir = Path.Combine(AppDataDir(), "json");
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
-
-    static bool IsLegacyPresetFolder(string saved)
+    static bool IsOldDefaultFolder(string saved)
     {
         string Root(Environment.SpecialFolder folder)
         {
@@ -469,13 +455,15 @@ sealed class TrackerWindow : Form
         }
         var docs = Root(Environment.SpecialFolder.MyDocuments);
         var desk = Root(Environment.SpecialFolder.DesktopDirectory);
-        var downs = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        var downs = DownloadsFolder();
         foreach (var root in new[] { docs, desk, downs })
         {
             if (string.IsNullOrWhiteSpace(root)) continue;
             if (SamePath(saved, root)) return true;
             if (SamePath(saved, Path.Combine(root, "SSE"))) return true;
         }
+        if (SamePath(saved, Path.Combine(InstallDir(), "json"))) return true;
+        if (SamePath(saved, Path.Combine(AppDataDir(), "json"))) return true;
         return false;
     }
 
@@ -488,7 +476,7 @@ sealed class TrackerWindow : Form
                 if (!File.Exists(file)) continue;
                 var saved = File.ReadAllText(file).Trim();
                 if (string.IsNullOrWhiteSpace(saved) || !Directory.Exists(saved)) continue;
-                if (IsLegacyPresetFolder(saved)) continue;
+                if (IsOldDefaultFolder(saved)) continue;
                 return saved;
             }
             catch
@@ -499,7 +487,7 @@ sealed class TrackerWindow : Form
         return null;
     }
 
-    static string LastBackupFolder() => CustomBackupFolder() ?? InstallJsonFolder();
+    static string LastBackupFolder() => CustomBackupFolder() ?? DownloadsFolder();
 
     static void RememberFolder(string folder)
     {
@@ -514,19 +502,6 @@ sealed class TrackerWindow : Form
         }
     }
 
-    static void ForgetCustomFolder()
-    {
-        try
-        {
-            var file = LastBackupFolderFile();
-            if (File.Exists(file)) File.Delete(file);
-        }
-        catch
-        {
-            /* stay on the install json folder */
-        }
-    }
-
     static string PlacesJson(bool cancelled = false, string? path = null, string? json = null)
     {
         return JsonSerializer.Serialize(new
@@ -535,7 +510,7 @@ sealed class TrackerWindow : Form
             path = path ?? "",
             json = json ?? "",
             folder = LastBackupFolder(),
-            install = InstallJsonFolder(),
+            downloads = DownloadsFolder(),
         });
     }
 
@@ -583,12 +558,6 @@ sealed class TrackerWindow : Form
     {
         try
         {
-            if (where == "default")
-            {
-                ForgetCustomFolder();
-                Reply(id, true, 200, PlacesJson());
-                return;
-            }
             var folder = PickBackupFolder();
             if (folder is null)
             {

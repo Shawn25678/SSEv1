@@ -8,6 +8,6 @@ A local Path of Exile 2 boss tracker. Log kills and drops, watch completion and 
 - **Codex** — boss completion, unique drop tables, and 100% badges
 - **Loot log** — kill history and drop rates
 - **Economy** — prices from poe.ninja, with PoE 2 trade filling gaps
-- **Backups** — export and import JSON from a `json` folder next to the app, or another folder you pick in Settings
+- **Backups** — export and import JSON to Downloads, or another folder you pick in Settings
 
 Windows users can install from [Releases](https://github.com/Shawn25678/SSEv1/releases). The setup lets you pick the install folder. Admin is only needed if you install into a protected path like Program Files.

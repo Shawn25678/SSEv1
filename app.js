@@ -24,7 +24,7 @@ const ui = {
 
 let liveKill = { logId: null, bossId: null };
 
-const backupInfo = { folder: "", install: "" };
+const backupInfo = { folder: "", downloads: "" };
 
 const sessionStarted = Date.now();
 let toastTimer = 0;
@@ -2068,17 +2068,17 @@ function samePath(a, b) {
 function applyBackupInfo(res) {
   if (!res || typeof res !== "object") return;
   backupInfo.folder = res.folder || backupInfo.folder || "";
-  backupInfo.install = res.install || backupInfo.install || "";
+  backupInfo.downloads = res.downloads || backupInfo.downloads || "";
   syncBackupUi();
 }
 
 function backupFolderLabel() {
-  if (backupInfo.install && samePath(backupInfo.folder, backupInfo.install)) return "json";
+  if (backupInfo.downloads && samePath(backupInfo.folder, backupInfo.downloads)) return "Downloads";
   if (backupInfo.folder) {
     const parts = backupInfo.folder.replace(/[\\/]+$/, "").split(/[\\/]/);
     return parts.at(-1) || backupInfo.folder;
   }
-  return "json";
+  return "Downloads";
 }
 
 function syncBackupUi() {
@@ -2100,9 +2100,7 @@ async function refreshBackupInfo() {
 }
 
 function placeButtons() {
-  const onInstall = backupInfo.install && samePath(backupInfo.folder, backupInfo.install);
-  return `<button class="btn ghost" data-backup-where="browse" type="button">Choose folder…</button>
-    <button class="btn ${onInstall ? "gold" : "ghost"}" data-backup-where="default" type="button">Install folder</button>`;
+  return `<button class="btn ghost" data-backup-where="browse" type="button">Choose folder…</button>`;
 }
 
 let backupBusy = false;
@@ -2419,14 +2417,14 @@ function renderSettings() {
     <section class="settings">
       <div>
         <h2 class="section-title">Settings</h2>
-        <p class="muted">Tweaks save on this PC. JSON backups go in a json folder next to the app unless you pick another folder.</p>
+        <p class="muted">Tweaks save on this PC. JSON backups go to Downloads unless you pick another folder.</p>
       </div>
       <article class="panel">
         <h3>Default save folder</h3>
         ${
           window.chrome?.webview
             ? `<p class="muted" style="margin-top:8px">Export saves here. Import opens this folder.</p>
-        <p class="backup-path">${esc(backupInfo.folder || "json")}</p>
+        <p class="backup-path">${esc(backupInfo.folder || "Downloads")}</p>
         <div class="export-places">${placeButtons()}</div>`
             : `<p class="muted" style="margin-top:8px">Save location is set in the desktop app. Browser export still downloads a JSON file.</p>`
         }
