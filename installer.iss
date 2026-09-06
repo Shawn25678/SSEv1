@@ -1,6 +1,6 @@
 #define MyAppName "Still Sane, Exile?"
 #define MyAppNameSafe "Still Sane Exile"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppExeName "StillSaneExile.exe"
 
 [Setup]
@@ -10,10 +10,12 @@ AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppName}
 DefaultDirName={localappdata}\Programs\{#MyAppNameSafe}
-DisableDirPage=yes
+DisableDirPage=no
+AlwaysShowDirOnReadyPage=yes
 DisableProgramGroupPage=yes
-DisableReadyPage=yes
+DisableReadyPage=no
 DisableWelcomePage=yes
+UsePreviousAppDir=yes
 OutputDir=dist
 OutputBaseFilename=StillSaneExile-Setup
 SetupIconFile=desktop\app.ico
@@ -23,6 +25,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
@@ -37,8 +40,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{userprograms}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"; Comment: "{#MyAppName}"
-Name: "{userdesktop}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"; Comment: "{#MyAppName}"
+Name: "{autoprograms}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"; Comment: "{#MyAppName}"
+Name: "{autodesktop}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"; Comment: "{#MyAppName}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Open {#MyAppName}"; Flags: nowait postinstall skipifsilent

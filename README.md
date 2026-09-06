@@ -10,4 +10,4 @@ A local Path of Exile 2 boss tracker. Log kills and drops, watch completion and 
 - **Economy** — prices from poe.ninja, with PoE 2 trade filling gaps
 - **Backups** — export and import JSON from a folder you choose in Settings (defaults to an `SSE` folder)
 
-Windows users can install from [Releases](https://github.com/Shawn25678/SSEv1/releases). No admin account is required.
+Windows users can install from [Releases](https://github.com/Shawn25678/SSEv1/releases). The setup lets you pick the install folder. Admin is only needed if you install into a protected path like Program Files.
