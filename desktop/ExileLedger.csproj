@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ExileLedger</RootNamespace>
+    <AssemblyName>StillSaneExile</AssemblyName>
+    <Product>Still Sane, Exile?</Product>
+    <AssemblyTitle>Still Sane, Exile?</AssemblyTitle>
+    <Description>Still Sane, Exile?</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3537.50" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\index.html" LogicalName="www.index.html" />
+    <EmbeddedResource Include="..\styles.css" LogicalName="www.styles.css" />
+    <EmbeddedResource Include="..\app.js" LogicalName="www.app.js" />
+    <EmbeddedResource Include="..\bosses.js" LogicalName="www.bosses.js" />
+    <EmbeddedResource Include="..\icons.js" LogicalName="www.icons.js" />
+    <EmbeddedResource Include="..\still-sane-sigil.png" LogicalName="www.still-sane-sigil.png" />
+    <EmbeddedResource Include="..\art\*.png" LogicalName="www.art.%(Filename).png" />
+    <EmbeddedResource Include="..\art\*.jpg" LogicalName="www.art.%(Filename).jpg" />
+    <EmbeddedResource Include="..\art\*.gif" LogicalName="www.art.%(Filename).gif" />
+    <EmbeddedResource Include="..\art\*.webp" LogicalName="www.art.%(Filename).webp" />
+  </ItemGroup>
+</Project>

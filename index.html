@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Still Sane, Exile?</title>
+    <link rel="icon" href="still-sane-sigil.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link id="theme-fonts" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="on-title">
+    <div class="title-screen" id="title-screen">
+      <div class="title-art" id="title-art" aria-hidden="true"></div>
+      <div class="title-veil" aria-hidden="true"></div>
+      <div class="title-inner">
+        <img class="title-sigil" src="still-sane-sigil.png" alt="" />
+        <h1 class="title-name">Still Sane, Exile?</h1>
+        <p class="title-sub"><span id="title-league">Forbidden Rites</span></p>
+        <nav class="title-nav" aria-label="Main menu">
+          <button class="title-btn is-primary" data-title-go="dash" type="button">
+            <span id="title-continue-label">Continue</span>
+            <small id="title-continue-note">Start your first hunt</small>
+          </button>
+          <button class="title-btn" data-title-go="bosses" type="button">
+            Codex
+            <small>Boss completion and drop tables</small>
+          </button>
+          <button class="title-btn" data-title-go="econ" type="button">
+            Economy
+            <small>Prices, charts, and trending</small>
+          </button>
+          <button class="title-btn" data-title-go="settings" type="button">
+            Settings
+            <small>Colors, fonts, and backup folder</small>
+          </button>
+          <button class="title-btn is-exit" data-title-quit type="button">
+            Exit
+            <small>Close Still Sane, Exile?</small>
+          </button>
+        </nav>
+      </div>
+    </div>
+
+    <div class="menu-overlay" id="menu-overlay" hidden></div>
+    <aside class="app-menu" id="app-menu" hidden>
+      <div class="menu-head">
+        <div class="menu-brand">
+          <img class="sigil tiny" src="still-sane-sigil.png" alt="" />
+          <div>
+            <strong>Still Sane, Exile?</strong>
+          </div>
+        </div>
+        <button class="menu-x" id="menu-close" type="button" aria-label="Close menu">×</button>
+      </div>
+      <nav class="menu-nav" aria-label="Pages">
+        <p class="menu-label">Pages</p>
+        <button class="menu-link" data-view="title" type="button">
+          <span class="menu-link-title">Main menu</span>
+          <span class="menu-link-note">Return to the title screen</span>
+        </button>
+        <button class="menu-link is-active" data-view="dash" type="button">
+          <span class="menu-link-title">Dashboard</span>
+          <span class="menu-link-note">Farm bosses and log drops</span>
+        </button>
+        <button class="menu-link" data-view="bosses" type="button">
+          <span class="menu-link-title">Boss completion</span>
+          <span class="menu-link-note">Kills, uniques, and 100% badges</span>
+        </button>
+        <button class="menu-link" data-view="log" type="button">
+          <span class="menu-link-title">Loot log</span>
+          <span class="menu-link-note">Drop rates and kill history</span>
+        </button>
+        <button class="menu-link" data-view="econ" type="button">
+          <span class="menu-link-title">Economy</span>
+          <span class="menu-link-note">Prices, charts, and trending</span>
+        </button>
+        <button class="menu-link" data-view="settings" type="button">
+          <span class="menu-link-title">Settings</span>
+          <span class="menu-link-note">Colors, fonts, and backup folder</span>
+        </button>
+      </nav>
+      <div class="menu-tools">
+        <p class="menu-label">Data</p>
+        <button class="menu-link quiet" id="export-btn" type="button">
+          <span class="menu-link-title">Export</span>
+          <span class="menu-link-note">Saves to your default folder</span>
+        </button>
+        <button class="menu-link quiet" id="import-btn" type="button">
+          <span class="menu-link-title">Import</span>
+          <span class="menu-link-note">Opens your default folder</span>
+        </button>
+      </div>
+    </aside>
+
+    <div class="bg-glow"></div>
+    <div class="app">
+      <header class="top">
+        <div class="brand">
+          <button class="menu-btn" id="menu-btn" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="app-menu">
+            <span class="menu-bars" aria-hidden="true"></span>
+            Menu
+          </button>
+          <img class="sigil" src="still-sane-sigil.png" alt="" />
+          <div>
+            <h1>Still Sane, Exile?</h1>
+          </div>
+        </div>
+        <div class="top-actions">
+          <label class="league-field">
+            <span>League</span>
+            <select id="league-input">
+              <option value="Forbidden Rites">Forbidden Rites</option>
+            </select>
+          </label>
+          <div class="rate-pop" id="rate-pop">
+            <button class="rate-pop-btn" id="rate-pop-btn" type="button" aria-describedby="rate-pop-card">Rates</button>
+            <div class="rate-pop-card" id="rate-pop-card" role="tooltip"></div>
+          </div>
+          <div class="price-clock" id="price-clock" title="poe.ninja first, then PoE 2 trade for items ninja is missing. Checks every 20 minutes.">
+            <span>Prices</span>
+            <strong id="price-clock-time">—</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="stats" id="stats"></section>
+
+      <section class="toolbar" id="boss-toolbar">
+        <input id="search" type="search" placeholder="Search bosses or uniques…" />
+        <div class="filters" id="filters"></div>
+        <button class="btn ghost" id="add-boss-btn" type="button">+ Custom boss</button>
+      </section>
+
+      <main id="main"></main>
+    </div>
+
+    <dialog id="boss-dialog" class="sheet">
+      <div id="boss-dialog-body"></div>
+    </dialog>
+
+    <dialog id="log-dialog" class="sheet">
+      <div id="log-dialog-body"></div>
+    </dialog>
+
+    <dialog id="custom-dialog" class="sheet">
+      <form id="custom-form" class="panel-form">
+        <h2>Add a custom boss</h2>
+        <p class="muted">For map bosses, league encounters, or anything not in the catalog.</p>
+        <label>Name <input name="name" required maxlength="80" /></label>
+        <label>Area <input name="area" maxlength="80" placeholder="Map, trial, hideout…" /></label>
+        <label>Group <input name="group" maxlength="40" placeholder="e.g. Map boss" /></label>
+        <div class="row-actions">
+          <button type="button" class="btn ghost" id="custom-cancel">Cancel</button>
+          <button type="submit" class="btn gold">Add boss</button>
+        </div>
+      </form>
+    </dialog>
+
+    <input id="import-file" type="file" accept="application/json" hidden />
+    <div id="toast" class="toast" hidden></div>
+    <div id="item-tip" class="item-tip" hidden></div>
+
+    <script src="bosses.js"></script>
+    <script src="icons.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
