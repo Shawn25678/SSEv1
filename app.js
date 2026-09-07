@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.14";
+const APP_VERSION = "1.0.15";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -9,7 +9,7 @@ const FILTERS = [
 ];
 
 const ui = {
-  view: "title",
+  view: "dash",
   filter: "all",
   search: "",
   selectedId: null,
@@ -600,21 +600,6 @@ function startAppUpdate() {
 function quitApp() {
   if (window.chrome?.webview) chrome.webview.postMessage({ type: "quit" });
   else window.close();
-}
-
-function paintTitleScreen() {
-  const farm = getBoss(farmBossId());
-  const art = document.getElementById("title-art");
-  if (art) art.innerHTML = bossArtHtml(farm, "title-art-img");
-  const hasSave = !!(state.logs.length || state.farmBossId);
-  const label = document.getElementById("title-continue-label");
-  const note = document.getElementById("title-continue-note");
-  if (label) label.textContent = hasSave ? "Continue" : "Begin hunt";
-  if (note) {
-    note.textContent = farm && hasSave ? `${farm.name} · ${killCount(farm.id)} kills` : "Log kills and drops from the farm pad";
-  }
-  const league = document.getElementById("title-league");
-  if (league) league.textContent = leagueId() || "Forbidden Rites";
 }
 
 function logsFor(bossId) {
@@ -7296,17 +7281,9 @@ function wireFarmPad() {
 
 function render() {
   const shown = document.getElementById("item-tip")?.dataset.for || "";
-  if (ui.view === "hunt" || ui.view === "bosses") ui.view = "dash";
-  const onTitle = ui.view === "title";
-  document.body.classList.toggle("on-title", onTitle);
+  if (ui.view === "hunt" || ui.view === "bosses" || ui.view === "title") ui.view = "dash";
   document.body.classList.toggle("view-bosses", ui.view === "bosses");
   document.body.classList.toggle("view-decks", ui.view === "decks");
-  const title = document.getElementById("title-screen");
-  if (title) {
-    title.hidden = !onTitle;
-    if (onTitle) paintTitleScreen();
-  }
-  if (onTitle) setMenuOpen(false);
   renderStats();
   renderDivineTape();
   renderFilters();
@@ -7320,15 +7297,7 @@ function render() {
   syncBackupUi();
   document.getElementById("boss-toolbar").style.display = ui.view === "bosses" ? "flex" : "none";
   document.getElementById("stats").style.display =
-    ui.view === "dash" || ui.view === "settings" || ui.view === "econ" || ui.view === "bosses" || ui.view === "decks" || onTitle ? "none" : "grid";
-
-  if (onTitle) {
-    if (shown) hideItemTip();
-    paintPriceOverlay();
-    updateBossScale();
-    paintPriceClock();
-    return;
-  }
+    ui.view === "dash" || ui.view === "settings" || ui.view === "econ" || ui.view === "bosses" || ui.view === "decks" ? "none" : "grid";
 
   const focused = document.activeElement?.id;
   const selStart = document.activeElement?.selectionStart;
@@ -7380,25 +7349,7 @@ function render() {
   paintPriceClock();
 }
 
-function setMenuOpen(open) {
-  const menu = document.getElementById("app-menu");
-  const overlay = document.getElementById("menu-overlay");
-  const btn = document.getElementById("menu-btn");
-  if (!menu || !overlay) return;
-  menu.hidden = !open;
-  overlay.hidden = !open;
-  btn?.setAttribute("aria-expanded", open ? "true" : "false");
-}
-
 function onClick(event) {
-  const titleGo = event.target.closest("[data-title-go]");
-  if (titleGo) {
-    ui.view = titleGo.dataset.titleGo;
-    setMenuOpen(false);
-    render();
-    if (titleGo.hasAttribute("data-feedback")) focusFeedback();
-    return;
-  }
   if (event.target.closest("[data-title-quit]")) {
     quitApp();
     return;
@@ -7408,15 +7359,6 @@ function onClick(event) {
     event.preventDefault();
     const form = feedbackSend.closest("#feedback-form") || document.getElementById("feedback-form");
     if (form) submitFeedback(form, feedbackSend.dataset.feedbackSend);
-    return;
-  }
-  if (event.target.id === "menu-btn" || event.target.closest("#menu-btn")) {
-    const open = document.getElementById("app-menu")?.hidden;
-    setMenuOpen(!!open);
-    return;
-  }
-  if (event.target.id === "menu-overlay" || event.target.id === "menu-close") {
-    setMenuOpen(false);
     return;
   }
   const toastAct = event.target.closest("[data-toast]");
@@ -7700,7 +7642,6 @@ function onClick(event) {
   const tab = event.target.closest("[data-view]");
   if (tab) {
     ui.view = tab.dataset.view;
-    setMenuOpen(false);
     render();
     if (tab.hasAttribute("data-feedback")) focusFeedback();
     return;
@@ -7759,12 +7700,10 @@ function onClick(event) {
     return;
   }
   if (event.target.closest("#export-btn, #settings-export-btn")) {
-    setMenuOpen(false);
     exportData();
     return;
   }
   if (event.target.closest("#import-btn, #settings-import-btn")) {
-    setMenuOpen(false);
     importBackup();
   }
 }
@@ -7938,11 +7877,6 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && ui.inspect) {
     event.preventDefault();
     closeInspect();
-    return;
-  }
-  if (event.key === "Escape" && document.getElementById("app-menu") && !document.getElementById("app-menu").hidden) {
-    event.preventDefault();
-    setMenuOpen(false);
     return;
   }
   if (event.key === "Escape") hideItemTip();

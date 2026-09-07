@@ -2095,8 +2095,14 @@ sealed class TrackerWindow : Form
         var dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ExileLedger");
-        Directory.CreateDirectory(dir);
+        EnsureDirectory(dir);
         return dir;
+    }
+
+    static void EnsureDirectory(string dir)
+    {
+        if (File.Exists(dir)) File.Delete(dir);
+        Directory.CreateDirectory(dir);
     }
 
     static string LastBackupFolderFile() => Path.Combine(AppDataDir(), "json-folder.txt");
@@ -2336,7 +2342,7 @@ sealed class TrackerWindow : Form
     static string ExtractWebFiles()
     {
         var dir = Path.Combine(AppDataDir(), "www");
-        Directory.CreateDirectory(dir);
+        EnsureDirectory(dir);
         var index = Path.Combine(dir, "index.html");
         var leftoverSigil = Path.Combine(dir, "poe2-sigil.png");
         if (File.Exists(leftoverSigil)) File.Delete(leftoverSigil);
@@ -2362,7 +2368,7 @@ sealed class TrackerWindow : Form
         WriteResource(asm, "www.icons.js", Path.Combine(dir, "icons.js"));
         WriteResource(asm, "www.still-sane-sigil.png", Path.Combine(dir, "still-sane-sigil.png"));
         var artDir = Path.Combine(dir, "art");
-        Directory.CreateDirectory(artDir);
+        EnsureDirectory(artDir);
         var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var name in asm.GetManifestResourceNames())
         {

@@ -1,6 +1,6 @@
 #define MyAppName "Still Sane, Exile?"
 #define MyAppNameSafe "Still Sane Exile"
-#define MyAppVersion "1.0.14"
+#define MyAppVersion "1.0.15"
 #define MyAppExeName "StillSaneExile.exe"
 #define MyAppId "{{E8A4C2B1-7F3D-4A9E-8C15-2B6D91F04E77}"
 
@@ -38,6 +38,10 @@ SetupLogging=no
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[Tasks]
+Name: "starticon"; Description: "Start Menu shortcut"; GroupDescription: "Shortcuts:"
+Name: "desktopicon"; Description: "Desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
+
 [Files]
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -48,6 +52,8 @@ Type: filesandordirs; Name: "{app}\json"
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\json"
 Type: files; Name: "{app}\{#MyAppExeName}.old"
+Type: files; Name: "{userprograms}\{#MyAppNameSafe}.lnk"
+Type: files; Name: "{userdesktop}\{#MyAppNameSafe}.lnk"
 Type: filesandordirs; Name: "{localappdata}\ExileLedger\www"
 Type: filesandordirs; Name: "{localappdata}\ExileLedger\EBWebView"
 Type: filesandordirs; Name: "{localappdata}\ExileLedger\json"
@@ -58,8 +64,8 @@ Type: files; Name: "{localappdata}\ExileLedger\trade-stats.json"
 Type: files; Name: "{localappdata}\ExileLedger\trade-static.json"
 
 [Icons]
-Name: "{userprograms}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{userdesktop}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{userprograms}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: starticon
+Name: "{userdesktop}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Open {#MyAppName}"; Flags: nowait postinstall
@@ -173,14 +179,64 @@ begin
   end;
 end;
 
+function IsOurLeftoverPath(const S: String): Boolean;
+var
+  U: String;
+begin
+  U := UpperCase(S);
+  Result :=
+    (Pos('\STILLSANEEXILE.EXE', U) > 0) or
+    (CompareText(ExtractFileName(S), '{#MyAppExeName}') = 0) or
+    (Pos('\STILL SANE EXILE.LNK', U) > 0) or
+    (CompareText(ExtractFileName(S), '{#MyAppNameSafe}.lnk') = 0);
+end;
+
+function RegistryValueIsOurs(RootKey: Integer; const Subkey, ValueName: String): Boolean;
+var
+  Blob, One: String;
+begin
+  Result := IsOurLeftoverPath(ValueName);
+  if Result then Exit;
+  if RegQueryMultiStringValue(RootKey, Subkey, ValueName, Blob) then
+  begin
+    Result := IsOurLeftoverPath(Blob);
+    Exit;
+  end;
+  if RegQueryStringValue(RootKey, Subkey, ValueName, One) then
+    Result := IsOurLeftoverPath(One);
+end;
+
+procedure DeleteOurValues(RootKey: Integer; const Subkey: String);
+var
+  Names: TArrayOfString;
+  I: Integer;
+begin
+  if not RegGetValueNames(RootKey, Subkey, Names) then Exit;
+  for I := 0 to GetArrayLength(Names) - 1 do
+    if RegistryValueIsOurs(RootKey, Subkey, Names[I]) then
+      RegDeleteValue(RootKey, Subkey, Names[I]);
+end;
+
+procedure CleanOurWindowsLeftovers;
+begin
+  DeleteFile(ExpandConstant('{userprograms}\{#MyAppNameSafe}.lnk'));
+  DeleteFile(ExpandConstant('{userdesktop}\{#MyAppNameSafe}.lnk'));
+  DeleteOurValues(HKCU, 'Software\Microsoft\Windows\CurrentVersion\UFH\SHC');
+  DeleteOurValues(HKCU, 'Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store');
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Dir: String;
 begin
   if CurUninstallStep = usUninstall then
+  begin
     DeleteOurOldExes;
+    CleanOurWindowsLeftovers;
+  end;
   if CurUninstallStep = usPostUninstall then
   begin
+    CleanOurWindowsLeftovers;
     if RegKeyExists(HKCU, UninstallKey) then
       RegDeleteKeyIncludingSubkeys(HKCU, UninstallKey);
     Dir := ExpandConstant('{localappdata}\ExileLedger');
