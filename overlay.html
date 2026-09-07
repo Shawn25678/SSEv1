@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #120e0a;
+        overflow: hidden;
+      }
+      #root {
+        margin: 0;
+      }
+      .price-overlay-card {
+        width: 420px;
+        max-width: 100%;
+        max-height: none;
+        margin: 0;
+        box-shadow: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const root = document.getElementById("root");
+
+      function camel(name) {
+        return String(name || "")
+          .replace(/^data-/, "")
+          .replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      }
+
+      function fit() {
+        const card = root.querySelector(".price-overlay-card") || root.firstElementChild;
+        if (!card || !window.chrome?.webview) return;
+        const r = card.getBoundingClientRect();
+        chrome.webview.postMessage({
+          type: "overlay-size",
+          w: Math.max(280, Math.ceil(r.width) + 4),
+          h: Math.max(90, Math.ceil(r.height) + 4),
+        });
+      }
+
+      chrome.webview.addEventListener("message", (event) => {
+        let msg = event.data;
+        if (typeof msg === "string") {
+          try {
+            msg = JSON.parse(msg);
+          } catch {
+            return;
+          }
+        }
+        if (msg?.type === "paint") {
+          if (msg.vars) document.documentElement.style.cssText = msg.vars;
+          root.innerHTML = msg.html || "";
+          requestAnimationFrame(() => requestAnimationFrame(fit));
+        }
+        if (msg?.type === "notice") {
+          if (msg.vars) document.documentElement.style.cssText = msg.vars;
+          const text = String(msg.text || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+          root.innerHTML =
+            '<article class="price-overlay-card item-tip-card"><button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button><div class="item-tip-name">Still Sane, Exile?</div><div class="item-tip-descr">' +
+            text +
+            "</div></article>";
+          requestAnimationFrame(() => requestAnimationFrame(fit));
+        }
+      });
+
+      document.addEventListener("contextmenu", (event) => event.preventDefault());
+
+      document.addEventListener("click", (event) => {
+        const t = event.target.closest(
+          "[data-close-inspect],[data-pick-text],[data-pick-corrupt],[data-pick-runes],[data-quote-drop],[data-open-trade],[data-price-lookup]"
+        );
+        if (!t || !window.chrome?.webview) return;
+        event.preventDefault();
+        const payload = { type: "overlay-click" };
+        for (const a of t.attributes) {
+          if (a.name.startsWith("data-")) payload[camel(a.name)] = a.value;
+        }
+        chrome.webview.postMessage(payload);
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && window.chrome?.webview) {
+          chrome.webview.postMessage({ type: "overlay-click", closeInspect: "" });
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -5,9 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Still Sane, Exile?</title>
     <link rel="icon" href="still-sane-sigil.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link id="theme-fonts" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body class="on-title">
@@ -58,46 +55,36 @@
         </div>
         <button class="menu-x" id="menu-close" type="button" aria-label="Close menu">×</button>
       </div>
-      <nav class="menu-nav" aria-label="Pages">
-        <p class="menu-label">Pages</p>
+      <nav class="menu-nav" aria-label="Menu">
         <button class="menu-link" data-view="title" type="button">
           <span class="menu-link-title">Main menu</span>
-          <span class="menu-link-note">Return to the title screen</span>
         </button>
         <button class="menu-link is-active" data-view="dash" type="button">
           <span class="menu-link-title">Dashboard</span>
-          <span class="menu-link-note">Farm bosses and log drops</span>
         </button>
         <button class="menu-link" data-view="bosses" type="button">
           <span class="menu-link-title">Boss completion</span>
-          <span class="menu-link-note">Kills, uniques, and 100% badges</span>
         </button>
         <button class="menu-link" data-view="log" type="button">
           <span class="menu-link-title">Loot log</span>
-          <span class="menu-link-note">Drop rates and kill history</span>
         </button>
         <button class="menu-link" data-view="econ" type="button">
           <span class="menu-link-title">Economy</span>
-          <span class="menu-link-note">Prices, charts, and trending</span>
         </button>
         <button class="menu-link" data-view="decks" type="button">
           <span class="menu-link-title">Stacked Deck</span>
-          <span class="menu-link-note">PoE 1 · drag a pack onto the ground</span>
         </button>
         <button class="menu-link" data-view="settings" type="button">
           <span class="menu-link-title">Settings</span>
-          <span class="menu-link-note">Colors, fonts, backup, and hotkeys</span>
         </button>
       </nav>
       <div class="menu-tools">
         <p class="menu-label">Data</p>
         <button class="menu-link quiet" id="export-btn" type="button">
           <span class="menu-link-title">Export</span>
-          <span class="menu-link-note">Saves to your default folder</span>
         </button>
         <button class="menu-link quiet" id="import-btn" type="button">
           <span class="menu-link-title">Import</span>
-          <span class="menu-link-note">Opens your default folder</span>
         </button>
       </div>
     </aside>
@@ -130,9 +117,9 @@
           </div>
           <div class="price-clock rate-clock" id="rate-clock" role="status" title="PoE 2 trade site rate limit. Searches wait until a slot opens.">
             <span id="rate-clock-label">Rate limiting</span>
-            <strong id="rate-clock-time">0/1 / 5s</strong>
+            <strong id="rate-clock-time">0/7 / 15s</strong>
           </div>
-          <button type="button" class="price-clock" id="price-clock" data-check-prices title="Click to check poe.ninja, then fill every boss unique from PoE 2 trade if ninja has no listing.">
+          <button type="button" class="price-clock" id="price-clock" data-check-prices title="poe.ninja prices load on launch, then every hour. Click to refresh now.">
             <span>Prices</span>
             <strong id="price-clock-time">Check prices</strong>
           </button>
@@ -174,6 +161,7 @@
 
     <input id="import-file" type="file" accept="application/json" hidden />
     <div id="toast" class="toast" hidden></div>
+    <div id="price-overlay" class="price-overlay" hidden></div>
     <div id="item-tip" class="item-tip" hidden></div>
 
     <script src="decks.js"></script>

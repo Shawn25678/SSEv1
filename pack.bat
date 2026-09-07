@@ -8,11 +8,17 @@ if not exist "%ISCC%" (
   exit /b 1
 )
 echo Building StillSaneExile.exe...
+if exist "%LOCALAPPDATA%\ExileLedger\supabase.public.json" copy /Y "%LOCALAPPDATA%\ExileLedger\supabase.public.json" "%ROOT%desktop\supabase.public.json" >nul
 "%ProgramFiles%\dotnet\dotnet.exe" publish "%ROOT%desktop\ExileLedger.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o "%ROOT%dist"
 if errorlevel 1 exit /b 1
+echo Building StillSaneInbox.exe...
+"%ProgramFiles%\dotnet\dotnet.exe" publish "%ROOT%desktop-inbox\Inbox.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -p:DebugSymbols=false -o "%ROOT%dist"
+if errorlevel 1 exit /b 1
+if exist "%ROOT%desktop\supabase.public.json" copy /Y "%ROOT%desktop\supabase.public.json" "%ROOT%dist\supabase.public.json" >nul
 echo Building installer...
 "%ISCC%" /Q "%ROOT%installer.iss"
 if errorlevel 1 exit /b 1
 echo.
 echo Setup: %ROOT%dist\StillSaneExile-Setup.exe
+echo Inbox: %ROOT%dist\StillSaneInbox.exe
 endlocal

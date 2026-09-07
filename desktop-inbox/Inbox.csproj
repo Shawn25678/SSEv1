@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ExileLedger</RootNamespace>
+    <AssemblyName>StillSaneInbox</AssemblyName>
+    <Product>Still Sane Inbox</Product>
+    <AssemblyTitle>Still Sane Inbox</AssemblyTitle>
+    <Description>Feedback inbox for Still Sane, Exile?</Description>
+    <ApplicationManifest>..\desktop\app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\desktop\app.ico</ApplicationIcon>
+    <Version>1.0.4</Version>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\desktop\FeedbackStore.cs" Link="FeedbackStore.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3537.50" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\inbox.html" LogicalName="www.inbox.html" />
+    <EmbeddedResource Include="..\styles.css" LogicalName="www.styles.css" />
+    <EmbeddedResource Include="..\still-sane-sigil.png" LogicalName="www.still-sane-sigil.png" />
+    <EmbeddedResource Include="..\desktop\supabase.public.json" LogicalName="www.supabase.public.json" />
+  </ItemGroup>
+</Project>

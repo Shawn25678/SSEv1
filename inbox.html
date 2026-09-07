@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Still Sane Inbox</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="inbox-app">
+    <div class="inbox-shell">
+      <header class="inbox-head">
+        <img class="sigil tiny" src="still-sane-sigil.png" alt="" />
+        <div>
+          <h1>Still Sane Inbox</h1>
+          <p class="muted" id="inbox-count">Waiting for notes…</p>
+        </div>
+        <button class="btn ghost" id="inbox-refresh" type="button">Refresh</button>
+      </header>
+      <div class="inbox-layout">
+        <div class="inbox-list" id="inbox-list"></div>
+        <article class="inbox-detail panel" id="inbox-detail">
+          <p class="muted">Pick a note on the left.</p>
+        </article>
+      </div>
+    </div>
+    <script>
+      let items = [];
+      let openId = "";
+      let cloud = false;
+      let needSetup = true;
+      let cfg = { url: "", anonKey: "", serviceKey: "" };
+
+      function esc(text) {
+        return String(text || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function when(ms) {
+        const n = Number(ms);
+        if (!n) return "";
+        return new Date(n).toLocaleString();
+      }
+
+      function send(msg) {
+        if (window.chrome?.webview) chrome.webview.postMessage(msg);
+      }
+
+      function setupHtml() {
+        return `
+          <h2>Supabase</h2>
+          <p class="muted">Create a project, run desktop/supabase-feedback.sql in the SQL editor, then paste the keys from Project Settings → API. The service_role key stays on this PC. Pack again after Save so other installs can Send.</p>
+          <form id="inbox-config" class="feedback-form">
+            <label>Project URL
+              <input name="url" value="${esc(cfg.url)}" />
+            </label>
+            <label>anon public
+              <input name="anonKey" value="${esc(cfg.anonKey)}" />
+            </label>
+            <label>service_role
+              <input name="serviceKey" value="${esc(cfg.serviceKey)}" />
+            </label>
+            <div class="row-actions">
+              <button class="btn gold" type="submit">Save</button>
+            </div>
+          </form>`;
+      }
+
+      function paint() {
+        const list = document.getElementById("inbox-list");
+        const count = document.getElementById("inbox-count");
+        const unread = items.filter((item) => !item.read).length;
+        count.textContent = cloud
+          ? items.length
+            ? items.length + " note" + (items.length === 1 ? "" : "s") + (unread ? " · " + unread + " new" : "") + " · Supabase"
+            : "Supabase connected. No notes yet."
+          : needSetup
+            ? "Paste your Supabase keys to receive notes from other PCs."
+            : items.length
+              ? items.length + " local note" + (items.length === 1 ? "" : "s")
+              : "No notes yet. Send from Settings → Feedback.";
+        list.innerHTML =
+          `<button type="button" class="inbox-item${openId === "setup" ? " is-on" : ""}" data-open="setup"><strong>Supabase</strong><span>${cloud ? "Connected" : "Set up"}</span></button>` +
+          items
+            .map((item) => {
+              const on = item.id === openId ? " is-on" : "";
+              const fresh = item.read ? "" : " is-unread";
+              return `<button type="button" class="inbox-item${on}${fresh}" data-open="${esc(item.id)}">
+              <strong>${esc(item.title)}</strong>
+              <span>${esc(when(item.at))}</span>
+            </button>`;
+            })
+            .join("");
+        const detail = document.getElementById("inbox-detail");
+        if (openId === "setup" || (needSetup && !openId)) {
+          openId = "setup";
+          detail.innerHTML = setupHtml();
+          return;
+        }
+        const item = items.find((row) => row.id === openId) || items[0];
+        if (!item) {
+          openId = "setup";
+          detail.innerHTML = setupHtml();
+          return;
+        }
+        openId = item.id;
+        const meta = [item.version && "v" + item.version, item.league, item.page].filter(Boolean).join(" · ");
+        detail.innerHTML = `
+          <h2>${esc(item.title)}</h2>
+          <p class="muted">${esc(when(item.at))}${meta ? " · " + esc(meta) : ""}</p>
+          <pre class="inbox-body">${esc(item.body)}</pre>
+          <div class="row-actions">
+            <button class="btn ghost" data-delete="${esc(item.id)}" type="button">Delete</button>
+            <button class="btn gold" data-toggle="${esc(item.id)}" type="button">${item.read ? "Mark new" : "Mark read"}</button>
+          </div>`;
+      }
+
+      chrome.webview?.addEventListener("message", (event) => {
+        let msg = event.data;
+        if (typeof msg === "string") {
+          try {
+            msg = JSON.parse(msg);
+          } catch {
+            return;
+          }
+        }
+        if (msg?.type === "inbox-toast") {
+          const count = document.getElementById("inbox-count");
+          if (count) count.textContent = String(msg.text || "");
+          return;
+        }
+        if (msg?.type === "inbox-list") {
+          items = Array.isArray(msg.items) ? msg.items : [];
+          cloud = !!msg.cloud;
+          needSetup = !!msg.needSetup;
+          cfg = { url: msg.url || "", anonKey: msg.anonKey || "", serviceKey: msg.serviceKey || "" };
+          paint();
+        }
+      });
+
+      document.addEventListener("submit", (event) => {
+        if (event.target.id !== "inbox-config") return;
+        event.preventDefault();
+        const data = new FormData(event.target);
+        send({
+          type: "inbox-save-config",
+          url: String(data.get("url") || ""),
+          anonKey: String(data.get("anonKey") || ""),
+          serviceKey: String(data.get("serviceKey") || ""),
+        });
+      });
+
+      document.addEventListener("click", (event) => {
+        if (event.target.closest("#inbox-refresh")) {
+          send({ type: "inbox-refresh" });
+          return;
+        }
+        const open = event.target.closest("[data-open]");
+        if (open) {
+          openId = open.dataset.open;
+          const item = items.find((row) => row.id === openId);
+          if (item && !item.read) send({ type: "inbox-read", id: openId });
+          else paint();
+          return;
+        }
+        const del = event.target.closest("[data-delete]");
+        if (del) {
+          send({ type: "inbox-delete", id: del.dataset.delete });
+          openId = "";
+          return;
+        }
+        const toggle = event.target.closest("[data-toggle]");
+        if (toggle) {
+          const item = items.find((row) => row.id === toggle.dataset.toggle);
+          send({ type: item?.read ? "inbox-unread" : "inbox-read", id: toggle.dataset.toggle });
+        }
+      });
+
+      send({ type: "inbox-ready" });
+    </script>
+  </body>
+</html>

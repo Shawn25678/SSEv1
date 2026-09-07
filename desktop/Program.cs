@@ -42,11 +42,15 @@ sealed class TrackerWindow : Form
 
     const int HotLogId = 1;
     const int HotNextId = 2;
+    const int HotPriceId = 3;
     const uint ModNoRepeat = 0x4000;
     const int WmHotkey = 0x0312;
     string _hotLog = "F8";
     string _hotNext = "F9";
+    string _hotPrice = "F7";
     bool _capturingItem;
+    CoreWebView2Environment? _env;
+    PriceOverlayForm? _overlay;
 
     public TrackerWindow()
     {
@@ -67,7 +71,11 @@ sealed class TrackerWindow : Form
         BackColor = Color.FromArgb(12, 10, 8);
         Controls.Add(_web);
         Load += OnLoad;
-        FormClosed += (_, _) => ClearHotkeys();
+        FormClosed += (_, _) =>
+        {
+            ClearHotkeys();
+            _overlay?.Dispose();
+        };
     }
 
     protected override void WndProc(ref Message m)
@@ -75,7 +83,8 @@ sealed class TrackerWindow : Form
         if (m.Msg == WmHotkey)
         {
             var id = m.WParam.ToInt32();
-            if (id == HotLogId) BeginInvoke(CaptureClipboardItem);
+            if (id == HotLogId) BeginInvoke(() => CaptureClipboardItem("log-item"));
+            else if (id == HotPriceId) BeginInvoke(() => CaptureClipboardItem("price-item"));
             else if (id == HotNextId) BeginInvoke(() => PushHotkey("next-kill"));
         }
         base.WndProc(ref m);
@@ -94,22 +103,34 @@ sealed class TrackerWindow : Form
     {
         try { UnregisterHotKey(Handle, HotLogId); } catch { /* ignore */ }
         try { UnregisterHotKey(Handle, HotNextId); } catch { /* ignore */ }
+        try { UnregisterHotKey(Handle, HotPriceId); } catch { /* ignore */ }
     }
 
-    void ApplyHotkeys(string logSpec, string nextSpec)
+    void ApplyHotkeys(string logSpec, string nextSpec, string priceSpec)
     {
         ClearHotkeys();
         _hotLog = string.IsNullOrWhiteSpace(logSpec) ? "F8" : logSpec.Trim();
         _hotNext = string.IsNullOrWhiteSpace(nextSpec) ? "F9" : nextSpec.Trim();
-        var logOk = TryParseHotkey(_hotLog, out var logMod, out var logVk) && RegisterHotKey(Handle, HotLogId, logMod, logVk);
-        var nextOk = TryParseHotkey(_hotNext, out var nextMod, out var nextVk) && RegisterHotKey(Handle, HotNextId, nextMod, nextVk);
-        if (!logOk || !nextOk)
+        _hotPrice = string.IsNullOrWhiteSpace(priceSpec) ? "F7" : priceSpec.Trim();
+        var used = new HashSet<(uint mod, uint vk)>();
+        bool Bind(int id, string spec, out string shown)
         {
+            shown = spec;
+            if (!TryParseHotkey(spec, out var mod, out var vk)) return false;
+            if (!used.Add((mod, vk))) return false;
+            return RegisterHotKey(Handle, id, mod, vk);
+        }
+        var logOk = Bind(HotLogId, _hotLog, out _);
+        var nextOk = Bind(HotNextId, _hotNext, out _);
+        var priceOk = Bind(HotPriceId, _hotPrice, out _);
+        if (!logOk || !nextOk || !priceOk)
+        {
+            var bad = !logOk ? _hotLog : !nextOk ? _hotNext : _hotPrice;
             PushJson(new
             {
                 type = "hotkey-status",
                 ok = false,
-                error = !logOk ? _hotLog + " is already in use" : _hotNext + " is already in use",
+                error = bad + " is already in use",
             });
         }
     }
@@ -173,7 +194,7 @@ sealed class TrackerWindow : Form
         keybd_event(vkControl, 0, keyUp, 0);
     }
 
-    async void CaptureClipboardItem()
+    async void CaptureClipboardItem(string action)
     {
         if (_capturingItem) return;
         _capturingItem = true;
@@ -193,7 +214,7 @@ sealed class TrackerWindow : Form
                     if (now != before || i >= 3) break;
                 }
             }
-            PushJson(new { type = "hotkey", action = "log-item", text });
+            PushJson(new { type = "hotkey", action, text });
             if (LooksLikePoeItem(text))
             {
                 try { Clipboard.Clear(); }
@@ -212,6 +233,28 @@ sealed class TrackerWindow : Form
     {
         if (_web.CoreWebView2 is null) return;
         _web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(payload, JsonOut));
+    }
+
+    void ForwardOverlayJson(string json)
+    {
+        if (_web.CoreWebView2 is null || string.IsNullOrWhiteSpace(json)) return;
+        _web.CoreWebView2.PostWebMessageAsJson(json);
+    }
+
+    async Task ShowPriceOverlayAsync(string html, string vars, string? notice, bool fresh = false)
+    {
+        try
+        {
+            _overlay ??= new PriceOverlayForm(ForwardOverlayJson);
+            var page = Path.Combine(AppDataDir(), "www", "overlay.html");
+            await _overlay.EnsureAsync(_env, page);
+            if (!string.IsNullOrWhiteSpace(notice)) _overlay.ShowNotice(notice, vars);
+            else _overlay.ShowHtml(html, vars, fresh);
+        }
+        catch
+        {
+            PushJson(new { type = "overlay-fallback" });
+        }
     }
 
     static readonly HttpClient TradeHttp = CreateTradeHttp();
@@ -270,7 +313,7 @@ sealed class TrackerWindow : Form
         public static TradeLimiter Default()
         {
             var limiter = new TradeLimiter();
-            limiter.Limits.Add(new SlidingLimit(1, 5));
+            limiter.Limits.Add(new SlidingLimit(7, 15));
             return limiter;
         }
 
@@ -295,7 +338,7 @@ sealed class TrackerWindow : Form
                 limit.Prune();
                 if (tight is null || limit.WindowSec < tight.WindowSec) tight = limit;
             }
-            if (tight is null) return (0, 1, 5);
+            if (tight is null) return (0, 7, 15);
             return (tight.Used, tight.Max, Math.Max(1, (int)Math.Round(tight.WindowSec)));
         }
     }
@@ -381,7 +424,22 @@ sealed class TrackerWindow : Form
         }
     }
 
-    sealed record RollFilter(string Id, double? Min);
+    sealed record RollFilter(string Id, double? Min, double? Max = null);
+
+    static bool JsonInt(JsonElement el, out int n)
+    {
+        n = 0;
+        return el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out n);
+    }
+
+    static bool JsonDouble(JsonElement el, out double n)
+    {
+        n = 0;
+        return el.ValueKind == JsonValueKind.Number && el.TryGetDouble(out n);
+    }
+
+    static string JsonString(JsonElement el, string fallback = "") =>
+        el.ValueKind == JsonValueKind.String ? el.GetString() ?? fallback : fallback;
     static Dictionary<string, List<(string id, string type)>>? FoldedStats;
     static readonly SemaphoreSlim StatBuild = new(1, 1);
 
@@ -439,16 +497,19 @@ sealed class TrackerWindow : Form
         }
     }
 
-    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null)
+    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null)
     {
         name = (name ?? "").Trim();
         league = (league ?? "").Trim();
-        if (!ValidLeague(league) || name.Length is < 2 or > 80)
+        typeLine = (typeLine ?? "").Trim();
+        rarity = (rarity ?? "").Trim();
+        if (!ValidLeague(league) || (name.Length is < 2 or > 80 && typeLine.Length is < 2 or > 80))
         {
             Reply(id, false, 400, "{\"error\":\"bad trade query\"}");
             return;
         }
-        var rollList = (rolls ?? Array.Empty<string>()).Where(r => !string.IsNullOrWhiteSpace(r)).Take(8).ToArray();
+        if (name.Length is < 2 or > 80) name = typeLine;
+        var rollList = (rolls ?? Array.Empty<string>()).Where(r => !string.IsNullOrWhiteSpace(r)).Take(12).ToArray();
         if (SearchLimit.Limited && CombinedWaitMs() >= 1500)
         {
             Reply(id, false, 429, "{\"error\":\"rate limited\"}");
@@ -457,9 +518,19 @@ sealed class TrackerWindow : Form
         IReadOnlyList<RollFilter> mapped = preMapped is { Count: > 0 } ? preMapped : Array.Empty<RollFilter>();
         if (mapped.Count == 0 && rollList.Length > 0)
             mapped = await MapRollsToFilters(rollList);
-        var extra = mapped.Count > 0
-            ? ":roll:" + string.Join("|", mapped.Select(f => f.Id + (f.Min is double m ? ">" + m.ToString("G", System.Globalization.CultureInfo.InvariantCulture) : "")))
+                var extra = mapped.Count > 0
+            ? ":roll:" + string.Join("|", mapped.Select(f =>
+            {
+                var id = f.Id;
+                if (f.Min is double lo) id += ">" + lo.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+                if (f.Max is double hi) id += "<" + hi.ToString("G", System.Globalization.CultureInfo.InvariantCulture);
+                return id;
+            }))
             : rollList.Length > 0 ? ":roll:none" : "";
+        extra += corrupted is true ? ":c1" : corrupted is false ? ":c0" : "";
+        extra += runeSockets is int rs ? ":r" + rs : "";
+        extra += ":" + rarity.ToLowerInvariant();
+        extra += typeLine.Length > 0 ? ":t:" + typeLine.ToLowerInvariant() : "";
         var cacheKey = "trade:" + league + ":" + name.ToLowerInvariant() + extra;
         if (!bust && Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < CacheFor)
         {
@@ -474,9 +545,10 @@ sealed class TrackerWindow : Form
                 Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
                 return;
             }
-            var payload = (rollList.Length > 0 || mapped.Count > 0)
-                ? await LookupRolledListing(league, name, typeLine, mapped)
-                : await LookupTradeListing(league, name, thorough);
+            var unique = rarity.Equals("Unique", StringComparison.OrdinalIgnoreCase);
+            var payload = mapped.Count > 0 || runeSockets is not null
+                ? await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets)
+                : await LookupTradeListing(league, unique || string.IsNullOrWhiteSpace(typeLine) ? name : typeLine, thorough);
             if (payload is { RateLimited: true })
             {
                 Reply(id, false, 429, "{\"error\":\"rate limited\"}");
@@ -515,9 +587,12 @@ sealed class TrackerWindow : Form
                 var fid = row.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
                 if (fid.Length is < 8 or > 80) continue;
                 double? min = null;
-                if (row.TryGetProperty("min", out var minEl) && minEl.TryGetDouble(out var n) && double.IsFinite(n))
+                double? max = null;
+                if (row.TryGetProperty("min", out var minEl) && JsonDouble(minEl, out var n) && double.IsFinite(n))
                     min = n;
-                list.Add(new RollFilter(fid, min));
+                if (row.TryGetProperty("max", out var maxEl) && JsonDouble(maxEl, out var x) && double.IsFinite(x))
+                    max = x;
+                list.Add(new RollFilter(fid, min, max));
                 if (list.Count >= 6) break;
             }
         }
@@ -556,20 +631,30 @@ sealed class TrackerWindow : Form
             ordered = ordered.Where(roll => TradeRollWeight(roll) >= 5).ToArray();
         foreach (var roll in ordered)
         {
+            var invert = InvertedTradeRoll(roll);
             var hit = MatchFoldedStat(FoldStat(roll), index);
             if (hit is null || !seen.Add(hit.Value.id)) continue;
-            filters.Add(new RollFilter(hit.Value.id, FirstRollNumber(roll, reduced: Regex.IsMatch(roll, @"\breduced\b", RegexOptions.IgnoreCase))));
+            var amount = FirstRollNumber(roll, invert);
+            filters.Add(new RollFilter(hit.Value.id, invert ? null : amount, invert ? amount : null));
             if (filters.Count >= 6) break;
         }
         return filters;
     }
 
+    static bool InvertedTradeRoll(string roll) =>
+        Regex.IsMatch(roll ?? "", @"\b(reduced|fewer|less)\b", RegexOptions.IgnoreCase) &&
+        !Regex.IsMatch(roll ?? "", @"\blesser\b", RegexOptions.IgnoreCase);
+
     static bool IsJunkTradeRoll(string roll)
     {
-        return Regex.IsMatch(roll, @"^has\b.*\b(charm slot|socketable)", RegexOptions.IgnoreCase) ||
-               Regex.IsMatch(roll, @"flask recovery applied instantly", RegexOptions.IgnoreCase) ||
-               Regex.IsMatch(roll, @"^\{", RegexOptions.IgnoreCase) ||
-               Regex.IsMatch(roll, @"^grants skill", RegexOptions.IgnoreCase);
+        return Regex.IsMatch(roll, @"^\{", RegexOptions.IgnoreCase) ||
+               Regex.IsMatch(roll, @"^place into an item socket", RegexOptions.IgnoreCase) ||
+               Regex.IsMatch(roll, @"^used when you", RegexOptions.IgnoreCase) ||
+               Regex.IsMatch(roll, @"^right click", RegexOptions.IgnoreCase) ||
+               Regex.IsMatch(roll, @"^this item can be anointed", RegexOptions.IgnoreCase) ||
+               Regex.IsMatch(roll, @"^\d+\s+uses? remaining", RegexOptions.IgnoreCase) ||
+               Regex.IsMatch(roll, @"^adds .+\s+to a map\s*$", RegexOptions.IgnoreCase) ||
+               Regex.IsMatch(roll, @"^empowers the map boss", RegexOptions.IgnoreCase);
     }
 
     static int TradeRollWeight(string roll)
@@ -665,20 +750,33 @@ sealed class TrackerWindow : Form
         return best;
     }
 
-    static (string id, string type)? PickStat(List<(string id, string type)> list)
+    static (string id, string type)? PickStat(List<(string id, string type)> list, string? prefer = null)
     {
-        foreach (var row in list)
+        if (list.Count == 0) return null;
+        string[] order = prefer?.Equals("rune", StringComparison.OrdinalIgnoreCase) == true
+            ? ["rune", "enchant", "implicit", "explicit"]
+            : prefer?.Equals("implicit", StringComparison.OrdinalIgnoreCase) == true
+            ? ["implicit", "enchant", "rune", "explicit"]
+            : prefer?.Equals("enchant", StringComparison.OrdinalIgnoreCase) == true
+                ? ["enchant", "implicit", "rune", "explicit"]
+                : ["explicit", "implicit", "enchant", "rune"];
+        foreach (var want in order)
         {
-            if (row.type.Equals("explicit", StringComparison.OrdinalIgnoreCase) || row.id.StartsWith("explicit.", StringComparison.OrdinalIgnoreCase))
-                return row;
+            foreach (var row in list)
+            {
+                if (row.type.Equals(want, StringComparison.OrdinalIgnoreCase) ||
+                    row.id.StartsWith(want + ".", StringComparison.OrdinalIgnoreCase))
+                    return row;
+            }
         }
-        return list.Count > 0 ? list[0] : null;
+        return list[0];
     }
 
     static string DistinctiveStatPhrase(string fold)
     {
         var ring = Regex.Match(fold ?? "", @"bonuses gained from (?:equipped )?(left|right) (?:equipped )?ring");
         if (ring.Success) return "bonuses gained from equipped " + ring.Groups[1].Value + " ring";
+        if (Regex.IsMatch(fold ?? "", @"additional enemies to be surrounded")) return "additional enemies to be surrounded";
         return "";
     }
 
@@ -686,11 +784,17 @@ sealed class TrackerWindow : Form
     {
         if (string.IsNullOrWhiteSpace(text)) return "";
         var t = StripAdvancedRanges(UnwrapTags(text)).ToLowerInvariant();
+        t = Regex.Replace(t, @"[\r\n]+", " ");
         t = Regex.Replace(t, @"\([^)]*\)", " ");
         t = Regex.Replace(t, @"\{[^}]+\}", " ");
         t = Regex.Replace(t, @"\breduced\b", "increased");
+        t = Regex.Replace(t, @"\bfewer\b", "additional");
+        t = Regex.Replace(t, @"\bless\b", "more");
+        t = Regex.Replace(t, @"\brequires\b", "require");
+        t = Regex.Replace(t, @"\bin area\b", "in map");
         t = Regex.Replace(t, @"\bleft equipped ring\b", "equipped left ring");
         t = Regex.Replace(t, @"\bright equipped ring\b", "equipped right ring");
+        t = Regex.Replace(t, @"\bslots\b", "slot");
         t = Regex.Replace(t, @"[+-]?\d+(?:\.\d+)?", "#");
         t = t.Replace("#to ", "# to ", StringComparison.Ordinal);
         t = Regex.Replace(t, @"#%", "# %");
@@ -711,7 +815,7 @@ sealed class TrackerWindow : Form
         return n;
     }
 
-    static IEnumerable<string> RolledQueries(string name, string typeLine, IReadOnlyList<RollFilter> filters, bool relax = false)
+    static IEnumerable<string> RolledQueries(string name, string typeLine, IReadOnlyList<RollFilter> filters, bool relax = false, bool? corrupted = null, string rarity = "", int? runeSockets = null)
     {
         JsonArray FilterArray()
         {
@@ -719,24 +823,56 @@ sealed class TrackerWindow : Form
             foreach (var filter in filters)
             {
                 var obj = new JsonObject { ["id"] = filter.Id, ["disabled"] = false };
+                JsonObject? value = null;
                 if (filter.Min is double min)
                 {
                     if (relax && min > 0) min = Math.Floor(min * 0.9);
-                    obj["value"] = new JsonObject { ["min"] = min };
+                    value = new JsonObject { ["min"] = min };
                 }
+                if (filter.Max is double max)
+                {
+                    if (relax && max < 0) max = Math.Ceiling(max * 0.9);
+                    value ??= new JsonObject();
+                    value["max"] = max;
+                }
+                if (value is not null) obj["value"] = value;
                 arr.Add(obj);
             }
             return arr;
         }
 
+        JsonObject MiscFilters()
+        {
+            var bag = new JsonObject();
+            if (corrupted is bool flag)
+            {
+                bag["misc_filters"] = new JsonObject
+                {
+                    ["filters"] = new JsonObject
+                    {
+                        ["corrupted"] = new JsonObject { ["option"] = flag ? "true" : "false" },
+                    },
+                };
+            }
+            if (runeSockets is int n && n is >= 0 and <= 6)
+            {
+                bag["equipment_filters"] = new JsonObject
+                {
+                    ["filters"] = new JsonObject
+                    {
+                        ["rune_sockets"] = new JsonObject { ["min"] = n, ["max"] = n },
+                    },
+                };
+            }
+            return bag;
+        }
+
         JsonObject Body(bool includeType)
         {
-            // Match Exiled Exchange 2: unique name + type, stats in one AND group.
-            // Do not send rarity "unique" — the trade API rejects it.
+            var unique = rarity.Equals("Unique", StringComparison.OrdinalIgnoreCase);
             var query = new JsonObject
             {
                 ["status"] = new JsonObject { ["option"] = "any" },
-                ["name"] = name,
                 ["stats"] = new JsonArray
                 {
                     new JsonObject
@@ -745,9 +881,14 @@ sealed class TrackerWindow : Form
                         ["filters"] = FilterArray(),
                     },
                 },
-                ["filters"] = new JsonObject(),
+                ["filters"] = MiscFilters(),
             };
-            if (includeType && !string.IsNullOrWhiteSpace(typeLine))
+            if (unique && !string.IsNullOrWhiteSpace(name))
+                query["name"] = name;
+            else if (!unique && string.IsNullOrWhiteSpace(typeLine) && !string.IsNullOrWhiteSpace(name))
+                query["name"] = name;
+            if (includeType && !string.IsNullOrWhiteSpace(typeLine) &&
+                !typeLine.Equals(name, StringComparison.OrdinalIgnoreCase))
                 query["type"] = typeLine;
             return new JsonObject
             {
@@ -761,7 +902,7 @@ sealed class TrackerWindow : Form
         yield return Body(false).ToJsonString();
     }
 
-    async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters)
+    async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters, bool? corrupted = null, string rarity = "", int? runeSockets = null)
     {
         var searchUri = "https://www.pathofexile.com/api/trade2/search/poe2/" + Uri.EscapeDataString(league);
         string? lastId = null;
@@ -786,11 +927,15 @@ sealed class TrackerWindow : Form
             using (search)
             {
                 var root = search.RootElement;
-                lastId = root.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
-                lastTotal = root.TryGetProperty("total", out var totalEl) && totalEl.TryGetInt32(out var listed) ? listed : 0;
+                lastId = root.TryGetProperty("id", out var idEl) ? JsonString(idEl) : "";
+                lastTotal = root.TryGetProperty("total", out var totalEl) && JsonInt(totalEl, out var listed) ? listed : 0;
                 if (!root.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array)
                     return null;
-                var hashes = result.EnumerateArray().Select(el => el.GetString()).Where(h => !string.IsNullOrWhiteSpace(h)).Take(10).ToArray();
+                var hashes = result.EnumerateArray()
+                    .Select(el => JsonString(el))
+                    .Where(h => !string.IsNullOrWhiteSpace(h))
+                    .Take(10)
+                    .ToArray();
                 if (hashes.Length == 0) return null;
                 var fetchUrl = "https://www.pathofexile.com/api/trade2/fetch/" + string.Join(",", hashes) + "?query=" + Uri.EscapeDataString(lastId);
                 if (!await WaitForSlot(FetchLimit)) return new TradeLookup(RateLimited: true);
@@ -806,7 +951,7 @@ sealed class TrackerWindow : Form
             }
         }
 
-        foreach (var body in RolledQueries(name, typeLine, filters))
+        foreach (var body in RolledQueries(name, typeLine, filters, false, corrupted, rarity, runeSockets))
         {
             var got = await Run(body);
             if (got is { RateLimited: true } or { Forbidden: true }) return got;
@@ -815,7 +960,7 @@ sealed class TrackerWindow : Form
         }
         if (filters.Count > 0 && lastTotal == 0)
         {
-            foreach (var body in RolledQueries(name, typeLine, filters, true).Take(1))
+            foreach (var body in RolledQueries(name, typeLine, filters, true, corrupted, rarity, runeSockets).Take(1))
             {
                 var got = await Run(body);
                 if (got is { RateLimited: true } or { Forbidden: true }) return got;
@@ -855,8 +1000,8 @@ sealed class TrackerWindow : Form
             var root = search.RootElement;
             if (!root.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array || result.GetArrayLength() == 0)
                 continue;
-            var queryId = root.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
-            var hashes = result.EnumerateArray().Select(el => el.GetString()).Where(h => !string.IsNullOrWhiteSpace(h)).Take(10).ToArray();
+            var queryId = root.TryGetProperty("id", out var idEl) ? JsonString(idEl) : "";
+            var hashes = result.EnumerateArray().Select(el => JsonString(el)).Where(h => !string.IsNullOrWhiteSpace(h)).Take(10).ToArray();
             if (hashes.Length == 0) continue;
             var fetchUrl = "https://www.pathofexile.com/api/trade2/fetch/" + string.Join(",", hashes) + "?query=" + Uri.EscapeDataString(queryId);
             if (!await WaitForSlot(FetchLimit)) return new TradeLookup(RateLimited: true);
@@ -926,8 +1071,8 @@ sealed class TrackerWindow : Form
                 !listing.TryGetProperty("price", out var price) ||
                 price.ValueKind != JsonValueKind.Object)
                 continue;
-            var amount = price.TryGetProperty("amount", out var amountEl) && amountEl.TryGetDouble(out var n) ? n : double.NaN;
-            var currency = price.TryGetProperty("currency", out var curEl) ? curEl.GetString() ?? "" : "";
+            var amount = price.TryGetProperty("amount", out var amountEl) && JsonDouble(amountEl, out var n) ? n : double.NaN;
+            var currency = price.TryGetProperty("currency", out var curEl) ? JsonString(curEl) : "";
             if (!NumberIsPositive(amount) || string.IsNullOrWhiteSpace(currency)) continue;
             count++;
             if (amount < bestAmount)
@@ -938,7 +1083,7 @@ sealed class TrackerWindow : Form
             }
         }
         if (count == 0 || bestCurrency is null) return null;
-        var total = searchRoot.TryGetProperty("total", out var totalEl) && totalEl.TryGetInt32(out var listed) ? listed : count;
+        var total = searchRoot.TryGetProperty("total", out var totalEl) && JsonInt(totalEl, out var listed) ? listed : count;
         return JsonSerializer.Serialize(new
         {
             name = string.IsNullOrWhiteSpace(bestName) ? fallbackName : bestName,
@@ -955,9 +1100,9 @@ sealed class TrackerWindow : Form
     {
         if (!row.TryGetProperty("item", out var item) || item.ValueKind != JsonValueKind.Object)
             return fallback;
-        var uniqueName = item.TryGetProperty("name", out var nameEl) ? nameEl.GetString() : null;
+        var uniqueName = item.TryGetProperty("name", out var nameEl) ? JsonString(nameEl) : "";
         if (!string.IsNullOrWhiteSpace(uniqueName)) return uniqueName;
-        var typeLine = item.TryGetProperty("typeLine", out var typeEl) ? typeEl.GetString() : null;
+        var typeLine = item.TryGetProperty("typeLine", out var typeEl) ? JsonString(typeEl) : "";
         return string.IsNullOrWhiteSpace(typeLine) ? fallback : typeLine;
     }
 
@@ -1013,8 +1158,8 @@ sealed class TrackerWindow : Form
 
         try
         {
-            var env = await CoreWebView2Environment.CreateAsync(userDataFolder: userData);
-            await _web.EnsureCoreWebView2Async(env);
+            _env = await CoreWebView2Environment.CreateAsync(userDataFolder: userData);
+            await _web.EnsureCoreWebView2Async(_env);
         }
         catch (WebView2RuntimeNotFoundException)
         {
@@ -1028,7 +1173,7 @@ sealed class TrackerWindow : Form
         }
 
         _web.CoreWebView2.Settings.AreDevToolsEnabled = false;
-        _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
+        _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _web.CoreWebView2.Settings.IsWebMessageEnabled = true;
         _web.CoreWebView2.WebMessageReceived += OnWebMessage;
@@ -1038,7 +1183,7 @@ sealed class TrackerWindow : Form
             OpenTradeUrl(ev.Uri);
         };
         _web.CoreWebView2.Navigate(new Uri(index).AbsoluteUri);
-        ApplyHotkeys(_hotLog, _hotNext);
+        ApplyHotkeys(_hotLog, _hotNext, _hotPrice);
     }
 
     async void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -1055,11 +1200,17 @@ sealed class TrackerWindow : Form
                 BeginInvoke(Close);
                 return;
             }
+            if (type == "hotkeys-pause")
+            {
+                BeginInvoke(ClearHotkeys);
+                return;
+            }
             if (type == "hotkeys")
             {
                 var log = root.TryGetProperty("log", out var logEl) ? logEl.GetString() ?? "F8" : "F8";
                 var next = root.TryGetProperty("next", out var nextEl) ? nextEl.GetString() ?? "F9" : "F9";
-                BeginInvoke(() => ApplyHotkeys(log, next));
+                var price = root.TryGetProperty("price", out var priceEl) ? priceEl.GetString() ?? "F7" : "F7";
+                BeginInvoke(() => ApplyHotkeys(log, next, price));
                 return;
             }
             if (type == "rate-status")
@@ -1119,6 +1270,62 @@ sealed class TrackerWindow : Form
                 BeginInvoke(() => OpenTradeUrl(url));
                 return;
             }
+            if (type == "copy-text")
+            {
+                var text = root.TryGetProperty("text", out var copyEl) ? copyEl.GetString() ?? "" : "";
+                if (text.Length is < 1 or > 8000) return;
+                BeginInvoke(() =>
+                {
+                    try { Clipboard.SetText(text); }
+                    catch { /* ignore clipboard lock */ }
+                });
+                return;
+            }
+            if (type == "feedback-send")
+            {
+                var title = root.TryGetProperty("title", out var titleEl) ? titleEl.GetString() ?? "" : "";
+                var body = root.TryGetProperty("body", out var bodyEl) ? bodyEl.GetString() ?? "" : "";
+                var version = root.TryGetProperty("version", out var verEl) ? verEl.GetString() ?? "" : "";
+                var league = root.TryGetProperty("league", out var leagueEl) ? leagueEl.GetString() ?? "" : "";
+                var page = root.TryGetProperty("page", out var pageEl) ? pageEl.GetString() ?? "" : "";
+                title = title.Trim();
+                body = body.Trim();
+                if (title.Length is < 1 or > 80)
+                {
+                    Reply(id ?? "", false, 400, "{\"error\":\"need a title\"}");
+                    return;
+                }
+                if (body.Length > 4000) body = body[..4000];
+                var item = FeedbackStore.Save(title, body, version, league, page);
+                _ = Task.Run(async () =>
+                {
+                    await FeedbackStore.NotifyCloudAsync(item);
+                    await FeedbackStore.NotifyLocalAsync(item);
+                    await FeedbackStore.NotifyHookAsync(item);
+                });
+                Reply(id ?? "", true, 200, "{\"ok\":true}");
+                return;
+            }
+            if (type == "overlay-show")
+            {
+                var html = root.TryGetProperty("html", out var htmlEl) ? htmlEl.GetString() ?? "" : "";
+                var vars = root.TryGetProperty("vars", out var varsEl) ? varsEl.GetString() ?? "" : "";
+                var fresh = root.TryGetProperty("fresh", out var freshEl) && freshEl.ValueKind == JsonValueKind.True;
+                BeginInvoke(() => _ = ShowPriceOverlayAsync(html, vars, null, fresh));
+                return;
+            }
+            if (type == "overlay-hide")
+            {
+                BeginInvoke(() => _overlay?.HideOverlay());
+                return;
+            }
+            if (type == "overlay-notice")
+            {
+                var text = root.TryGetProperty("text", out var textEl) ? textEl.GetString() ?? "" : "";
+                var vars = root.TryGetProperty("vars", out var noticeVarsEl) ? noticeVarsEl.GetString() ?? "" : "";
+                BeginInvoke(() => _ = ShowPriceOverlayAsync("", vars, text));
+                return;
+            }
             if (type == "trade-stats")
             {
                 await FetchTradeStats(id ?? "");
@@ -1160,7 +1367,17 @@ sealed class TrackerWindow : Form
                     }
                 }
                 var mapped = ReadPreMappedFilters(root);
-                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped);
+                bool? corrupted = null;
+                if (root.TryGetProperty("corrupted", out var corrEl))
+                {
+                    if (corrEl.ValueKind == JsonValueKind.True) corrupted = true;
+                    else if (corrEl.ValueKind == JsonValueKind.False) corrupted = false;
+                }
+                var rarity = root.TryGetProperty("rarity", out var rarityEl) ? rarityEl.GetString() ?? "" : "";
+                int? runeSockets = null;
+                if (root.TryGetProperty("runeSockets", out var runeEl) && JsonInt(runeEl, out var runeN) && runeN is >= 0 and <= 6)
+                    runeSockets = runeN;
+                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets);
                 return;
             }
             if (type == "backup-info")
@@ -1382,8 +1599,14 @@ sealed class TrackerWindow : Form
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
         if (!uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return;
-        if (!uri.Host.Equals("www.pathofexile.com", StringComparison.OrdinalIgnoreCase)) return;
-        if (!uri.AbsolutePath.StartsWith("/trade2/", StringComparison.OrdinalIgnoreCase)) return;
+        var host = uri.Host;
+        var path = uri.AbsolutePath;
+        var trade = host.Equals("www.pathofexile.com", StringComparison.OrdinalIgnoreCase)
+            && path.StartsWith("/trade2/", StringComparison.OrdinalIgnoreCase);
+        var github = (host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+                || host.Equals("www.github.com", StringComparison.OrdinalIgnoreCase))
+            && path.StartsWith("/Shawn25678/SSEv1", StringComparison.OrdinalIgnoreCase);
+        if (!trade && !github) return;
         Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
     }
 
@@ -1604,6 +1827,7 @@ sealed class TrackerWindow : Form
         Directory.CreateDirectory(dir);
         var asm = Assembly.GetExecutingAssembly();
         WriteResource(asm, "www.index.html", Path.Combine(dir, "index.html"));
+        WriteResource(asm, "www.overlay.html", Path.Combine(dir, "overlay.html"));
         WriteResource(asm, "www.styles.css", Path.Combine(dir, "styles.css"));
         WriteResource(asm, "www.app.js", Path.Combine(dir, "app.js"));
         WriteResource(asm, "www.decks.js", Path.Combine(dir, "decks.js"));
@@ -1968,5 +2192,175 @@ sealed class TrackerWindow : Form
             ?? throw new InvalidOperationException("Missing embedded file: " + name);
         using var file = File.Create(path);
         stream.CopyTo(file);
+    }
+}
+
+sealed class PriceOverlayForm : Form
+{
+    readonly WebView2 _web = new()
+    {
+        Dock = DockStyle.Fill,
+        DefaultBackgroundColor = Color.FromArgb(18, 14, 10),
+    };
+    readonly Action<string> _forward;
+    bool _ready;
+    string? _pendingKind;
+    string? _pendingHtml;
+    string? _pendingVars;
+    string? _pendingNotice;
+
+    public PriceOverlayForm(Action<string> forward)
+    {
+        _forward = forward;
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.Manual;
+        TopMost = true;
+        Width = 428;
+        Height = 220;
+        BackColor = Color.FromArgb(18, 14, 10);
+        KeyPreview = true;
+        Controls.Add(_web);
+        KeyDown += (_, e) =>
+        {
+            if (e.KeyCode != Keys.Escape) return;
+            HideOverlay();
+            _forward("""{"type":"overlay-click","closeInspect":""}""");
+        };
+    }
+
+    protected override bool ShowWithoutActivation => true;
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW
+            cp.ExStyle |= 0x08000000; // WS_EX_NOACTIVATE
+            return cp;
+        }
+    }
+
+    [DllImport("user32.dll")]
+    static extern bool GetCursorPos(out NativePoint pt);
+
+    [DllImport("user32.dll")]
+    static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    static readonly IntPtr HwndTopmost = new(-1);
+    const uint SwpNoActivate = 0x0010;
+    const uint SwpShowWindow = 0x0040;
+    const uint SwpNoSize = 0x0001;
+    const uint SwpNoMove = 0x0002;
+
+    public async Task EnsureAsync(CoreWebView2Environment? env, string page)
+    {
+        if (_ready) return;
+        if (env is not null) await _web.EnsureCoreWebView2Async(env);
+        else await _web.EnsureCoreWebView2Async();
+        _web.CoreWebView2.Settings.AreDevToolsEnabled = false;
+        _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+        _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
+        _web.CoreWebView2.Settings.IsWebMessageEnabled = true;
+        _web.CoreWebView2.WebMessageReceived += OnMessage;
+        _web.CoreWebView2.NavigationCompleted += (_, _) =>
+        {
+            _ready = true;
+            FlushPending();
+        };
+        if (File.Exists(page)) _web.CoreWebView2.Navigate(new Uri(page).AbsoluteUri);
+        else _ready = true;
+    }
+
+    public void ShowHtml(string html, string vars, bool fresh = false)
+    {
+        _pendingKind = "paint";
+        _pendingHtml = html;
+        _pendingVars = vars;
+        _pendingNotice = null;
+        if (fresh || !Visible) PlaceNearCursor();
+        Peek();
+        FlushPending();
+    }
+
+    public void ShowNotice(string text, string vars)
+    {
+        _pendingKind = "notice";
+        _pendingNotice = text;
+        _pendingVars = vars;
+        _pendingHtml = null;
+        if (!Visible) PlaceNearCursor();
+        Peek();
+        FlushPending();
+    }
+
+    public void HideOverlay()
+    {
+        _pendingKind = null;
+        Hide();
+    }
+
+    void FlushPending()
+    {
+        if (!_ready || _web.CoreWebView2 is null || _pendingKind is null) return;
+        var payload = _pendingKind == "notice"
+            ? JsonSerializer.Serialize(new { type = "notice", text = _pendingNotice ?? "", vars = _pendingVars ?? "" })
+            : JsonSerializer.Serialize(new { type = "paint", html = _pendingHtml ?? "", vars = _pendingVars ?? "" });
+        _web.CoreWebView2.PostWebMessageAsJson(payload);
+    }
+
+    void Peek()
+    {
+        Show();
+        SetWindowPos(Handle, HwndTopmost, 0, 0, 0, 0, SwpNoActivate | SwpShowWindow | SwpNoMove | SwpNoSize);
+        TopMost = true;
+    }
+
+    void PlaceNearCursor()
+    {
+        GetCursorPos(out var pt);
+        var screen = Screen.FromPoint(new Point(pt.X, pt.Y)).WorkingArea;
+        var x = pt.X + 28;
+        var y = pt.Y - 36;
+        if (x + Width > screen.Right) x = pt.X - Width - 20;
+        if (y + Height > screen.Bottom) y = screen.Bottom - Height;
+        if (x < screen.Left) x = screen.Left;
+        if (y < screen.Top) y = screen.Top;
+        Location = new Point(x, y);
+    }
+
+    void OnMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
+            var type = doc.RootElement.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : "";
+            if (type == "overlay-size")
+            {
+                var w = doc.RootElement.TryGetProperty("w", out var wEl) && wEl.ValueKind == JsonValueKind.Number && wEl.TryGetInt32(out var ww) ? ww : Width;
+                var h = doc.RootElement.TryGetProperty("h", out var hEl) && hEl.ValueKind == JsonValueKind.Number && hEl.TryGetInt32(out var hh) ? hh : Height;
+                var screen = Screen.FromControl(this).WorkingArea;
+                Width = Math.Clamp(w, 280, Math.Max(280, screen.Width / 2));
+                Height = Math.Clamp(h, 90, Math.Max(90, (int)(screen.Height * 0.8)));
+                return;
+            }
+            if (type == "overlay-click")
+            {
+                if (doc.RootElement.TryGetProperty("closeInspect", out _)) HideOverlay();
+                _forward(e.WebMessageAsJson);
+            }
+        }
+        catch
+        {
+            /* keep the overlay up */
+        }
     }
 }

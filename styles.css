@@ -17,8 +17,8 @@
   --panel-2: color-mix(in srgb, var(--panel) 82%, var(--gold) 18%);
   --line: color-mix(in srgb, var(--gold) 22%, transparent);
   --line-strong: color-mix(in srgb, var(--gold) 45%, transparent);
-  --font-display: "Cinzel", serif;
-  --font-ui: "Outfit", system-ui, sans-serif;
+  --font-display: Georgia, "Times New Roman", serif;
+  --font-ui: "Segoe UI", system-ui, sans-serif;
   --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
   --boss-scale: 1;
 }
@@ -266,7 +266,7 @@ body.on-title .bg-glow {
   border: 1px solid transparent;
   background: transparent;
   color: var(--ink);
-  padding: 12px 14px 12px 16px;
+  padding: 10px 14px 10px 16px;
   border-radius: 12px;
   cursor: pointer;
   font: inherit;
@@ -699,7 +699,7 @@ select:focus {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
   margin: 22px 0;
 }
@@ -1710,9 +1710,19 @@ button.price-chip {
   gap: 6px;
   background: color-mix(in srgb, var(--unique) 18%, transparent);
   color: var(--unique-2);
+  border: 1px solid transparent;
   border-radius: 999px;
   padding: 3px 8px;
+  font: inherit;
   font-size: 0.82rem;
+}
+
+button.pill.is-inspect {
+  cursor: pointer;
+}
+
+button.pill.is-inspect:hover {
+  border-color: var(--gold);
 }
 
 .panel-form {
@@ -1914,8 +1924,37 @@ button.price-chip {
   border-radius: 999px;
   padding: 3px 8px;
   color: var(--unique-2);
+  font: inherit;
   font-size: 0.78rem;
   line-height: 1.3;
+  cursor: pointer;
+}
+
+button.roll-chip:hover {
+  border-color: var(--gold);
+}
+
+.roll-chip.is-on {
+  border-color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 18%, transparent);
+  color: var(--gold-2);
+}
+
+.roll-chip.is-implicit {
+  font-style: italic;
+  border-style: dashed;
+}
+
+.roll-chip.is-enchant {
+  color: #7ad0c8;
+}
+
+.roll-chip.is-rune {
+  color: #c4a35a;
+}
+
+.roll-chip.is-flag {
+  color: var(--muted);
 }
 
 .check {
@@ -1960,6 +1999,16 @@ button.price-chip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
+}
+
+.feedback-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.feedback-form .row-actions {
+  justify-content: space-between;
 }
 
 .theme-color {
@@ -2412,6 +2461,171 @@ button.price-chip {
   margin-top: 2px;
 }
 
+.price-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  justify-items: end;
+  align-items: start;
+  padding: 72px 22px 24px;
+}
+
+.price-overlay[hidden] {
+  display: none !important;
+}
+
+.price-overlay-back {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.price-overlay-card {
+  position: relative;
+  z-index: 1;
+  width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+  pointer-events: auto;
+  padding: 16px 16px 14px;
+  box-shadow: var(--shadow);
+}
+
+.price-overlay-x {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+
+.price-overlay-flag {
+  justify-self: start;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.price-overlay-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.price-overlay-flag.is-static {
+  cursor: default;
+}
+
+.price-overlay-flag.is-on {
+  border-color: #c45c4a;
+  color: #e08070;
+}
+
+.price-overlay-rune {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.price-overlay-rune .price-overlay-flag.is-on {
+  border-color: var(--gold);
+  color: var(--gold-2);
+}
+
+.price-overlay-mods {
+  display: grid;
+  gap: 2px;
+}
+
+.price-overlay-mod {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: #7aa2ff;
+  font: inherit;
+  font-size: 0.88rem;
+  line-height: 1.35;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+
+.price-overlay-tag {
+  flex: 0 0 4.6em;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.price-overlay-mod.is-implicit {
+  color: #8888ff;
+  font-style: italic;
+}
+
+.price-overlay-mod.is-enchant {
+  color: #7ad0c8;
+}
+
+.price-overlay-mod.is-rune {
+  color: #c4a35a;
+}
+
+.price-overlay-mod.is-ghost {
+  opacity: 0.78;
+}
+
+.price-overlay-mod:hover,
+.price-overlay-mod.is-on {
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+  color: var(--gold-2);
+}
+
+.price-overlay-rule {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 0;
+}
+
+.price-overlay-foot {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.price-overlay-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.price-overlay-status {
+  color: var(--gold-2);
+}
+
 .title-screen {
   position: fixed;
   inset: 0;
@@ -2799,6 +3013,102 @@ body.view-decks #main {
   .poe-inv-panel {
     border-left: 0;
     border-top: 1px solid var(--line);
+  }
+}
+
+.inbox-app {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--bg);
+}
+
+.inbox-shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+}
+
+.inbox-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.inbox-head .btn {
+  margin-left: auto;
+}
+
+.inbox-head h1 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.inbox-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  min-height: 0;
+}
+
+.inbox-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+  overflow: auto;
+}
+
+.inbox-item {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.inbox-item span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.inbox-item.is-unread strong {
+  color: var(--gold-2);
+}
+
+.inbox-item.is-on,
+.inbox-item:hover {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--gold) 10%, transparent);
+}
+
+.inbox-detail {
+  margin: 12px;
+  overflow: auto;
+}
+
+.inbox-body {
+  white-space: pre-wrap;
+  margin: 14px 0;
+  font: inherit;
+  color: var(--ink);
+}
+
+@media (max-width: 700px) {
+  .inbox-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .inbox-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    max-height: 30vh;
   }
 }
 

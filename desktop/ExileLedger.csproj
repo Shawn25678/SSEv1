@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="..\index.html" LogicalName="www.index.html" />
+    <EmbeddedResource Include="..\overlay.html" LogicalName="www.overlay.html" />
     <EmbeddedResource Include="..\styles.css" LogicalName="www.styles.css" />
     <EmbeddedResource Include="..\app.js" LogicalName="www.app.js" />
     <EmbeddedResource Include="..\decks.js" LogicalName="www.decks.js" />
@@ -31,6 +32,7 @@
     <EmbeddedResource Include="..\bosses.js" LogicalName="www.bosses.js" />
     <EmbeddedResource Include="..\icons.js" LogicalName="www.icons.js" />
     <EmbeddedResource Include="..\still-sane-sigil.png" LogicalName="www.still-sane-sigil.png" />
+    <EmbeddedResource Include="supabase.public.json" LogicalName="www.supabase.public.json" />
     <EmbeddedResource Include="..\art\*.png" LogicalName="www.art.%(Filename).png" />
     <EmbeddedResource Include="..\art\*.jpg" LogicalName="www.art.%(Filename).jpg" />
     <EmbeddedResource Include="..\art\*.gif" LogicalName="www.art.%(Filename).gif" />

@@ -1,4 +1,6 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
+const APP_VERSION = "1.0.4";
+const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
   ["all", "All"],
@@ -15,6 +17,7 @@ const ui = {
   logBossId: null,
   editLogId: null,
   dashRollId: null,
+  inspect: null,
   hotkeyCapture: "",
   econType: "Currency",
   econTypes: ["Currency"],
@@ -33,7 +36,7 @@ const backupInfo = { folder: "", downloads: "" };
 const sessionStarted = Date.now();
 let toastTimer = 0;
 const ninjaWait = new Map();
-const tradeRate = { readyAt: 0, waitMs: 0, hits: 0, max: 1, window: 5, limited: false };
+const tradeRate = { readyAt: 0, waitMs: 0, hits: 0, max: 7, window: 15, limited: false };
 let rateBarTimer = 0;
 const prices = {
   status: "idle",
@@ -51,6 +54,8 @@ const prices = {
   looking: new Set(),
   checkedEmpty: new Set(),
   filling: false,
+  gapDone: 0,
+  gapTotal: 0,
 };
 
 const NINJA_EXCHANGE = [
@@ -125,6 +130,7 @@ function loadState() {
       convertView: parsed.convertView || parsed.convertMain || "divine",
       hotkeyLog: parsed.hotkeyLog || "F8",
       hotkeyNext: parsed.hotkeyNext || "F9",
+      hotkeyPrice: parsed.hotkeyPrice || "F7",
       theme: { ...themeDefaults(), ...(parsed.theme || {}) },
     };
   } catch {
@@ -147,6 +153,7 @@ function defaultState() {
     convertView: "divine",
     hotkeyLog: "F8",
     hotkeyNext: "F9",
+    hotkeyPrice: "F7",
     theme: themeDefaults(),
   };
 }
@@ -165,8 +172,7 @@ const THEME_PRESETS = {
     danger: "#c45a4c",
     ok: "#7d9a5a",
     citadel: "#6e8ea8",
-    display: "Cinzel",
-    ui: "Outfit",
+    display: "Georgia",
   },
   crimson: {
     label: "Vaal red",
@@ -181,14 +187,58 @@ const THEME_PRESETS = {
     danger: "#e7b1ab",
     ok: "#c45a4c",
     citadel: "#a33b32",
-    display: "Cinzel",
-    ui: "Outfit",
+    display: "Georgia",
   },
-  midnight: {
-    label: "Midnight",
+  oriath: {
+    label: "Oriath",
+    gold: "#c4b48a",
+    gold2: "#efe6c8",
+    crimson: "#8a6a48",
+    bg: "#161410",
+    panel: "#221e18",
+    ink: "#f4eee0",
+    muted: "#a89a80",
+    unique: "#c4a46a",
+    danger: "#b45a48",
+    ok: "#8a9a6a",
+    citadel: "#8a9aaa",
+    display: "Palatino Linotype",
+  },
+  wraeclast: {
+    label: "Wraeclast",
+    gold: "#9a8a4a",
+    gold2: "#c8c090",
+    crimson: "#6a8a48",
+    bg: "#0a0c08",
+    panel: "#121610",
+    ink: "#e4ead8",
+    muted: "#8a9478",
+    unique: "#8a9a4a",
+    danger: "#c45a4c",
+    ok: "#7d9a5a",
+    citadel: "#6a8a70",
+    display: "Georgia",
+  },
+  breach: {
+    label: "Breach",
+    gold: "#b48ad4",
+    gold2: "#e0c8f0",
+    crimson: "#6a3a8a",
+    bg: "#0e0814",
+    panel: "#1a1222",
+    ink: "#f0e6f6",
+    muted: "#9a88aa",
+    unique: "#c49ae0",
+    danger: "#c45a8a",
+    ok: "#7a9a8a",
+    citadel: "#6a5aa8",
+    display: "Georgia",
+  },
+  kalguur: {
+    label: "Kalguur",
     gold: "#7aa2c8",
     gold2: "#c5d8ea",
-    crimson: "#5b6ea8",
+    crimson: "#4a6a88",
     bg: "#0a0d12",
     panel: "#12161c",
     ink: "#e6eef6",
@@ -197,24 +247,37 @@ const THEME_PRESETS = {
     danger: "#c45a4c",
     ok: "#7d9a5a",
     citadel: "#5b6ea8",
-    display: "Playfair Display",
-    ui: "Inter",
+    display: "Cambria",
   },
-  parchment: {
-    label: "Parchment",
-    gold: "#8a6a32",
-    gold2: "#c4a46a",
-    crimson: "#8c4a32",
-    bg: "#1a1610",
-    panel: "#241e16",
+  sanctum: {
+    label: "Sanctum",
+    gold: "#e0c06a",
+    gold2: "#f4e4b0",
+    crimson: "#8a2840",
+    bg: "#14080c",
+    panel: "#1e1016",
+    ink: "#f6ead8",
+    muted: "#b09088",
+    unique: "#e0a05a",
+    danger: "#d45a6a",
+    ok: "#c4a46a",
+    citadel: "#a06070",
+    display: "Times New Roman",
+  },
+  highgate: {
+    label: "Highgate",
+    gold: "#c48a3a",
+    gold2: "#e8c888",
+    crimson: "#8a4a28",
+    bg: "#120e0a",
+    panel: "#1c1610",
     ink: "#f2e6cc",
     muted: "#a89878",
-    unique: "#c4a46a",
+    unique: "#d49a4a",
     danger: "#c45a4c",
-    ok: "#7d9a5a",
-    citadel: "#8a6a32",
-    display: "Cinzel Decorative",
-    ui: "Literata",
+    ok: "#8a9a5a",
+    citadel: "#8a6a42",
+    display: "Georgia",
   },
   verdant: {
     label: "Azmeri",
@@ -229,62 +292,50 @@ const THEME_PRESETS = {
     danger: "#c45a4c",
     ok: "#7d9a5a",
     citadel: "#6e8ea8",
-    display: "Caudex",
-    ui: "Nunito Sans",
+    display: "Georgia",
+  },
+  abyss: {
+    label: "Abyss",
+    gold: "#3a9a8a",
+    gold2: "#8ad4c4",
+    crimson: "#1a4a48",
+    bg: "#060a0a",
+    panel: "#0e1616",
+    ink: "#dceae8",
+    muted: "#6a8a86",
+    unique: "#4ab4a0",
+    danger: "#c45a4c",
+    ok: "#3a9a6a",
+    citadel: "#2a6a68",
+    display: "Georgia",
   },
 };
 
 const FONT_DISPLAY = [
-  "Cinzel",
-  "Cinzel Decorative",
-  "Playfair Display",
-  "Spectral",
-  "Caudex",
-  "Uncial Antiqua",
-  "EB Garamond",
-  "Cormorant Garamond",
-  "Libre Baskerville",
-  "IM Fell English",
-  "Marcellus",
-  "Forum",
-  "Aboreto",
-  "MedievalSharp",
-  "Almendra",
-  "Metamorphous",
-  "Pirata One",
-  "Cardo",
-  "Crimson Pro",
-  "Old Standard TT",
-  "UnifrakturMaguntia",
-  "Bellefair",
+  "Segoe UI",
+  "Calibri",
+  "Arial",
+  "Georgia",
+  "Times New Roman",
+  "Cambria",
+  "Palatino Linotype",
+  "Tahoma",
+  "Verdana",
+  "Trebuchet MS",
+  "Consolas",
+  "Courier New",
+  "Lucida Console",
+  "Lucida Sans Unicode",
+  "Candara",
+  "Constantia",
+  "Corbel",
+  "Sitka Text",
+  "Cascadia Mono",
+  "Microsoft Sans Serif",
+  "Impact",
 ];
-const FONT_UI = [
-  "Outfit",
-  "Inter",
-  "Source Sans 3",
-  "Nunito Sans",
-  "Literata",
-  "Atkinson Hyperlegible",
-  "Roboto",
-  "Open Sans",
-  "Lato",
-  "Karla",
-  "IBM Plex Sans",
-  "Figtree",
-  "Manrope",
-  "DM Sans",
-  "Work Sans",
-  "Barlow",
-  "Rubik",
-  "Cabin",
-  "Mulish",
-  "Jost",
-  "Plus Jakarta Sans",
-  "Sora",
-  "Albert Sans",
-  "Source Serif 4",
-  "Newsreader",
-];
+const FONT_SERIF = new Set(["Georgia", "Times New Roman", "Cambria", "Palatino Linotype", "Constantia", "Sitka Text"]);
+const FONT_MONO = new Set(["Consolas", "Courier New", "Lucida Console", "Cascadia Mono"]);
 
 function themeDefaults() {
   const exile = THEME_PRESETS.exile;
@@ -302,7 +353,7 @@ function themeDefaults() {
     ok: exile.ok,
     citadel: exile.citadel,
     display: exile.display,
-    ui: exile.ui,
+    ui: "Segoe UI",
   };
 }
 
@@ -310,11 +361,15 @@ function currentTheme() {
   return { ...themeDefaults(), ...(state.theme || {}) };
 }
 
-function fontHref(display, ui) {
-  function fam(name) {
-    return "family=" + encodeURIComponent(name).replace(/%20/g, "+") + ":wght@400;500;600;700";
-  }
-  return "https://fonts.googleapis.com/css2?" + fam(display) + "&" + fam(ui) + "&display=swap";
+function pickTitleFont(name) {
+  return FONT_DISPLAY.includes(name) ? name : "Georgia";
+}
+
+function fontStack(name) {
+  const picked = pickTitleFont(name);
+  if (FONT_MONO.has(picked)) return `"${picked}", Consolas, "Courier New", monospace`;
+  if (FONT_SERIF.has(picked)) return `"${picked}", Georgia, "Times New Roman", serif`;
+  return `"${picked}", "Segoe UI", system-ui, sans-serif`;
 }
 
 function applyTheme() {
@@ -330,10 +385,13 @@ function applyTheme() {
   root.style.setProperty("--danger", t.danger);
   root.style.setProperty("--ok", t.ok);
   root.style.setProperty("--citadel", t.citadel);
-  root.style.setProperty("--font-display", `"${t.display}", serif`);
-  root.style.setProperty("--font-ui", `"${t.ui}", system-ui, sans-serif`);
+  root.style.setProperty("--font-display", fontStack(t.display));
+  root.style.setProperty("--font-ui", `"Segoe UI", system-ui, sans-serif`);
   const link = document.getElementById("theme-fonts");
-  if (link) link.href = fontHref(t.display, t.ui);
+  if (link) {
+    link.removeAttribute("href");
+    link.disabled = true;
+  }
 }
 
 function setTheme(partial, preset = "custom") {
@@ -659,11 +717,14 @@ function tradeFetch(name, league, bust = false, thorough = false, extra = {}) {
       league,
       bust: !!bust,
       thorough: !!thorough,
+      rarity: extra.rarity || "",
       typeLine: extra.typeLine || "",
       rolls: extra.rolls || [],
       rollsJson: JSON.stringify(extra.rolls || []),
       filters,
       filtersJson: JSON.stringify(filters),
+      corrupted: extra.corrupted === true ? true : extra.corrupted === false ? false : undefined,
+      runeSockets: Number.isInteger(extra.runeSockets) ? extra.runeSockets : undefined,
     },
     extra.rolls?.length || filters.length ? 60000 : 45000,
     "PoE 2 trade timed out"
@@ -673,11 +734,17 @@ function tradeFetch(name, league, bust = false, thorough = false, extra = {}) {
 // Matcher fold follows Exiled Exchange 2 (MIT): unwrap tags, # placeholders, map to trade ids.
 function foldTradeMatcher(text) {
   return stripAdvancedRanges(parseAffixStrings(String(text || "")))
+    .replace(/[\r\n]+/g, " ")
     .toLowerCase()
-    .replace(/\((?:augmented|unmet|implicit)\)/gi, " ")
+    .replace(/\((?:augmented|unmet|implicit|enchant|rune)\)/gi, " ")
     .replace(/\breduced\b/g, "increased")
+    .replace(/\bfewer\b/g, "additional")
+    .replace(/\bless\b/g, "more")
+    .replace(/\brequires\b/g, "require")
+    .replace(/\bin area\b/g, "in map")
     .replace(/\bleft equipped ring\b/g, "equipped left ring")
     .replace(/\bright equipped ring\b/g, "equipped right ring")
+    .replace(/\bslots\b/g, "slot")
     .replace(/[+-]?\d+(?:\.\d+)?/g, "#")
     .replace(/#to /g, "# to ")
     .replace(/#%/g, "#%")
@@ -690,22 +757,74 @@ function foldTradeMatcher(text) {
 function distinctiveTradePhrase(fold) {
   const ring = String(fold || "").match(/bonuses gained from (?:equipped )?(left|right) (?:equipped )?ring/);
   if (ring) return "bonuses gained from equipped " + ring[1] + " ring";
+  if (/additional enemies to be surrounded/.test(fold || "")) return "additional enemies to be surrounded";
   return "";
 }
 
-function pickTradeStat(list) {
+function pickTradeStat(list, kind) {
   if (!list?.length) return null;
-  return list.find((row) => row.type === "explicit" || String(row.id).startsWith("explicit.")) || list[0];
+  const order =
+    kind === "rune"
+      ? ["rune", "enchant", "implicit", "explicit"]
+      : kind === "implicit"
+        ? ["implicit", "enchant", "rune", "explicit"]
+        : kind === "enchant"
+          ? ["enchant", "implicit", "rune", "explicit"]
+          : ["explicit", "implicit", "enchant", "rune"];
+  for (const want of order) {
+    const hit = list.find((row) => row.type === want || String(row.id).startsWith(want + "."));
+    if (hit) return hit;
+  }
+  return list[0];
 }
 
-function firstClipboardRoll(text, reduced) {
+function foldKeyVariants(key) {
+  const k = String(key || "");
+  return [...new Set([k, k.replace(/#%/g, "# %"), k.replace(/# %/g, "#%"), k.replace(/ to /g, "to "), k.replace(/to /g, " to ")])].filter(Boolean);
+}
+
+function findTradeStat(index, text, kind) {
+  if (!index?.size) return null;
+  const keys = foldKeyVariants(foldTradeMatcher(text));
+  for (const key of keys) {
+    const hit = pickTradeStat(index.get(key), kind);
+    if (hit) return hit;
+  }
+  const needle = distinctiveTradePhrase(keys[0]);
+  let best = null;
+  let bestLen = 0;
+  for (const [fold, list] of index) {
+    if (keys.some((key) => fold === key || (key.length >= 12 && (fold.startsWith(key + " ") || key.startsWith(fold + " "))))) {
+      const hit = pickTradeStat(list, kind);
+      if (hit && fold.length >= bestLen) {
+        best = hit;
+        bestLen = fold.length;
+      }
+    }
+    if (needle && fold.includes(needle)) {
+      const hit = pickTradeStat(list, kind);
+      if (hit && fold.length >= bestLen) {
+        best = hit;
+        bestLen = fold.length;
+      }
+    }
+  }
+  return best;
+}
+
+function invertedTradeRoll(text) {
+  const t = String(text || "");
+  return /\b(reduced|fewer|less)\b/i.test(t) && !/\blesser\b/i.test(t);
+}
+
+function firstClipboardRoll(text, inverted) {
   const raw = stripAdvancedRanges(parseAffixStrings(String(text || "")));
   const pct = raw.match(/([+-]?\d+(?:\.\d+)?)\s*%/);
   const any = pct || raw.match(/([+-]?\d+(?:\.\d+)?)/);
   if (!any) return null;
   let n = Number(any[1]);
   if (!Number.isFinite(n)) return null;
-  if (reduced && n > 0) n = -n;
+  if (inverted && n > 0) n = -n;
   return n;
 }
 
@@ -744,36 +863,60 @@ async function ensureTradeStats() {
   return tradeStatsWait;
 }
 
-function mapRollsToTradeFilters(rolls, index) {
+function isTradeableRoll(text, kind) {
+  const t = stripAdvancedRanges(parseAffixStrings(String(text || ""))).trim();
+  if (/^\d+\s+uses? remaining$/i.test(t)) return false;
+  if (/^adds .+\s+to a map$/i.test(t)) return false;
+  if (/^empowers the map boss/i.test(t)) return false;
+  return isUsefulRoll(text, kind);
+}
+
+function mergeTabletUseFilter(drop, index, filters) {
+  if (!drop?.pickUses) return filters || [];
+  const uses = Number(drop?.usesRemaining);
+  if (!(uses > 0) || !index) return filters || [];
+  const line =
+    inspectRolls(drop).find((roll) => /^adds .+\s+to a map$/i.test(roll.text)) ||
+    (drop.rolls || []).find((roll) => /^adds .+\s+to a map$/i.test(roll.text));
+  if (!line) return filters || [];
+  const hit = findTradeStat(index, line.text, "implicit");
+  if (!hit?.id) return filters || [];
+  const next = (filters || []).filter((row) => row.id !== hit.id);
+  next.unshift({ id: hit.id, min: uses });
+  return next;
+}
+
+function mapRollsToTradeFilters(rolls, index, exact = false) {
   const out = [];
   const seen = new Set();
   for (const roll of rolls || []) {
     const raw = rollLineText(roll);
+    const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
     const text = stripAdvancedRanges(parseAffixStrings(raw));
-    if (!isUsefulRoll(text)) continue;
-    const key = foldTradeMatcher(text);
-    let hit = pickTradeStat(index?.get(key));
-    if (!hit && index?.size) {
-      const needle = distinctiveTradePhrase(key);
-      if (needle) {
-        for (const [fold, list] of index) {
-          if (!fold.includes(needle)) continue;
-          hit = pickTradeStat(list);
-          if (hit) break;
-        }
-      }
-    }
+    if (!isTradeableRoll(text, kind)) continue;
+    const hit = findTradeStat(index, text, kind);
     if (!hit?.id || seen.has(hit.id)) continue;
     seen.add(hit.id);
-    out.push({
-      id: hit.id,
-      min: firstClipboardRoll(raw, /\breduced\b/i.test(raw)),
-      text,
-    });
+    const inverted = invertedTradeRoll(raw);
+    const amount = firstClipboardRoll(raw, inverted);
+    const row = { id: hit.id, text };
+    if (Number.isFinite(amount)) {
+      if (inverted) row.max = amount;
+      else row.min = amount;
+    }
+    out.push(row);
     if (out.length >= 6) break;
   }
-  const rings = out.filter((row) => /bonuses gained from .*ring/i.test(row.text || ""));
-  return (rings.length ? rings : out).map((row) => ({ id: row.id, min: row.min }));
+  const rows = exact ? out : (() => {
+    const rings = out.filter((row) => /bonuses gained from .*ring/i.test(row.text || ""));
+    return rings.length ? rings : out;
+  })();
+  return rows.map((row) => {
+    const next = { id: row.id };
+    if (Number.isFinite(row.min)) next.min = row.min;
+    if (Number.isFinite(row.max)) next.max = row.max;
+    return next;
+  });
 }
 
 const iconPending = new Map();
@@ -859,6 +1002,14 @@ if (window.chrome?.webview) {
       handleAppHotkey(msg);
       return;
     }
+    if (msg?.type === "overlay-click") {
+      handleOverlayClick(msg);
+      return;
+    }
+    if (msg?.type === "overlay-fallback") {
+      paintPriceOverlay(true);
+      return;
+    }
     if (msg?.type === "hotkey-status" && msg.error) {
       showToast(msg.error);
       return;
@@ -894,8 +1045,8 @@ function applyTradeRate(rate) {
   else if (rate.waitMs === 0 && tradeRate.readyAt <= Date.now()) tradeRate.readyAt = Date.now();
   tradeRate.waitMs = Math.max(0, rate.waitMs || 0);
   tradeRate.hits = Number(rate.hits) || 0;
-  tradeRate.max = Number(rate.max) > 0 ? Number(rate.max) : tradeRate.max || 1;
-  tradeRate.window = Number(rate.window) > 0 ? Number(rate.window) : tradeRate.window || 5;
+  tradeRate.max = Number(rate.max) > 0 ? Number(rate.max) : tradeRate.max || 7;
+  tradeRate.window = Number(rate.window) > 0 ? Number(rate.window) : tradeRate.window || 15;
   tradeRate.limited = !!rate.limited;
   paintRateBar();
 }
@@ -910,9 +1061,9 @@ function formatRateWait(ms) {
 
 function rateStatus() {
   const left = Math.max(0, tradeRate.readyAt - Date.now());
-  const max = tradeRate.max || 1;
+  const max = tradeRate.max || 7;
   const hits = tradeRate.hits || 0;
-  const window = tradeRate.window || 5;
+  const window = tradeRate.window || 15;
   const counts = hits + "/" + max + " / " + window + "s";
   if (left > 0) {
     const wait = formatRateWait(left);
@@ -1288,8 +1439,18 @@ function rememberPrice(name, divine, listings, icon, amount, unit, source, repla
         if (resolvedIcon) prev.icon = resolvedIcon;
         continue;
       }
-      if (prev.source === "trade" && (source || "ninja") !== "trade") {
-        if (resolvedIcon && !prev.icon) prev.icon = resolvedIcon;
+      if (prev.source === "trade" && (source || "ninja") === "ninja" && valid) {
+        prev.divine = divine;
+        prev.maxDivine = divine;
+        prev.amount = Number.isFinite(amount) ? amount : undefined;
+        prev.maxAmount = Number.isFinite(amount) ? amount : undefined;
+        prev.unit = unit || prev.unit;
+        prev.listings = listings || 0;
+        prev.name = name;
+        prev.source = "ninja";
+        prev.cached = false;
+        prev.at = Date.now();
+        if (resolvedIcon) prev.icon = resolvedIcon;
         continue;
       }
     if (prev.cached && valid) {
@@ -1712,7 +1873,7 @@ function priceChip(name) {
   }
   const checked = prices.checkedEmpty.has(name);
   return `<span class="price-chip is-empty is-lookup" ${mark} data-price-lookup="${esc(name)}" title="${
-    checked ? "Checked just now — click to try poe.ninja and PoE 2 trade again" : "Click to check poe.ninja and PoE 2 trade"
+    checked ? "Not on poe.ninja — click to try a single PoE 2 trade lookup" : "No poe.ninja price — click to try PoE 2 trade for this item"
   }">${checked ? "no listing" : "no listing"}</span>`;
 }
 
@@ -1744,11 +1905,6 @@ function srcLabel(hit) {
 }
 
 function dropValue(drop) {
-  if (drop?.quote && (drop.quote.url || drop.quote.mapped)) {
-    const rolled = hitDivine(drop.quote);
-    if (Number.isFinite(rolled) && rolled > 0) return rolled * (drop.qty || 1);
-    return 0;
-  }
   const divine = hitDivine(lookupPrice(drop.name));
   if (!Number.isFinite(divine)) return 0;
   return divine * (drop.qty || 1);
@@ -1798,7 +1954,7 @@ function linkCatalogPrices() {
   }
 }
 
-const PRICE_REFRESH_MS = 20 * 60 * 1000;
+const PRICE_REFRESH_MS = 60 * 60 * 1000;
 const PRICE_RETRY_MS = 3 * 60 * 1000;
 const PRICE_CACHE_KEY = "poe2-exile-ledger-prices-v1";
 const BOSS_PRICE_CACHE_KEY = "poe2-exile-ledger-boss-prices-v1";
@@ -1925,8 +2081,49 @@ function catalogPriceRows() {
   return rows;
 }
 
+function mergePriceRows(oldRows, newRows) {
+  const map = new Map();
+  const put = (row) => {
+    if (!row?.name) return;
+    const key = priceKey(row.name);
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, { ...row });
+      return;
+    }
+    if (row.source === "ninja" && pricedHit(row)) {
+      map.set(key, { ...prev, ...row });
+      return;
+    }
+    if (prev.source === "ninja" && pricedHit(prev) && row.source !== "ninja") {
+      if (row.icon && !prev.icon) prev.icon = row.icon;
+      return;
+    }
+    map.set(key, { ...prev, ...row });
+  };
+  (oldRows || []).forEach(put);
+  (newRows || []).forEach(put);
+  return [...map.values()];
+}
+
+function mergeLeagueEntry(prev, next) {
+  if (!prev || !priceStoreHasData(prev)) return next;
+  if (!next || !priceStoreHasData(next)) return prev;
+  return {
+    ...prev,
+    ...next,
+    items: mergePriceRows(prev.items, next.items),
+    tables: { ...(prev.tables || {}), ...(next.tables || {}) },
+    empty: [...new Set([...(prev.empty || []), ...(next.empty || [])])],
+    fetchedAt: Math.max(Number(prev.fetchedAt) || 0, Number(next.fetchedAt) || 0),
+    exaltedPerDivine: Number(next.exaltedPerDivine) || Number(prev.exaltedPerDivine) || 0,
+    chaosPerDivine: Number(next.chaosPerDivine) || Number(prev.chaosPerDivine) || 0,
+  };
+}
+
 function catalogCacheEntry() {
   const league = prices.league || leagueId();
+  const items = uniquePricedHits();
   return {
     league,
     fetchedAt: prices.fetchedAt || 0,
@@ -1934,7 +2131,8 @@ function catalogCacheEntry() {
     primary: prices.primary,
     exaltedPerDivine: prices.exaltedPerDivine,
     chaosPerDivine: prices.chaosPerDivine,
-    items: catalogPriceRows(),
+    items: items.length ? items : catalogPriceRows(),
+    tables: compactPriceTables(prices.tables, "bare"),
     empty: [...prices.checkedEmpty],
   };
 }
@@ -1949,8 +2147,9 @@ function applyCatalogRows(rows, extra = {}) {
   for (const row of rows || []) {
     if (!row?.name || !pricedHit(row)) continue;
     const prev = lookupPrice(row.name);
-    if (pricedHit(prev) && prev.source === "trade" && row.source !== "trade") continue;
-    const replace = !pricedHit(prev) || row.source === "trade";
+    if (pricedHit(prev) && !prev.cached && extra.cached) continue;
+    if (pricedHit(prev) && prev.source === "ninja" && row.source !== "ninja" && extra.cached) continue;
+    const replace = !pricedHit(prev) || row.source === "ninja";
     rememberPrice(row.name, row.divine, row.listings, row.icon, row.amount, row.unit, row.source, replace);
     stampPriceHit(row.name, {
       at: row.at || extra.at || 0,
@@ -1971,6 +2170,7 @@ function restoreCatalogPrices(oldMap) {
     seen.add(hit.name);
     const inCatalog = lookupKeys(hit.name).some((key) => catalog.has(key) || catalog.has(priceKey(key)));
     if (!inCatalog && hit.source !== "trade") continue;
+    if (pricedHit(lookupPrice(hit.name))) continue;
     applyCatalogRows([hit], { cached: true, at: hit.at });
   }
 }
@@ -1985,13 +2185,7 @@ function readBossPriceStore() {
   return { version: 3, leagues: {} };
 }
 
-function persistCatalogCache() {
-  const entry = catalogCacheEntry();
-  if (!entry.items.length && !entry.exaltedPerDivine && !prices.fetchedAt) return;
-  const local = readBossPriceStore();
-  const diskLeagues = catalogDiskStore?.leagues && typeof catalogDiskStore.leagues === "object" ? catalogDiskStore.leagues : {};
-  const leagues = prunePriceLeagues({ ...local.leagues, ...diskLeagues, [entry.league]: entry });
-  const store = { version: 3, leagues };
+function writePriceDisk(store) {
   catalogDiskStore = store;
   try {
     localStorage.setItem(BOSS_PRICE_CACHE_KEY, JSON.stringify(store));
@@ -2005,6 +2199,21 @@ function persistCatalogCache() {
       /* native host not ready */
     }
   }
+}
+
+function persistCatalogCache() {
+  const entry = catalogCacheEntry();
+  const local = readBossPriceStore();
+  const diskLeagues = catalogDiskStore?.leagues && typeof catalogDiskStore.leagues === "object" ? catalogDiskStore.leagues : {};
+  const prev = local.leagues?.[entry.league] || diskLeagues[entry.league];
+  if (!entry.items.length && !entry.exaltedPerDivine && !prices.fetchedAt) {
+    if (priceStoreHasData(prev)) return;
+    return;
+  }
+  const merged = mergeLeagueEntry(prev, entry);
+  if (!priceStoreHasData(merged)) return;
+  const leagues = prunePriceLeagues({ ...local.leagues, ...diskLeagues, [entry.league]: merged });
+  writePriceDisk({ version: 3, leagues });
 }
 
 function hydrateFromDump(dump, cached = true) {
@@ -2100,7 +2309,7 @@ function persistPrices() {
       items: attempt.items,
       tables: attempt.sparkMode === "none" ? {} : compactPriceTables(prices.tables, attempt.sparkMode),
     };
-    const leagues = prunePriceLeagues({ ...store.leagues, [league]: entry });
+    const leagues = prunePriceLeagues({ ...store.leagues, [league]: mergeLeagueEntry(store.leagues[league], entry) });
     try {
       localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify({ version: 2, leagues }));
       persistCatalogCache();
@@ -2166,7 +2375,6 @@ async function hydratePriceDisk() {
     const entry = dump?.leagues?.[leagueId()] || bestLeagueDump(dump?.leagues);
     if (hydrateFromDump(entry, true)) {
       linkCatalogPrices();
-      persistCatalogCache();
       paintLivePrices();
       return true;
     }
@@ -2209,15 +2417,21 @@ function paintPriceClock() {
   const el = document.getElementById("price-clock-time");
   const clock = document.getElementById("price-clock");
   if (clock) {
-    clock.title = "Click to check poe.ninja, then price every boss unique on PoE 2 trade and save the latest listing.";
+    clock.title = "poe.ninja prices load on launch, then every hour. Click to refresh now. F7 overlay uses PoE 2 trade only.";
   }
   if (!el) return;
   let text = "Check prices";
   if (prices.status === "loading") text = "Checking…";
-  else if (prices.filling || prices.looking.size) text = prices.looking.size ? `Listings ${prices.looking.size}…` : "Checking listings…";
+  else if (prices.filling) {
+    const total = prices.gapTotal || 0;
+    const done = Math.min(prices.gapDone || 0, total);
+    text = total ? `Boss prices ${done}/${total}` : "Checking listings…";
+    if (tradeWaiting()) text += " · waiting";
+  } else if (prices.looking.size) text = prices.looking.size ? `Listings ${prices.looking.size}…` : "Checking listings…";
   else if (prices.fetchedAt) text = (prices.cached ? "Last recorded " : "Checked ") + formatWhen(prices.fetchedAt);
   else if (prices.byName.size) text = "Last recorded";
   if (el.textContent !== text) el.textContent = text;
+  maybeRefreshNinja();
 }
 
 function startPriceClock() {
@@ -2228,7 +2442,10 @@ function startPriceClock() {
 }
 
 async function refreshPrices(force = false) {
-  if (prices.status === "loading" || prices.filling) return;
+  if (prices.status === "loading" || prices.filling) {
+    if (force) showToast("Already checking poe.ninja prices.");
+    return;
+  }
   const league = leagueId();
   const snapshotMap = clonePriceMap(prices.byName);
   const snapshotTables = prices.tables;
@@ -2279,17 +2496,16 @@ async function refreshPrices(force = false) {
     linkCatalogPrices();
     prices.league = league;
     prices.fetchedAt = Date.now();
-    prices.nextAt = 0;
+    prices.nextAt = Date.now() + PRICE_REFRESH_MS;
     prices.cached = false;
     prices.status = "ready";
     prices.checkedEmpty = new Set();
     persistPrices();
     render();
-    await fillGapPrices();
     prefetchMissingIcons();
   } catch (err) {
     prices.error = err.message || "Could not reach poe.ninja";
-    prices.nextAt = 0;
+    prices.nextAt = Date.now() + PRICE_RETRY_MS;
     if (snapshotMap.size && snapshotMeta.league === league) {
       prices.byName = snapshotMap;
       prices.tables = snapshotTables;
@@ -2302,40 +2518,17 @@ async function refreshPrices(force = false) {
       prices.cached = true;
       prices.status = "ready";
       render();
-      await fillGapPrices();
     } else if (prices.byName.size) {
       prices.cached = true;
       prices.status = "ready";
       persistPricesSoon();
       render();
-      await fillGapPrices();
     } else {
       prices.status = "error";
     }
   }
   paintPriceClock();
   render();
-}
-
-async function fillGapPrices() {
-  if (!window.chrome?.webview) return;
-  try {
-    await fillScoutPrices();
-    linkCatalogPrices();
-  } catch {
-    /* ninja still stands */
-  }
-  try {
-    await fillTradePrices();
-  } catch {
-    /* keep whatever we have */
-  }
-  persistPrices();
-}
-
-function wantsGapPrice(name) {
-  if (!name || pricedHit(lookupPrice(name))) return false;
-  return !prices.checkedEmpty.has(name);
 }
 
 function pricesHaveBeenSeeded() {
@@ -2350,11 +2543,27 @@ function pricesHaveBeenSeeded() {
   return false;
 }
 
-function kickFirstPriceCheck() {
+function ninjaPricesDue() {
+  if (!prices.fetchedAt || !prices.byName.size) return true;
+  if (prices.nextAt) return Date.now() >= prices.nextAt;
+  return Date.now() - prices.fetchedAt >= PRICE_REFRESH_MS;
+}
+
+function maybeRefreshNinja() {
+  if (!maybeRefreshNinja.enabled) return;
   if (!window.chrome?.webview) return;
   if (prices.status === "loading" || prices.filling) return;
-  if (pricesHaveBeenSeeded()) return;
-  refreshPrices(true);
+  if (!ninjaPricesDue()) return;
+  refreshPrices(false);
+}
+
+function kickFirstPriceCheck() {
+  maybeRefreshNinja.enabled = true;
+  if (!window.chrome?.webview) return;
+  if (prices.status === "loading" || prices.filling) return;
+  if (!prices.fetchedAt && prices.byName.size) prices.nextAt = Date.now() + PRICE_RETRY_MS;
+  else if (prices.fetchedAt && !prices.nextAt) prices.nextAt = prices.fetchedAt + PRICE_REFRESH_MS;
+  if (ninjaPricesDue()) refreshPrices(false);
 }
 
 function dashboardPriceNames() {
@@ -2371,51 +2580,6 @@ function dashboardPriceNames() {
     for (const drop of log.drops || []) add(drop.name);
   }
   return names;
-}
-
-function missingCatalogNames() {
-  const farmId = farmBossId();
-  const dash = new Set(dashboardPriceNames());
-  const ranked = [];
-  const seen = new Set();
-  allBosses().forEach((boss) => {
-    (boss.uniques || []).forEach((item) => {
-      if (!item?.name || seen.has(item.name) || !wantsGapPrice(item.name)) return;
-      seen.add(item.name);
-      let rank = 3;
-      if (dash.has(item.name)) rank = -1;
-      else if (boss.id === farmId) rank = 0;
-      else if (item.rarity === "extremely-rare") rank = 1;
-      else if (item.rarity === "very-rare") rank = 2;
-      ranked.push({ name: item.name, rank });
-    });
-  });
-  dashboardPriceNames().forEach((name) => {
-    if (seen.has(name) || !wantsGapPrice(name)) return;
-    seen.add(name);
-    ranked.push({ name, rank: -1 });
-  });
-  return ranked.sort((a, b) => a.rank - b.rank).map((row) => row.name);
-}
-
-async function fillScoutPrices() {
-  const data = await scoutFetch(leagueId());
-  const rows = Array.isArray(data) ? data : [];
-  let added = 0;
-  for (const item of rows) {
-    const name = item.Name || item.name || "";
-    const amount = Number(item.CurrentPrice ?? item.currentPrice);
-    if (!name || !(amount > 0)) continue;
-    const hit = lookupPrice(name);
-    if (pricedHit(hit) && !hit.cached) continue;
-    const divine = toDivine(amount, "exalted");
-    rememberPrice(name, divine, 0, item.IconUrl || item.iconUrl, amount, "exalted", "scout");
-    added++;
-  }
-  if (added) {
-    persistPricesSoon();
-    paintLivePrices();
-  }
 }
 
 function tradeUnit(currency) {
@@ -2481,72 +2645,6 @@ async function probeTradePrice(name, force = false) {
   }
   prices.checkedEmpty.add(name);
   return false;
-}
-
-function allBossUniqueNames() {
-  const farmId = farmBossId();
-  const dash = new Set(dashboardPriceNames());
-  const ranked = [];
-  const seen = new Set();
-  allBosses().forEach((boss) => {
-    (boss.uniques || []).forEach((item) => {
-      if (!item?.name || seen.has(item.name)) return;
-      seen.add(item.name);
-      let rank = 3;
-      if (dash.has(item.name)) rank = -1;
-      else if (boss.id === farmId) rank = 0;
-      else if (item.rarity === "extremely-rare") rank = 1;
-      else if (item.rarity === "very-rare") rank = 2;
-      ranked.push({ name: item.name, rank });
-    });
-  });
-  return ranked.sort((a, b) => a.rank - b.rank).map((row) => row.name);
-}
-
-async function fillTradePrices() {
-  if (!window.chrome?.webview) return;
-  const queue = allBossUniqueNames();
-  if (!queue.length) return;
-  prices.filling = true;
-  queue.forEach((name) => prices.looking.add(name));
-  paintPriceClock();
-  render();
-  try {
-    for (const name of queue) {
-      if (tradeWaiting() && tradeRate.limited) {
-        persistPrices();
-        showToast("PoE 2 trade hit a rate limit. Wait, then Check prices again for the rest.");
-        break;
-      }
-      try {
-        await probeTradePrice(name, true);
-      } catch (err) {
-        if (tradeRateError(err)) {
-          persistPrices();
-          showToast("PoE 2 trade hit a rate limit. Wait a minute, then Check prices again for the rest.");
-          break;
-        }
-        if (tradeBlockedError(err)) {
-          persistPrices();
-          showToast("PoE 2 trade blocked the request. Wait and try Check prices again.");
-          break;
-        }
-        prices.checkedEmpty.add(name);
-      } finally {
-        prices.looking.delete(name);
-        paintLivePrices();
-      }
-      await sleep(80);
-    }
-  } finally {
-    queue.forEach((name) => prices.looking.delete(name));
-    prices.filling = false;
-    prices.fetchedAt = Date.now();
-    prices.cached = false;
-    persistPrices();
-    paintPriceClock();
-    render();
-  }
 }
 
 function tradeAliases(name) {
@@ -2738,26 +2836,26 @@ function farmLogDrop(bossId, drop) {
   const boss = getBoss(bossId);
   if (!boss || !drop) return;
   if (!drop.id) drop.id = uid();
-  ui.dashRollId = null;
   state.farmBossId = bossId;
   const open = liveLog();
+  let log;
+  let logged;
   if (open && open.bossId === bossId) {
-    mergeDrop(open, drop);
+    logged = mergeDrop(open, drop);
+    log = open;
     pushDropUndo(open, drop);
-    save();
-    render();
-    toastKill(boss, open);
-    return open;
+  } else {
+    log = {
+      id: uid(),
+      bossId,
+      at: Date.now(),
+      drops: [drop],
+    };
+    logged = drop;
+    state.logs.unshift(log);
+    liveKill = { logId: log.id, bossId };
+    pushDropUndo(log, drop);
   }
-  const log = {
-    id: uid(),
-    bossId,
-    at: Date.now(),
-    drops: [drop],
-  };
-  state.logs.unshift(log);
-  liveKill = { logId: log.id, bossId };
-  pushDropUndo(log, drop);
   save();
   render();
   toastKill(boss, log);
@@ -2783,18 +2881,65 @@ function hotkeys() {
   return {
     log: state.hotkeyLog || "F8",
     next: state.hotkeyNext || "F9",
+    price: state.hotkeyPrice || "F7",
   };
+}
+
+function normalizeHotkey(spec) {
+  const parts = String(spec || "")
+    .split("+")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      if (/^(ctrl|control)$/i.test(part)) return "Ctrl";
+      if (/^f([1-9]|1[0-2])$/i.test(part)) return part.toUpperCase();
+      if (part.length === 1) return part.toUpperCase();
+      if (/^space$/i.test(part)) return "Space";
+      if (/^shift$/i.test(part)) return "Shift";
+      if (/^alt$/i.test(part)) return "Alt";
+      if (/^(win|meta)$/i.test(part)) return "Win";
+      return part;
+    });
+  const mods = ["Ctrl", "Alt", "Shift", "Win"].filter((mod) => parts.includes(mod));
+  const key = parts.find((part) => !["Ctrl", "Alt", "Shift", "Win"].includes(part));
+  return key ? mods.concat(key).join("+") : "";
+}
+
+function pauseHotkeys() {
+  if (!window.chrome?.webview) return;
+  chrome.webview.postMessage({ type: "hotkeys-pause" });
 }
 
 function syncHotkeys() {
   if (!window.chrome?.webview) return;
-  chrome.webview.postMessage({ type: "hotkeys", log: hotkeys().log, next: hotkeys().next });
+  chrome.webview.postMessage({ type: "hotkeys", log: hotkeys().log, next: hotkeys().next, price: hotkeys().price });
+}
+
+function assignHotkey(slot, spec) {
+  const next = normalizeHotkey(spec);
+  if (!next) return false;
+  if (next === "Ctrl+C") return false;
+  const keys = hotkeys();
+  const prev = normalizeHotkey(keys[slot]);
+  if (next === prev) return true;
+  for (const other of ["log", "price", "next"]) {
+    if (other === slot) continue;
+    if (normalizeHotkey(keys[other]) === next) keys[other] = prev;
+  }
+  keys[slot] = next;
+  state.hotkeyLog = keys.log;
+  state.hotkeyPrice = keys.price;
+  state.hotkeyNext = keys.next;
+  return true;
 }
 
 function formatHotkey(event) {
   if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) return "";
+  if (event.repeat) return "";
+  const fn = /^F([1-9]|1[0-2])$/i.test(event.key);
   const parts = [];
-  if (event.ctrlKey) parts.push("Ctrl");
+  const leftoverCtrl = fn && event.ctrlKey && !event.altKey && !event.shiftKey;
+  if (event.ctrlKey && !leftoverCtrl) parts.push("Ctrl");
   if (event.altKey) parts.push("Alt");
   if (event.shiftKey) parts.push("Shift");
   let name = event.key;
@@ -2802,12 +2947,43 @@ function formatHotkey(event) {
   else if (name === " ") name = "Space";
   else if (name.length === 1) name = name.toUpperCase();
   parts.push(name);
-  return parts.join("+");
+  return normalizeHotkey(parts.join("+"));
 }
 
 function namesMatch(a, b) {
   if (!a || !b) return false;
   return foldKey(a) === foldKey(b) || priceKey(a) === priceKey(b) || slug(a) === slug(b);
+}
+
+function isItemJunkLine(line) {
+  const t = String(line || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t) return true;
+  if (/^you cannot use this item/i.test(t)) return true;
+  if (/stats will be ignored/i.test(t)) return true;
+  if (/^right click to/i.test(t)) return true;
+  if (/^shift-?click/i.test(t)) return true;
+  if (/^place into an item socket/i.test(t)) return true;
+  return false;
+}
+
+function identityFromBlocks(blocks, rarity) {
+  for (const block of blocks || []) {
+    const lines = String(block || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!lines.length) continue;
+    if (lines.some((line) => /^\{/.test(line) || /^(requirements|sockets|item level|quality)\b/i.test(line))) continue;
+    if (lines.some((line) => /:\s/.test(line) && !/^[+\-\d({]/.test(line))) continue;
+    const clean = lines.filter((line) => !isItemJunkLine(line) && !/^\{/.test(line));
+    if (!clean.length) continue;
+    if (/^(normal|magic|currency|gem|divination card)$/i.test(rarity)) return { name: clean[0], baseType: clean[0] };
+    if (clean.length >= 2) return { name: clean[0], baseType: clean[1] };
+    return { name: clean[0], baseType: clean[0] };
+  }
+  return { name: "", baseType: "" };
 }
 
 function parsePoeItem(text) {
@@ -2837,31 +3013,112 @@ function parsePoeItem(text) {
     }
     rest.push(line);
   }
-  if (!rest.length) return null;
-  let name = rest[0];
-  let baseType = rest[1] || rest[0];
-  if (/^(normal|magic|currency|gem|divination card)$/i.test(rarity)) baseType = name;
+  const titleLines = rest.filter((line) => !isItemJunkLine(line));
+  let name = titleLines[0] || "";
+  let baseType = titleLines[1] || "";
+  if (!name || (!baseType && /^(rare|unique)$/i.test(rarity))) {
+    const extra = identityFromBlocks(blocks.slice(1), rarity);
+    if (!name) name = extra.name;
+    if (!baseType) baseType = extra.baseType;
+  }
+  if (/^(normal|magic|currency|gem|divination card)$/i.test(rarity)) baseType = name || baseType;
+  if (!baseType) baseType = name;
+  if (!name) return null;
   if (/unidentified/i.test(raw)) name = baseType || name;
   let qty = 1;
   const stack = raw.match(/Stack Size:\s*([\d,]+)/i);
   if (stack) qty = Math.max(1, Number(stack[1].replace(/,/g, "")) || 1);
-    const mods = [];
-  if (!/^(currency|gem|divination card)$/i.test(rarity)) {
-    for (const block of blocks.slice(1)) {
-      for (const line of block.split("\n")) {
-        const rawLine = line.trim();
-        if (!rawLine) continue;
-        if (/^(requirements|sockets|item level|quality|armour|evasion rating|energy shield|ward|stack size|level:|str:|dex:|int:|note:)/i.test(rawLine)) continue;
-        if (/^(unidentified|corrupted|mirrored|split|fractured item|synthesised item)$/i.test(rawLine)) continue;
-        if (/^\{/.test(rawLine)) continue;
-        if (/:\s/.test(rawLine) && !/^[+\-\d({]/.test(rawLine)) continue;
-        if (rawLine.length > 140) continue;
-        if (/\(implicit\)/i.test(rawLine)) continue;
-        mods.push(parseAffixStrings(rawLine));
+  const corrupted = /^\s*Corrupted\s*$/im.test(raw);
+  const mods = parseClipboardMods(blocks.slice(1), rarity, corrupted, name, baseType);
+  const useHit = raw.match(/(\d+)\s+uses? remaining/i);
+  const usesRemaining = useHit ? Math.max(0, Number(String(useHit[1]).replace(/,/g, "")) || 0) : 0;
+  const runeMods = mods.filter((mod) => canonicalRollKind(mod.kind) === "rune").length;
+  let runeSockets = 0;
+  const sock = raw.match(/^Sockets:\s*(.+)$/im);
+  if (sock) runeSockets = (sock[1].match(/S/gi) || []).length;
+  runeSockets = Math.max(runeSockets, runeMods);
+  return { name, baseType, rarity, className, qty, corrupted, mods, usesRemaining, runeSockets };
+}
+
+function canonicalRollKind(kind) {
+  const k = String(kind || "").toLowerCase();
+  if (k === "implicit" || k === "enchant" || k === "rune") return k;
+  return "explicit";
+}
+
+function isBaseModKind(kind) {
+  return canonicalRollKind(kind) !== "explicit";
+}
+
+function rollSlot(roll) {
+  const s = String(roll && typeof roll === "object" ? roll.slot : "").toLowerCase();
+  return s === "prefix" || s === "suffix" ? s : "";
+}
+
+function parseModInfoLine(rawLine) {
+  const inner = String(rawLine || "")
+    .replace(/^\{|\}$/g, "")
+    .trim();
+  if (/\b(rune|augment)\b/i.test(inner)) return { kind: "rune", slot: "" };
+  if (/enchant/i.test(inner)) return { kind: "enchant", slot: "" };
+  if (/\bimplicit\b/i.test(inner)) return { kind: "implicit", slot: "" };
+  if (/\bprefix\b/i.test(inner)) return { kind: "explicit", slot: "prefix" };
+  if (/\bsuffix\b/i.test(inner)) return { kind: "explicit", slot: "suffix" };
+  if (/explicit/i.test(inner)) return { kind: "explicit", slot: "" };
+  return { kind: "explicit", slot: "" };
+}
+
+function kindFromLineTag(rawLine) {
+  if (/\((?:added )?(?:rune|augment)\)/i.test(rawLine)) return "rune";
+  if (/\(enchant\)/i.test(rawLine)) return "enchant";
+  if (/\(implicit\)/i.test(rawLine)) return "implicit";
+  return "";
+}
+
+function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase = "") {
+  if (/^(currency|gem|divination card)$/i.test(rarity)) return [];
+  let sectionKind = "explicit";
+  let sectionSlot = "";
+  const groups = [];
+  for (const block of blocks || []) {
+    const collected = [];
+    for (const line of String(block || "").split("\n")) {
+      const rawLine = line.trim();
+      if (!rawLine) continue;
+      if (isItemJunkLine(rawLine)) continue;
+      if (itemName && namesMatch(rawLine, itemName)) continue;
+      if (itemBase && namesMatch(rawLine, itemBase)) continue;
+      if (/^\{/.test(rawLine)) {
+        const info = parseModInfoLine(rawLine);
+        sectionKind = info.kind;
+        sectionSlot = info.slot;
+        continue;
       }
+      if (/^(requirements|sockets|item level|quality|armour|evasion rating|energy shield|ward|stack size|level:|str:|dex:|int:|note:)/i.test(rawLine)) continue;
+      if (/^(unidentified|corrupted|mirrored|split|fractured item|synthesised item)$/i.test(rawLine)) continue;
+      if (/:\s/.test(rawLine) && !/^[+\-\d({]/.test(rawLine)) continue;
+      if (rawLine.length > 140) continue;
+      const tagged = kindFromLineTag(rawLine);
+      const kind = tagged || sectionKind;
+      collected.push({ text: parseAffixStrings(rawLine), kind, slot: tagged ? "" : sectionSlot });
+    }
+    if (collected.length) {
+      groups.push(collected);
+      sectionKind = "explicit";
+      sectionSlot = "";
     }
   }
-  return { name, baseType, rarity, className, qty, mods: cleanClipboardRolls(mods) };
+  const tagged = groups.some((group) => group.some((mod) => isBaseModKind(mod.kind) || rollSlot(mod)));
+  const modGroups = groups.filter((group) => group.some((mod) => isUsefulRoll(mod.text, mod.kind) || /[\d%+]/.test(mod.text)));
+  if (!tagged && modGroups.length >= 2) {
+    const last = modGroups[modGroups.length - 1];
+    for (const group of modGroups) {
+      if (group === last) continue;
+      if (!corrupted && group !== modGroups[0]) continue;
+      for (const mod of group) mod.kind = "implicit";
+    }
+  }
+  return cleanClipboardRolls(groups.flat());
 }
 
 function parseAffixStrings(text) {
@@ -2876,46 +3133,55 @@ function stripAdvancedRanges(text) {
     .trim();
 }
 
-function isUsefulRoll(text) {
+function isUsefulRoll(text, kind) {
   const t = stripAdvancedRanges(parseAffixStrings(String(text || ""))).trim();
   if (!t || t.length > 140) return false;
-  if (/^has\b.*\b(charm slot|socketable)/i.test(t)) return false;
-  if (/socketable/i.test(t) && !/per socket/i.test(t)) return false;
-  if (/flask recovery applied instantly/i.test(t)) return false;
-  if (/^grants skill/i.test(t)) return false;
+  if (/^you cannot use this item/i.test(t)) return false;
+  if (/stats will be ignored/i.test(t)) return false;
   if (/^place into an item socket/i.test(t)) return false;
   if (/^used when you/i.test(t)) return false;
   if (/^right click/i.test(t)) return false;
   if (/^this item can be anointed/i.test(t)) return false;
   if (/^can have up to/i.test(t)) return false;
+  if (/^\d+\s+uses? remaining$/i.test(t)) return false;
   if (/^\{/.test(t)) return false;
-  if (!/[\d%+]/.test(t) && !/^allocates /i.test(t)) return false;
-  return true;
+  if (!isBaseModKind(kind)) {
+    if (/^has\b.*\b(charm slot|socketable)/i.test(t)) return false;
+    if (/socketable/i.test(t) && !/per socket/i.test(t)) return false;
+    if (/flask recovery applied instantly/i.test(t)) return false;
+    if (/^grants skill/i.test(t)) return false;
+  }
+  if (/[\d%+]/.test(t) || /^allocates /i.test(t) || /^grants skill/i.test(t)) return true;
+  if (/^has\b.*\b(charm slot|socketable)/i.test(t)) return true;
+  if (isBaseModKind(kind) && t.length >= 8 && !/[.!?]$/.test(t)) return true;
+  return false;
 }
 
 function cleanClipboardRolls(mods) {
   const out = [];
   const seen = new Set();
   for (const mod of mods || []) {
+    const kind = canonicalRollKind(mod && typeof mod === "object" ? mod.kind : "");
+    const slot = rollSlot(mod);
     const text = stripAdvancedRanges(
-      parseAffixStrings(String(mod || ""))
-        .replace(/\s*\((?:augmented|unmet|implicit)\)/gi, "")
+      parseAffixStrings(rollLineText(mod) || String(mod || ""))
+        .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune)\)/gi, "")
         .replace(/\s+/g, " ")
         .trim()
     );
-    if (!isUsefulRoll(text)) continue;
-    const key = text.toLowerCase();
+    if (!isUsefulRoll(text, kind)) continue;
+    const key = kind + ":" + slot + ":" + text.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(text);
-    if (out.length >= 8) break;
+    out.push({ text, kind, slot, pick: false });
+    if (out.length >= 12) break;
   }
   return out;
 }
 
 function shortRoll(text) {
   return stripAdvancedRanges(String(text || ""))
-    .replace(/\s*\((?:augmented|unmet|implicit)\)/gi, "")
+    .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune)\)/gi, "")
     .replace(/\bmaximum /gi, "")
     .replace(/\bto Fire Resistance/gi, " Fire Res")
     .replace(/\bto Cold Resistance/gi, " Cold Res")
@@ -2949,10 +3215,469 @@ function rollLineText(roll) {
   return typeof roll === "string" ? roll : roll?.text || "";
 }
 
-function rollChipsHtml(rolls) {
-  const chips = (rolls || []).map(rollLineText).filter(isUsefulRoll).map(shortRoll).filter(Boolean);
-  if (!chips.length) return "";
-  return `<div class="roll-chips">${chips.map((text) => `<span class="roll-chip" title="${esc(text)}">${esc(text)}</span>`).join("")}</div>`;
+function normalizeRolls(rolls) {
+  const out = [];
+  const seen = new Set();
+  for (const roll of rolls || []) {
+    const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
+    const slot = rollSlot(roll);
+    const text = stripAdvancedRanges(parseAffixStrings(rollLineText(roll)));
+    if (!isUsefulRoll(text, kind)) continue;
+    const key = kind + ":" + slot + ":" + text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ text, kind, slot, pick: !!(roll && typeof roll === "object" && roll.pick) });
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+function tabletUsesText(drop) {
+  const uses = Number(drop?.usesRemaining);
+  if (!(uses > 0)) return "";
+  return uses === 1 ? "1 use remaining" : uses + " uses remaining";
+}
+
+function isTabletUsesRoll(text) {
+  return /^\d+\s+uses? remaining$/i.test(String(text || "").trim());
+}
+
+function withTabletUsesRoll(drop, rolls) {
+  const text = tabletUsesText(drop);
+  if (!text) return rolls;
+  if (rolls.some((roll) => isTabletUsesRoll(roll.text))) {
+    return rolls.map((roll) => (isTabletUsesRoll(roll.text) ? { ...roll, pick: !!drop.pickUses, kind: "implicit" } : roll));
+  }
+  const row = { text, kind: "implicit", pick: !!drop.pickUses };
+  const list = rolls.slice();
+  let at = -1;
+  for (let i = 0; i < list.length; i++) {
+    if (/^adds .+\s+to a map$/i.test(list[i].text)) at = i + 1;
+    else if (at < 0 && list[i].kind === "implicit") at = i + 1;
+  }
+  if (at < 0) list.unshift(row);
+  else list.splice(at, 0, row);
+  return list;
+}
+
+function pickedRolls(drop) {
+  const rolls = withTabletUsesRoll(drop, normalizeRolls(drop?.rolls)).filter((roll) => roll.pick);
+  return rolls;
+}
+
+function inspectRolls(drop) {
+  const rolls = normalizeRolls(drop?.rolls);
+  let list = rolls;
+  if (!rolls.some((roll) => canonicalRollKind(roll.kind) === "implicit")) {
+    const seen = new Set(rolls.map((roll) => roll.text.toLowerCase()));
+    const extras = [];
+    for (const line of lookupLore(drop?.name)?.implicits || []) {
+      const text = parseAffixStrings(line)
+        .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune)\)/gi, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!isUsefulRoll(text, "implicit") || seen.has(text.toLowerCase())) continue;
+      seen.add(text.toLowerCase());
+      extras.push({ text, kind: "implicit", pick: false, ghost: true });
+    }
+    list = extras.concat(rolls);
+  }
+  return withTabletUsesRoll(drop, list);
+}
+
+function overlayLogDrop(logId, dropId) {
+  const target = inspectTarget();
+  const log =
+    (logId && state.logs.find((item) => item.id === logId)) ||
+    target?.log ||
+    liveLog() ||
+    (target ? { id: target.log?.id || "", drops: [target.drop] } : null);
+  const drop =
+    (dropId && (log?.drops || []).find((item) => item.id === dropId)) ||
+    (dropId && target?.drop?.id === dropId ? target.drop : null) ||
+    target?.drop ||
+    null;
+  return { log, drop };
+}
+
+function inspectTarget() {
+  if (!ui.inspect?.dropId) return null;
+  const held = ui.inspect.drop;
+  if (held?.id === ui.inspect.dropId) {
+    const log = state.logs.find((item) => item.id === ui.inspect.logId) || ui.inspect.log || { id: ui.inspect.logId || "", drops: [held] };
+    const drop = (log.drops || []).find((item) => item.id === ui.inspect.dropId) || held;
+    return { log, drop };
+  }
+  const log = state.logs.find((item) => item.id === ui.inspect.logId);
+  const drop = (log?.drops || []).find((item) => item.id === ui.inspect.dropId);
+  if (!log || !drop) return null;
+  return { log, drop };
+}
+
+function openInspect(log, drop) {
+  if (!drop) return;
+  if (!drop.id) drop.id = uid();
+  ui.inspect = { logId: log?.id || "", dropId: drop.id, log, drop };
+  ui.dashRollId = drop.id;
+  hideItemTip();
+  paintPriceOverlay(false, true);
+}
+
+function handleOverlayClick(msg) {
+  if (!msg) return;
+  if (msg.closeInspect != null) {
+    closeInspect();
+    return;
+  }
+  if (msg.pickCorrupt) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickCorrupt);
+    if (!drop) return;
+    drop.corrupted = !drop.corrupted;
+    drop.quoteTried = false;
+    delete drop.quote;
+    if (log?.id) save();
+    paintPriceOverlay();
+    return;
+  }
+  if (msg.pickRunes != null) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    setDropRunePick(log, drop, msg.pickRunes);
+    return;
+  }
+  if (msg.pickText) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    toggleInspectRoll(log, drop, msg.pickText, msg.pickKind);
+    return;
+  }
+  if (msg.quoteDrop) {
+    const { log, drop } = overlayLogDrop(msg.quoteLog, msg.quoteDrop);
+    if (!drop) return;
+    delete drop.quoting;
+    drop.quoteTried = false;
+    quoteRolledDrop(log, drop, true);
+    return;
+  }
+  if (msg.openTrade) {
+    if (window.chrome?.webview) chrome.webview.postMessage({ type: "open-url", url: msg.openTrade });
+    else window.open(msg.openTrade, "_blank", "noopener");
+    return;
+  }
+  if (msg.priceLookup) lookupOnePrice(msg.priceLookup);
+}
+
+function closeInspect() {
+  ui.inspect = null;
+  ui.dashRollId = null;
+  paintPriceOverlay();
+}
+
+function overlayThemeVars() {
+  const cs = getComputedStyle(document.documentElement);
+  return [
+    "--bg",
+    "--panel",
+    "--panel-2",
+    "--ink",
+    "--gold",
+    "--gold-2",
+    "--line",
+    "--line-strong",
+    "--muted",
+    "--unique",
+    "--unique-2",
+    "--font-display",
+    "--shadow",
+  ]
+    .map((key) => key + ":" + cs.getPropertyValue(key).trim())
+    .join(";");
+}
+
+function pushNativeOverlay(html, notice, fresh) {
+  if (!window.chrome?.webview) return false;
+  if (notice) {
+    chrome.webview.postMessage({ type: "overlay-notice", text: notice, vars: overlayThemeVars() });
+    return true;
+  }
+  if (!html) {
+    chrome.webview.postMessage({ type: "overlay-hide" });
+    return true;
+  }
+  chrome.webview.postMessage({ type: "overlay-show", html, vars: overlayThemeVars(), fresh: !!fresh });
+  return true;
+}
+
+function overlayNotice(text) {
+  showToast(text);
+  pushNativeOverlay("", text);
+}
+
+function openHttps(url) {
+  if (window.chrome?.webview) chrome.webview.postMessage({ type: "open-url", url });
+  else window.open(url, "_blank", "noopener");
+}
+
+function focusFeedback() {
+  const el = document.getElementById("feedback-title");
+  if (!el) return;
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
+  el.focus();
+}
+
+function feedbackNote(form) {
+  const data = new FormData(form);
+  const title = String(data.get("title") || "").trim();
+  const details = String(data.get("body") || "").trim().slice(0, 1500);
+  if (!title) {
+    document.getElementById("feedback-title")?.focus();
+    return null;
+  }
+  const body = [details || "(no details)", "", "---", "App: Still Sane, Exile? " + APP_VERSION, "League: " + leagueId(), "Page: " + (ui.view || "")].join("\n");
+  return { title, body, text: title + "\n\n" + body };
+}
+
+function copyFeedbackText(text) {
+  if (window.chrome?.webview) chrome.webview.postMessage({ type: "copy-text", text });
+  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(() => {});
+}
+
+function submitFeedback(form, via = "send") {
+  const note = feedbackNote(form);
+  if (!note) return;
+  if (via === "github") {
+    openHttps(FEEDBACK_ISSUE_URL + "?title=" + encodeURIComponent(note.title) + "&body=" + encodeURIComponent(note.body));
+    showToast("Opened GitHub. You can also send from this PC with Send.");
+    return;
+  }
+  if (via === "copy") {
+    copyFeedbackText(note.text);
+    showToast("Copied.");
+    return;
+  }
+  if (!window.chrome?.webview) {
+    copyFeedbackText(note.text);
+    showToast("Desktop app needed to send. Copied instead.");
+    return;
+  }
+  webviewJson(
+    {
+      type: "feedback-send",
+      title: note.title,
+      body: note.body,
+      version: APP_VERSION,
+      league: leagueId(),
+      page: ui.view || "",
+    },
+    8000,
+    "send timed out"
+  )
+    .then(() => {
+      form.reset();
+      showToast("Sent.");
+    })
+    .catch(() => {
+      copyFeedbackText(note.text);
+      showToast("Could not send. Copied instead.");
+    });
+}
+
+function rollKindLabel(roll) {
+  if (roll?.ghost) return "Typical";
+  const kind = canonicalRollKind(roll?.kind);
+  if (kind === "implicit") return "Implicit";
+  if (kind === "enchant") return "Enchant";
+  if (kind === "rune") return "Rune";
+  const slot = rollSlot(roll);
+  if (slot === "prefix") return "Prefix";
+  if (slot === "suffix") return "Suffix";
+  return "";
+}
+
+function rollKindClass(roll) {
+  const kind = canonicalRollKind(roll?.kind);
+  if (kind === "implicit") return " is-implicit";
+  if (kind === "enchant") return " is-enchant";
+  if (kind === "rune") return " is-rune";
+  const slot = rollSlot(roll);
+  if (slot === "prefix") return " is-prefix";
+  if (slot === "suffix") return " is-suffix";
+  return "";
+}
+
+function canHaveRunes(drop) {
+  if (/currency|gem|divination/i.test(drop?.rarity || "")) return false;
+  if (/currency|gem|divination/i.test(drop?.className || "")) return false;
+  return true;
+}
+
+function setDropRunePick(log, drop, value) {
+  if (!drop) return;
+  if (value == null || value === "" || value === "any") drop.pickRunes = null;
+  else drop.pickRunes = Math.max(0, Math.min(3, Number(value) || 0));
+  drop.quoteTried = false;
+  delete drop.quote;
+  if (log?.id) save();
+  if (ui.inspect) paintPriceOverlay();
+  else render();
+}
+
+function overlayRuneHtml(log, drop) {
+  if (!canHaveRunes(drop)) return "";
+  const selected = Number.isInteger(drop.pickRunes) ? drop.pickRunes : null;
+  const chips = ["any", 0, 1, 2, 3]
+    .map((n) => {
+      const on = n === "any" ? (selected == null ? " is-on" : "") : selected === n ? " is-on" : "";
+      const label = n === "any" ? "Any" : String(n);
+      return `<button type="button" class="price-overlay-flag${on}" data-pick-runes="${n}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${label}</button>`;
+    })
+    .join("");
+  return `<div class="price-overlay-rune"><span>Runes</span>${chips}</div>`;
+}
+
+function overlayQuoteHtml(drop, logId) {
+  if (drop?.quoting) return `<span class="price-overlay-status">Checking trade…</span>`;
+  const quote = drop?.quote;
+  const n = pickedRolls(drop).length;
+  if (quote && !quote.error) {
+    const listed = quote.listings ? quote.listings.toLocaleString() + " listings" : "trade";
+    if (pricedHit(quote) && Number(quote.amount) > 0) {
+      const label = quote.unit && Number.isFinite(quote.amount) ? formatAmount(quote.amount, quote.unit) : formatDivine(quote.divine);
+      const currency = currencyForAmount(quote.divine);
+      const inner = `${itemIconHtml(currency)}${esc(label)} · ${esc(listed)}`;
+      if (quote.url) return `<button type="button" class="btn gold" data-open-trade="${esc(quote.url)}" title="${esc(listed)}">${inner}</button>`;
+      return `<span class="btn gold">${inner}</span>`;
+    }
+    if (quote.url) {
+      return `<button type="button" class="btn ghost" data-open-trade="${esc(quote.url)}">${n ? "No listing with these mods" : "No listings"}</button>`;
+    }
+  }
+  const err = quote?.error ? ` · ${quote.error}` : "";
+  const label = n ? "Check this roll" : "Check trade";
+  return `<button type="button" class="btn gold" data-quote-drop="${esc(drop.id || "")}" data-quote-log="${esc(logId || "")}">${esc(label)}${esc(err)}</button>`;
+}
+
+function priceOverlayHtml(log, drop) {
+  const rolls = inspectRolls(drop);
+  const implicits = rolls.filter((roll) => canonicalRollKind(roll.kind) === "implicit");
+  const runes = rolls.filter((roll) => {
+    const kind = canonicalRollKind(roll.kind);
+    return kind === "rune" || kind === "enchant";
+  });
+  const explicits = rolls.filter((roll) => canonicalRollKind(roll.kind) === "explicit");
+  function modButtons(list) {
+    return list
+      .map((roll) => {
+        const on = roll.pick ? " is-on" : "";
+        const kind = rollKindClass(roll);
+        const ghost = roll.ghost ? " is-ghost" : "";
+        const tag = rollKindLabel(roll);
+        const hint = roll.ghost ? "Typical implicit · F8 this item to capture the real roll · " : tag ? tag + " · " : "";
+        const label = tag ? `<span class="price-overlay-tag">${esc(tag)}</span>` : "";
+        return `<button type="button" class="price-overlay-mod${on}${kind}${ghost}" data-pick-text="${esc(roll.text)}" data-pick-kind="${esc(canonicalRollKind(roll.kind))}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" title="${esc(hint + roll.text)}">${label}${esc(roll.text)}</button>`;
+      })
+      .join("");
+  }
+  function section(list, before) {
+    if (!list.length) return "";
+    return `${before ? `<div class="price-overlay-rule"></div>` : ""}<div class="price-overlay-mods">${modButtons(list)}</div>`;
+  }
+  const flags =
+    typeof drop.corrupted === "boolean"
+      ? `<div class="price-overlay-flags"><button type="button" class="price-overlay-flag${drop.corrupted ? " is-on" : ""}" data-pick-corrupt="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${drop.corrupted ? "Corrupted" : "Not corrupted"}</button></div>`
+      : "";
+  const kindClass = String(drop.rarity || "unique").toLowerCase().replace(/\s+/g, "-") || "unique";
+  return `
+    <article class="price-overlay-card item-tip-card ${esc(kindClass)}">
+      <button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button>
+      <div class="item-tip-head">
+        ${itemIconHtml(drop.name, "lg")}
+        <div>
+          <div class="item-tip-name">${esc(drop.name)}</div>
+          <div class="item-tip-base">${esc(drop.baseType || "")}</div>
+        </div>
+      </div>
+      ${flags}
+      ${overlayRuneHtml(log, drop)}
+      ${section(implicits, false)}
+      ${section(runes, implicits.length)}
+      ${section(explicits, implicits.length || runes.length)}
+      <div class="price-overlay-foot">
+        <div class="price-overlay-row"><span>PoE 2 trade</span>${overlayQuoteHtml(drop, log.id)}</div>
+      </div>
+    </article>`;
+}
+
+function paintPriceOverlay(forceInApp = false, fresh = false) {
+  const root = document.getElementById("price-overlay");
+  const target = inspectTarget();
+  const html = target ? priceOverlayHtml(target.log, target.drop) : "";
+  if (!forceInApp && pushNativeOverlay(html, "", fresh)) {
+    if (root) {
+      root.hidden = true;
+      root.innerHTML = "";
+    }
+    return;
+  }
+  if (!root) return;
+  if (!target) {
+    root.hidden = true;
+    root.innerHTML = "";
+    return;
+  }
+  root.hidden = false;
+  root.innerHTML = `<div class="price-overlay-back" data-close-inspect></div>${html}`;
+}
+
+function toggleInspectRoll(log, drop, text, kind) {
+  if (!drop) return;
+  const want = String(text || "").trim();
+  if (isTabletUsesRoll(want)) {
+    drop.pickUses = !drop.pickUses;
+    drop.quoteTried = false;
+    delete drop.quote;
+    if (log?.id) save();
+    paintPriceOverlay();
+    return;
+  }
+  drop.rolls = normalizeRolls(drop.rolls);
+  const as = canonicalRollKind(kind);
+  let row = drop.rolls.find((roll) => canonicalRollKind(roll.kind) === as && String(roll.text).toLowerCase() === want.toLowerCase());
+  if (!row) row = drop.rolls.find((roll) => String(roll.text).toLowerCase() === want.toLowerCase());
+  if (!row) {
+    row = { text: want, kind: as, slot: "", pick: false };
+    if (as !== "explicit") drop.rolls.unshift(row);
+    else drop.rolls.push(row);
+  }
+  row.pick = !row.pick;
+  drop.quoteTried = false;
+  delete drop.quote;
+  if (log?.id) save();
+  paintPriceOverlay();
+}
+
+function rollChipsHtml(drop, logId) {
+  const rolls = normalizeRolls(drop?.rolls || (Array.isArray(drop) ? drop : []));
+  const dropId = drop?.id || "";
+  const canPick = dropId && logId;
+  const showFlag = drop && !Array.isArray(drop) && typeof drop.corrupted === "boolean";
+  const flag = showFlag
+    ? canPick
+      ? `<button type="button" class="roll-chip is-flag${drop.corrupted ? " is-on" : ""}" data-pick-corrupt="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${drop.corrupted ? "Searching corrupted" : "Searching not corrupted"}">${drop.corrupted ? "Corrupted" : "Not corrupted"}</button>`
+      : drop.corrupted
+        ? `<span class="roll-chip is-flag is-on">Corrupted</span>`
+        : `<span class="roll-chip is-flag">Not corrupted</span>`
+    : "";
+  if (!rolls.length && !flag) return "";
+  return `<div class="roll-chips">${flag}${rolls
+    .map((roll, i) => {
+      const label = shortRoll(roll.text);
+      if (!label) return "";
+      const kind = rollKindClass(roll);
+      const tag = rollKindLabel(roll);
+      const title = (tag ? tag + " · " : "") + roll.text;
+      if (!canPick) return `<span class="roll-chip${kind}" title="${esc(title)}">${esc(label)}</span>`;
+      return `<button type="button" class="roll-chip${roll.pick ? " is-on" : ""}${kind}" data-pick-roll="${i}" data-pick-drop="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${esc(title)}">${esc(label)}</button>`;
+    })
+    .join("")}</div>`;
 }
 
 function findLoggedDrop(logId, dropId) {
@@ -2966,8 +3691,11 @@ function tradeWaiting() {
 }
 
 async function quoteRolledDrop(log, drop, force = false) {
-  if (!drop?.rolls?.length || !window.chrome?.webview) return;
+  if (!window.chrome?.webview) return;
   if (!drop.id) drop.id = uid();
+  drop.rolls = normalizeRolls(drop.rolls);
+  const picked = pickedRolls(drop);
+  if (!inspectTarget()) openInspect(log, drop);
   if (drop.quoting) return;
   if (!force && drop.quoteTried) return;
   if (tradeWaiting() && tradeRate.limited) {
@@ -2977,23 +3705,33 @@ async function quoteRolledDrop(log, drop, force = false) {
       at: Date.now(),
       error: "rate limited",
     });
-    render();
+    paintPriceOverlay();
     return;
   }
   drop.quoting = true;
   drop.quoteTried = true;
-  render();
+  paintPriceOverlay();
   const league = leagueId();
   try {
     const typeLine = drop.baseType && drop.baseType !== drop.name ? drop.baseType : "";
-    const rolls = drop.rolls.map(rollLineText).map(stripAdvancedRanges).filter(Boolean);
     const index = await ensureTradeStats();
-    const filters = mapRollsToTradeFilters(rolls, index);
-    const row = await tradeFetch(drop.name, league, !!force, false, {
+    const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
+    const mappedMods = mapRollsToTradeFilters(pickedMods, index, true);
+    const filters = mergeTabletUseFilter(drop, index, mappedMods);
+    if (pickedMods.length && mappedMods.length < pickedMods.length) {
+      const skipped = pickedMods.length - mappedMods.length;
+      showToast(filters.length ? skipped + " mod" + (skipped === 1 ? "" : "s") + " aren't on trade — checking the rest." : "Trade has no filter for those mods. Searching the item instead.");
+    }
+    const rolls = picked.map((roll) => roll.text);
+    const extra = {
       typeLine,
+      rarity: drop.rarity || "",
       rolls,
       filters,
-    });
+    };
+    if (typeof drop.corrupted === "boolean") extra.corrupted = drop.corrupted;
+    if (Number.isInteger(drop.pickRunes)) extra.runeSockets = drop.pickRunes;
+    const row = await tradeFetch(drop.name, league, !!force, false, extra);
     const target = findLoggedDrop(log?.id, drop.id) || drop;
     const unit = tradeUnit(row?.currency);
     const amount = Number(row?.amount);
@@ -3010,13 +3748,16 @@ async function quoteRolledDrop(log, drop, force = false) {
     };
   } catch (err) {
     const target = findLoggedDrop(log?.id, drop.id) || drop;
-    target.quote = target.quote || { listings: 0, league, at: Date.now(), error: String(err?.message || err || "") };
-    if (/rate limited/i.test(String(err?.message || ""))) target.quoteTried = false;
+    const raw = String(err?.message || err || "");
+    const error = /element of type|target element has type|json/i.test(raw) ? "trade search failed" : raw;
+    target.quote = target.quote || { listings: 0, league, at: Date.now(), error };
+    if (/rate limited/i.test(raw)) target.quoteTried = false;
   } finally {
     const target = findLoggedDrop(log?.id, drop.id) || drop;
     delete target.quoting;
     save();
-    render();
+    paintPriceOverlay();
+    paintLivePrices();
   }
 }
 
@@ -3065,14 +3806,37 @@ function matchClipboardDrop(parsed) {
   return null;
 }
 
-function ingestClipboardItem(text) {
+function ingestClipboardItem(text, mode) {
   const parsed = parsePoeItem(text);
   if (!parsed?.name) {
-    showToast("No PoE item on the clipboard. Hover it in-game and press " + hotkeys().log + ".");
+    const hint = mode === "price" ? hotkeys().price : hotkeys().log;
+    if (mode === "price") overlayNotice("No PoE item on the cursor. Hover it and press " + hint + ".");
+    else showToast("No PoE item on the clipboard. Hover it in-game and press " + hint + ".");
     return;
   }
   if (/^Unidentified$/im.test(text)) {
-    showToast("Identify it first, then press " + hotkeys().log + ".");
+    if (mode === "price") overlayNotice("Identify it first, then press " + hotkeys().price + ".");
+    else showToast("Identify it first, then press " + hotkeys().log + ".");
+    return;
+  }
+  if (mode === "price") {
+    const drop = {
+      id: uid(),
+      uniqueId: slug(parsed.name),
+      name: parsed.name,
+      qty: parsed.qty || 1,
+      baseType: parsed.baseType || "",
+      rarity: parsed.rarity || "",
+      className: parsed.className || "",
+      corrupted: !!parsed.corrupted,
+    };
+    if (parsed.usesRemaining > 0) drop.usesRemaining = parsed.usesRemaining;
+    if (parsed.runeSockets > 0) {
+      drop.runeSockets = parsed.runeSockets;
+      drop.pickRunes = parsed.runeSockets;
+    }
+    if (!isClipboardCurrency(parsed) && parsed.mods?.length) drop.rolls = parsed.mods.slice(0, 12);
+    openInspect({ id: "", drops: [drop] }, drop);
     return;
   }
   const matched = matchClipboardDrop(parsed);
@@ -3085,10 +3849,16 @@ function ingestClipboardItem(text) {
     name: matched.item?.name || parsed.name,
     qty: parsed.qty || 1,
     baseType: parsed.baseType || "",
+    rarity: parsed.rarity || "",
+    corrupted: !!parsed.corrupted,
   };
-  if (!isClipboardCurrency(parsed) && parsed.mods?.length) entry.rolls = parsed.mods.slice(0, 8);
-  const log = farmLogDrop(matched.boss?.id || farmBossId(), entry);
-  if (log && entry.rolls?.length) quoteRolledDrop(log, entry, true);
+  if (parsed.usesRemaining > 0) entry.usesRemaining = parsed.usesRemaining;
+  if (parsed.runeSockets > 0) {
+    entry.runeSockets = parsed.runeSockets;
+    entry.pickRunes = parsed.runeSockets;
+  }
+  if (!isClipboardCurrency(parsed) && parsed.mods?.length) entry.rolls = parsed.mods.slice(0, 12);
+  farmLogDrop(matched.boss?.id || farmBossId(), entry);
 }
 
 function handleAppHotkey(msg) {
@@ -3096,7 +3866,8 @@ function handleAppHotkey(msg) {
     finishFarmKill(true);
     return;
   }
-  if (msg?.action === "log-item") ingestClipboardItem(msg.text || "");
+  if (msg?.action === "log-item") ingestClipboardItem(msg.text || "", "log");
+  if (msg?.action === "price-item") ingestClipboardItem(msg.text || "", "price");
 }
 
 function farmBossId() {
@@ -3110,9 +3881,6 @@ function sessionLogs() {
 function renderDash() {
   const farmId = farmBossId();
   const farm = getBoss(farmId);
-  const session = sessionLogs();
-  const sessionValue = totalLootValue(session);
-  const allValue = totalLootValue();
   const kills = killCount(farmId);
   const counts = dropCounts(farmId);
   const hits = dropHits(farmId);
@@ -3177,7 +3945,6 @@ function renderDash() {
         <div class="farm-head">
           ${bossArtHtml(farm, "farm-portrait")}
           <div>
-            <div class="muted">Hover a drop in Path of Exile and press ${esc(hotkeys().log)} to log it. ${esc(hotkeys().next)} is Next kill.</div>
             <h2>${esc(farm?.name || "Pick a boss")}</h2>
             <p class="muted">${esc(farm?.area || "")} · ${kills} kills · loot ${esc(formatPct(lootHit(farmId), kills))}</p>
           </div>
@@ -3210,12 +3977,6 @@ function renderDash() {
           <button class="btn ghost" data-minus="${esc(farmId)}" ${dropUndo.length || (liveForFarm?.drops || []).length || kills ? "" : "disabled"} type="button">Undo</button>
         </div>
       </article>
-      <div class="dash-stats">
-        <article class="stat"><span>This session</span><b>${session.length}</b></article>
-        <article class="stat"><span>Session value</span><b>${valueHtml(sessionValue)}</b></article>
-        <article class="stat"><span>Logged value</span><b>${valueHtml(allValue)}</b></article>
-        <article class="stat"><span>Prices</span><b class="stat-note">${prices.status === "ready" ? valueHtml(lookupPrice("Divine Orb")?.divine || 1) : "—"}</b></article>
-      </div>
       <p class="muted ninja-note">${ninjaNote}</p>
       <div class="dash-grid">
         <article class="panel">
@@ -3773,16 +4534,9 @@ function renderDivineTape() {
 
 function renderStats() {
   const totalKills = state.logs.length;
-  let uniqueDrops = 0;
-  for (const log of state.logs) {
-    for (const drop of log.drops || []) uniqueDrops += drop.qty || 1;
-  }
-  const killsWithLoot = state.logs.filter((log) => (log.drops || []).length > 0).length;
   document.getElementById("stats").innerHTML = `
     <article class="stat"><span>Total kills</span><b>${totalKills}</b></article>
-    <article class="stat"><span>Logged drops</span><b>${uniqueDrops}</b></article>
     <article class="stat"><span>Loot value</span><b>${valueHtml(totalLootValue())}</b></article>
-    <article class="stat"><span>Loot rate</span><b>${esc(formatPct(killsWithLoot, totalKills))}</b></article>
   `;
 }
 
@@ -3957,12 +4711,18 @@ function renderSettings() {
         window.chrome?.webview
           ? `<article class="panel">
         <h3>Hotkeys</h3>
-        <p class="muted" style="margin-top:8px">These work while Path of Exile is focused. Hover an item and press the log key — the app copies it and marks it on the current farm boss.</p>
+        <p class="muted" style="margin-top:8px">These work while Path of Exile is focused. Log only marks farm drops. Price overlay checks any item and does not add it to the boss log.</p>
         <div class="hotkey-rows">
           <div class="hotkey-row">
             <span>Log copied item</span>
             <button class="hotkey-btn${ui.hotkeyCapture === "log" ? " is-listening" : ""}" data-hotkey-bind="log" type="button">${
               ui.hotkeyCapture === "log" ? "Press a key…" : esc(hotkeys().log)
+            }</button>
+          </div>
+          <div class="hotkey-row">
+            <span>Price overlay</span>
+            <button class="hotkey-btn${ui.hotkeyCapture === "price" ? " is-listening" : ""}" data-hotkey-bind="price" type="button">${
+              ui.hotkeyCapture === "price" ? "Press a key…" : esc(hotkeys().price)
             }</button>
           </div>
           <div class="hotkey-row">
@@ -3972,7 +4732,7 @@ function renderSettings() {
             }</button>
           </div>
         </div>
-        <p class="muted">Escape cancels a rebind. Keep this window open on a second screen while you farm.</p>
+        <p class="muted">Escape cancels a rebind. If a key is already used, the two actions swap. Keep this window open on a second screen while you farm.</p>
       </article>`
           : `<article class="panel">
         <h3>Hotkeys</h3>
@@ -3993,6 +4753,19 @@ function renderSettings() {
           <button class="btn gold" id="settings-export-btn" type="button">Export</button>
         </div>
       </article>
+      <article class="panel" id="feedback">
+        <h3>Feedback</h3>
+        <form id="feedback-form" class="feedback-form">
+          <label>Title
+            <input id="feedback-title" name="title" required maxlength="80" />
+          </label>
+          <textarea name="body" rows="5" maxlength="2000" aria-label="Feedback"></textarea>
+          <div class="row-actions">
+            <button class="btn ghost" data-feedback-send="copy" type="button">Copy</button>
+            <button class="btn gold" type="submit">Send</button>
+          </div>
+        </form>
+      </article>
       <article class="panel">
         <h3>Look</h3>
         <div class="preset-row" style="margin-top:12px">${presets}</div>
@@ -4008,21 +4781,14 @@ function renderSettings() {
         <p class="muted" style="margin-top:12px">Accent tints gold lines and buttons. Panels and text cover the rest.</p>
       </article>
       <article class="panel">
-        <h3>Fonts</h3>
-        <div class="settings-grid" style="margin-top:12px">
-          <label class="league-field">
-            <span>Titles</span>
-            <select data-theme-font="display">${fontOptions(FONT_DISPLAY, t.display)}</select>
-          </label>
-          <label class="league-field">
-            <span>Body</span>
-            <select data-theme-font="ui">${fontOptions(FONT_UI, t.ui)}</select>
-          </label>
-        </div>
-        <p class="muted" style="margin-top:12px">Titles use ${esc(t.display)}. Everything else uses ${esc(t.ui)}.</p>
+        <h3>Font</h3>
+        <label class="league-field" style="margin-top:12px">
+          <span>Titles</span>
+          <select data-theme-font="display">${fontOptions(FONT_DISPLAY, pickTitleFont(t.display))}</select>
+        </label>
         <div class="font-preview">
           <h3>The King in the Mists</h3>
-          <p>Divine Orb · Exalted Orb · ${esc(t.ui)} on body text</p>
+          <p>Divine Orb · Exalted Orb</p>
         </div>
       </article>
       <div class="row-actions">
@@ -4066,19 +4832,20 @@ function renderBossDialog(boss) {
   for (const log of logsFor(boss.id)) {
     for (const drop of log.drops || []) {
       if (!drop.rolls?.length) continue;
+      if (!drop.id) drop.id = uid();
       const id = drop.uniqueId || slug(drop.name);
       if (!copiesByUnique.has(id)) copiesByUnique.set(id, { name: drop.name, copies: [] });
-      copiesByUnique.get(id).copies.push({ at: log.at, rolls: drop.rolls });
+      copiesByUnique.get(id).copies.push({ at: log.at, log, drop });
     }
   }
   const rollHistory = [...copiesByUnique.values()]
     .map(
       (group) => `<div>
         <h3>${esc(group.name)} rolls</h3>
-        <p class="muted">Each copy you logged, with the mods that actually matter for price.</p>
+        <p class="muted">Logged copies of this unique.</p>
         <div class="log-list" style="margin-top:10px">${group.copies
           .map(
-            (copy) => `<div class="log-item"><div class="when">${esc(formatWhen(copy.at))}</div>${rollChipsHtml(copy.rolls)}</div>`
+            (copy) => `<div class="log-item"><div class="when">${esc(formatWhen(copy.at))}</div><div class="pill-block"><span class="pill">${itemNameHtml(copy.drop.name, "xs")}</span>${priceChip(copy.drop.name)}</div></div>`
           )
           .join("")}</div>
       </div>`
@@ -4181,10 +4948,11 @@ function dropPriceChip(drop, logId) {
   if (drop?.quoting) return `<span class="price-chip is-empty">this roll…</span>`;
   const quote = drop?.quote;
   const league = quote?.league || leagueId();
+  const n = pickedRolls(drop).length;
   const listed = quote?.listings ? quote.listings.toLocaleString() + " with these rolls" : "these rolls";
   const title = `PoE 2 trade · ${league} · ${listed}`;
   const mapped = Number(quote?.mapped) || 0;
-  if (quote?.url && mapped > 0) {
+  if (quote?.url && mapped > 0 && n) {
     if (pricedHit(quote) && Number(quote.amount) > 0) {
       const label = quote.unit && Number.isFinite(quote.amount) ? formatAmount(quote.amount, quote.unit) : formatDivine(quote.divine);
       const currency = currencyForAmount(quote.divine);
@@ -4194,7 +4962,8 @@ function dropPriceChip(drop, logId) {
   }
   if (drop?.rolls?.length) {
     const err = quote?.error ? ` · ${quote.error}` : "";
-    return `<button type="button" class="price-chip is-empty is-lookup" data-quote-drop="${esc(drop.id || "")}" data-quote-log="${esc(logId || "")}" title="${esc("Search PoE 2 trade for these rolls" + err)}">this roll</button>`;
+    const label = n ? "this roll" : "pick mods";
+    return `<button type="button" class="price-chip is-empty is-lookup" data-quote-drop="${esc(drop.id || "")}" data-quote-log="${esc(logId || "")}" title="${esc((n ? "Search PoE 2 trade for the mods you tapped" : "Tap the mods you want to check") + err)}">${label}</button>`;
   }
   return priceChip(drop?.name);
 }
@@ -4203,7 +4972,7 @@ function dropPills(drops, logId) {
   if (!drops?.length) return `<div class="muted" style="margin-top:8px">Nothing dropped</div>`;
   return `<div class="drop-pills">${drops
     .map((drop) => {
-      return `<div class="pill-block"><span class="pill">${itemNameHtml(drop.name, "xs")}${drop.qty > 1 ? " ×" + drop.qty : ""}</span>${dropPriceChip(drop, logId)}${rollChipsHtml(drop.rolls)}</div>`;
+      return `<div class="pill-block"><span class="pill">${itemNameHtml(drop.name, "xs")}${drop.qty > 1 ? " ×" + drop.qty : ""}</span>${priceChip(drop.name)}</div>`;
     })
     .join("")}</div>`;
 }
@@ -4514,6 +5283,7 @@ function render() {
 
   if (onTitle) {
     if (shown) hideItemTip();
+    paintPriceOverlay();
     updateBossScale();
     paintPriceClock();
     return;
@@ -4552,6 +5322,7 @@ function render() {
     if (el) showItemTip(el, shown);
     else hideItemTip();
   }
+  paintPriceOverlay();
   updateBossScale();
   paintPriceClock();
 }
@@ -4572,10 +5343,18 @@ function onClick(event) {
     ui.view = titleGo.dataset.titleGo;
     setMenuOpen(false);
     render();
+    if (titleGo.hasAttribute("data-feedback")) focusFeedback();
     return;
   }
   if (event.target.closest("[data-title-quit]")) {
     quitApp();
+    return;
+  }
+  const feedbackSend = event.target.closest("[data-feedback-send]");
+  if (feedbackSend) {
+    event.preventDefault();
+    const form = feedbackSend.closest("#feedback-form") || document.getElementById("feedback-form");
+    if (form) submitFeedback(form, feedbackSend.dataset.feedbackSend);
     return;
   }
   if (event.target.id === "menu-btn" || event.target.closest("#menu-btn")) {
@@ -4602,17 +5381,78 @@ function onClick(event) {
     lookupOnePrice(priceLookup.dataset.priceLookup);
     return;
   }
+  const pickCorrupt = event.target.closest("[data-pick-corrupt]");
+  if (pickCorrupt) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickCorrupt.dataset.pickLog, pickCorrupt.dataset.pickCorrupt);
+    if (!drop) return;
+    drop.corrupted = !drop.corrupted;
+    drop.quoteTried = false;
+    delete drop.quote;
+    if (log?.id) save();
+    if (ui.inspect) paintPriceOverlay();
+    else render();
+    return;
+  }
+  const pickRunes = event.target.closest("[data-pick-runes]");
+  if (pickRunes) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickRunes.dataset.pickLog, pickRunes.dataset.pickDrop);
+    setDropRunePick(log, drop, pickRunes.dataset.pickRunes);
+    return;
+  }
+  const pickText = event.target.closest("[data-pick-text]");
+  if (pickText) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickText.dataset.pickLog, pickText.dataset.pickDrop);
+    toggleInspectRoll(log, drop, pickText.dataset.pickText, pickText.dataset.pickKind);
+    return;
+  }
+  const pickRoll = event.target.closest("[data-pick-roll]");
+  if (pickRoll) {
+    event.preventDefault();
+    event.stopPropagation();
+    const log = state.logs.find((item) => item.id === pickRoll.dataset.pickLog) || liveLog();
+    const drop = (log?.drops || []).find((item) => item.id === pickRoll.dataset.pickDrop);
+    if (!drop) return;
+    drop.rolls = normalizeRolls(drop.rolls);
+    const i = Number(pickRoll.dataset.pickRoll);
+    if (!drop.rolls[i]) return;
+    drop.rolls[i].pick = !drop.rolls[i].pick;
+    drop.quoteTried = false;
+    delete drop.quote;
+    save();
+    if (ui.inspect) paintPriceOverlay();
+    else render();
+    return;
+  }
+  const inspectDrop = event.target.closest("[data-inspect-drop]");
+  if (inspectDrop) {
+    event.preventDefault();
+    event.stopPropagation();
+    const log = state.logs.find((item) => item.id === inspectDrop.dataset.inspectLog) || liveLog();
+    const drop = (log?.drops || []).find((item) => item.id === inspectDrop.dataset.inspectDrop);
+    if (drop) openInspect(log, drop);
+    return;
+  }
+  if (event.target.closest("[data-close-inspect]")) {
+    event.preventDefault();
+    closeInspect();
+    return;
+  }
   const quoteDrop = event.target.closest("[data-quote-drop]");
   if (quoteDrop) {
     event.preventDefault();
     event.stopPropagation();
-    const log = state.logs.find((item) => item.id === quoteDrop.dataset.quoteLog) || liveLog();
-    const drop = (log?.drops || []).find((item) => item.id === quoteDrop.dataset.quoteDrop);
-    if (drop?.rolls?.length) {
-      delete drop.quoting;
-      drop.quoteTried = false;
-      quoteRolledDrop(log, drop, true);
-    }
+    const { log, drop } = overlayLogDrop(quoteDrop.dataset.quoteLog, quoteDrop.dataset.quoteDrop);
+    if (!drop) return;
+    openInspect(log, drop);
+    delete drop.quoting;
+    drop.quoteTried = false;
+    quoteRolledDrop(log, drop, true);
     return;
   }
   const openTrade = event.target.closest("[data-open-trade]");
@@ -4655,6 +5495,7 @@ function onClick(event) {
   const farm = event.target.closest("[data-farm]");
   if (farm) {
     state.farmBossId = farm.dataset.farm;
+    ui.inspect = null;
     ui.dashRollId = null;
     ui.view = "dash";
     clearLiveKill();
@@ -4741,6 +5582,7 @@ function onClick(event) {
     ui.view = tab.dataset.view;
     setMenuOpen(false);
     render();
+    if (tab.hasAttribute("data-feedback")) focusFeedback();
     return;
   }
   const close = event.target.closest("[data-close]");
@@ -4764,7 +5606,14 @@ function onClick(event) {
   }
   const bind = event.target.closest("[data-hotkey-bind]");
   if (bind) {
-    ui.hotkeyCapture = bind.dataset.hotkeyBind === "next" ? "next" : "log";
+    const slot = bind.dataset.hotkeyBind === "next" ? "next" : bind.dataset.hotkeyBind === "price" ? "price" : "log";
+    if (ui.hotkeyCapture === slot) {
+      ui.hotkeyCapture = "";
+      syncHotkeys();
+    } else {
+      ui.hotkeyCapture = slot;
+      pauseHotkeys();
+    }
     render();
     return;
   }
@@ -4837,6 +5686,7 @@ function onChange(event) {
   }
   if (event.target.id === "farm-boss") {
     state.farmBossId = event.target.value;
+    ui.inspect = null;
     ui.dashRollId = null;
     clearLiveKill();
     save();
@@ -4869,6 +5719,7 @@ function onChange(event) {
 }
 
 document.addEventListener("click", onClick);
+document.addEventListener("contextmenu", (event) => event.preventDefault());
 document.addEventListener("change", onChange);
 document.addEventListener("input", (event) => {
   const theme = event.target.closest("[data-theme]");
@@ -4953,6 +5804,10 @@ document.addEventListener("submit", (event) => {
     document.getElementById("custom-dialog").close();
     render();
   }
+  if (event.target.id === "feedback-form") {
+    event.preventDefault();
+    submitFeedback(event.target, "send");
+  }
 });
 
 document.getElementById("import-file").addEventListener("change", (event) => {
@@ -4966,17 +5821,22 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     if (event.key === "Escape") {
       ui.hotkeyCapture = "";
+      syncHotkeys();
       render();
       return;
     }
     const spec = formatHotkey(event);
     if (!spec) return;
-    if (ui.hotkeyCapture === "next") state.hotkeyNext = spec;
-    else state.hotkeyLog = spec;
+    if (!assignHotkey(ui.hotkeyCapture, spec)) return;
     ui.hotkeyCapture = "";
     save();
     syncHotkeys();
     render();
+    return;
+  }
+  if (event.key === "Escape" && ui.inspect) {
+    event.preventDefault();
+    closeInspect();
     return;
   }
   if (event.key === "Escape" && document.getElementById("app-menu") && !document.getElementById("app-menu").hidden) {
@@ -5116,7 +5976,6 @@ function seedReliquaryLore() {
 
 seedReliquaryLore();
 hydratePriceCache();
-persistCatalogCache();
 refreshBackupInfo();
 render();
 startPriceClock();
@@ -5129,5 +5988,6 @@ loadLeagues().then(() => diskPrices).then(() => {
   paintPriceClock();
   paintLivePrices();
   render();
+  if (prices.byName.size) persistCatalogCache();
   kickFirstPriceCheck();
 });
