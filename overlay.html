@@ -76,7 +76,7 @@
 
       document.addEventListener("click", (event) => {
         const t = event.target.closest(
-          "[data-close-inspect],[data-pick-text],[data-pick-corrupt],[data-pick-runes],[data-quote-drop],[data-open-trade],[data-price-lookup]"
+          "[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-corrupt],[data-pick-raven],[data-pick-runes],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
         );
         if (!t || !window.chrome?.webview) return;
         event.preventDefault();

@@ -497,18 +497,19 @@ sealed class TrackerWindow : Form
         }
     }
 
-    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null)
+    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false)
     {
         name = (name ?? "").Trim();
         league = (league ?? "").Trim();
         typeLine = (typeLine ?? "").Trim();
         rarity = (rarity ?? "").Trim();
-        if (!ValidLeague(league) || (name.Length is < 2 or > 80 && typeLine.Length is < 2 or > 80))
+        category = (category ?? "").Trim();
+        if (!ValidLeague(league) || (name.Length is < 2 or > 80 && typeLine.Length is < 2 or > 80 && category.Length is < 2 or > 40))
         {
             Reply(id, false, 400, "{\"error\":\"bad trade query\"}");
             return;
         }
-        if (name.Length is < 2 or > 80) name = typeLine;
+        if (name.Length is < 2 or > 80) name = typeLine.Length > 0 ? typeLine : name;
         var rollList = (rolls ?? Array.Empty<string>()).Where(r => !string.IsNullOrWhiteSpace(r)).Take(12).ToArray();
         if (SearchLimit.Limited && CombinedWaitMs() >= 1500)
         {
@@ -517,7 +518,7 @@ sealed class TrackerWindow : Form
         }
         IReadOnlyList<RollFilter> mapped = preMapped is { Count: > 0 } ? preMapped : Array.Empty<RollFilter>();
         if (mapped.Count == 0 && rollList.Length > 0)
-            mapped = await MapRollsToFilters(rollList);
+            mapped = await MapRollsToFilters(rollList, category);
                 var extra = mapped.Count > 0
             ? ":roll:" + string.Join("|", mapped.Select(f =>
             {
@@ -528,9 +529,11 @@ sealed class TrackerWindow : Form
             }))
             : rollList.Length > 0 ? ":roll:none" : "";
         extra += corrupted is true ? ":c1" : corrupted is false ? ":c0" : "";
+        extra += ravenTouched ? ":rt" : "";
         extra += runeSockets is int rs ? ":r" + rs : "";
         extra += ":" + rarity.ToLowerInvariant();
         extra += typeLine.Length > 0 ? ":t:" + typeLine.ToLowerInvariant() : "";
+        extra += category.Length > 0 ? ":k:" + category.ToLowerInvariant() : "";
         var cacheKey = "trade:" + league + ":" + name.ToLowerInvariant() + extra;
         if (!bust && Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < CacheFor)
         {
@@ -545,10 +548,7 @@ sealed class TrackerWindow : Form
                 Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
                 return;
             }
-            var unique = rarity.Equals("Unique", StringComparison.OrdinalIgnoreCase);
-            var payload = mapped.Count > 0 || runeSockets is not null
-                ? await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets)
-                : await LookupTradeListing(league, unique || string.IsNullOrWhiteSpace(typeLine) ? name : typeLine, thorough);
+            var payload = await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets, category, ravenTouched);
             if (payload is { RateLimited: true })
             {
                 Reply(id, false, 429, "{\"error\":\"rate limited\"}");
@@ -616,7 +616,7 @@ sealed class TrackerWindow : Form
     static string TradeSearchUrl(string league, string queryId) =>
         "https://www.pathofexile.com/trade2/search/poe2/" + Uri.EscapeDataString(league) + (string.IsNullOrWhiteSpace(queryId) ? "" : "/" + Uri.EscapeDataString(queryId));
 
-    async Task<IReadOnlyList<RollFilter>> MapRollsToFilters(IReadOnlyList<string> rolls)
+    async Task<IReadOnlyList<RollFilter>> MapRollsToFilters(IReadOnlyList<string> rolls, string category = "")
     {
         var index = await GetFoldedStats();
         var filters = new List<RollFilter>();
@@ -632,13 +632,32 @@ sealed class TrackerWindow : Form
         foreach (var roll in ordered)
         {
             var invert = InvertedTradeRoll(roll);
-            var hit = MatchFoldedStat(FoldStat(roll), index);
+            var fold = FoldStat(roll);
+            var hit = MatchFoldedStat(fold, index, RollWantsLocal(fold, category));
             if (hit is null || !seen.Add(hit.Value.id)) continue;
             var amount = FirstRollNumber(roll, invert);
             filters.Add(new RollFilter(hit.Value.id, invert ? null : amount, invert ? amount : null));
             if (filters.Count >= 6) break;
         }
         return filters;
+    }
+
+    static bool RollWantsLocal(string fold, string category)
+    {
+        var f = fold ?? "";
+        var cat = category ?? "";
+        if (Regex.IsMatch(f, @"recharge|from equipped|recovery|break|global|spell")) return false;
+        if (Regex.IsMatch(f, @"energy shield"))
+            return Regex.IsMatch(cat, @"^armour\.(chest|helmet|gloves|boots|shield|focus|buckler)$");
+        if (Regex.IsMatch(f, @"\barmour\b") || Regex.IsMatch(f, @"evasion"))
+            return Regex.IsMatch(cat, @"^armour\.(chest|helmet|gloves|boots|shield|buckler)$");
+        if (Regex.IsMatch(f, @"block chance"))
+            return cat is "armour.shield" or "armour.buckler";
+        if (Regex.IsMatch(f, @"attack speed|culling strike|physical damage|critical"))
+            return cat.StartsWith("weapon.", StringComparison.OrdinalIgnoreCase);
+        if (Regex.IsMatch(f, @"accuracy"))
+            return cat.StartsWith("weapon.", StringComparison.OrdinalIgnoreCase) || cat == "armour.quiver";
+        return false;
     }
 
     static bool InvertedTradeRoll(string roll) =>
@@ -652,6 +671,7 @@ sealed class TrackerWindow : Form
                Regex.IsMatch(roll, @"^used when you", RegexOptions.IgnoreCase) ||
                Regex.IsMatch(roll, @"^right click", RegexOptions.IgnoreCase) ||
                Regex.IsMatch(roll, @"^this item can be anointed", RegexOptions.IgnoreCase) ||
+               Regex.IsMatch(roll, @"^raven-touched$", RegexOptions.IgnoreCase) ||
                Regex.IsMatch(roll, @"^\d+\s+uses? remaining", RegexOptions.IgnoreCase) ||
                Regex.IsMatch(roll, @"^adds .+\s+to a map\s*$", RegexOptions.IgnoreCase) ||
                Regex.IsMatch(roll, @"^empowers the map boss", RegexOptions.IgnoreCase);
@@ -718,22 +738,34 @@ sealed class TrackerWindow : Form
         }
     }
 
-    static (string id, string type)? MatchFoldedStat(string fold, Dictionary<string, List<(string id, string type)>> index)
+    static (string id, string type)? MatchFoldedStat(string fold, Dictionary<string, List<(string id, string type)>> index, bool preferLocal = false)
     {
         if (string.IsNullOrWhiteSpace(fold)) return null;
+        if (preferLocal)
+        {
+            var localFold = Regex.Replace(fold, @"\s*\(local\)\s*$", "").TrimEnd() + " (local)";
+            if (index.TryGetValue(localFold, out var localList))
+                return PickStat(localList);
+        }
         if (index.TryGetValue(fold, out var exact))
             return PickStat(exact);
         (string id, string type)? best = null;
         var bestLen = 0;
+        var bestLocal = false;
         foreach (var (key, list) in index)
         {
-            if (key.Length < 10 || key.Length <= bestLen) continue;
+            if (key.Length < 10) continue;
+            var local = key.EndsWith(" (local)", StringComparison.Ordinal);
             if (fold == key || fold.StartsWith(key + " ", StringComparison.Ordinal) || key.StartsWith(fold + " ", StringComparison.Ordinal))
             {
                 var pick = PickStat(list);
                 if (pick is null) continue;
-                best = pick;
-                bestLen = key.Length;
+                if (key.Length > bestLen || (key.Length == bestLen && preferLocal && local && !bestLocal))
+                {
+                    best = pick;
+                    bestLen = key.Length;
+                    bestLocal = local;
+                }
             }
         }
         if (best is not null) return best;
@@ -741,11 +773,16 @@ sealed class TrackerWindow : Form
         if (needle.Length < 12) return null;
         foreach (var (key, list) in index)
         {
-            if (key.Length <= bestLen || !key.Contains(needle, StringComparison.Ordinal)) continue;
+            if (key.Length < 10 || !key.Contains(needle, StringComparison.Ordinal)) continue;
+            var local = key.EndsWith(" (local)", StringComparison.Ordinal);
             var pick = PickStat(list);
             if (pick is null) continue;
-            best = pick;
-            bestLen = key.Length;
+            if (key.Length > bestLen || (key.Length == bestLen && preferLocal && local && !bestLocal))
+            {
+                best = pick;
+                bestLen = key.Length;
+                bestLocal = local;
+            }
         }
         return best;
     }
@@ -756,6 +793,7 @@ sealed class TrackerWindow : Form
         string[] order = prefer?.Equals("rune", StringComparison.OrdinalIgnoreCase) == true
             ? ["rune", "enchant", "implicit", "explicit"]
             : prefer?.Equals("implicit", StringComparison.OrdinalIgnoreCase) == true
+            || prefer?.Equals("corrupt", StringComparison.OrdinalIgnoreCase) == true
             ? ["implicit", "enchant", "rune", "explicit"]
             : prefer?.Equals("enchant", StringComparison.OrdinalIgnoreCase) == true
                 ? ["enchant", "implicit", "rune", "explicit"]
@@ -777,6 +815,8 @@ sealed class TrackerWindow : Form
         var ring = Regex.Match(fold ?? "", @"bonuses gained from (?:equipped )?(left|right) (?:equipped )?ring");
         if (ring.Success) return "bonuses gained from equipped " + ring.Groups[1].Value + " ring";
         if (Regex.IsMatch(fold ?? "", @"additional enemies to be surrounded")) return "additional enemies to be surrounded";
+        if (Regex.IsMatch(fold ?? "", @"magic utility flasks you use apply")) return "magic utility flasks you use apply";
+        if (Regex.IsMatch(fold ?? "", @"utility flasks cannot be used")) return "magic utility flasks cannot be used";
         return "";
     }
 
@@ -785,7 +825,8 @@ sealed class TrackerWindow : Form
         if (string.IsNullOrWhiteSpace(text)) return "";
         var t = StripAdvancedRanges(UnwrapTags(text)).ToLowerInvariant();
         t = Regex.Replace(t, @"[\r\n]+", " ");
-        t = Regex.Replace(t, @"\([^)]*\)", " ");
+        t = Regex.Replace(t, @"\((?:augmented|unmet|implicit|enchant|rune)\)", " ");
+        t = Regex.Replace(t, @"\((?!local\b)[^)]*\)", " ");
         t = Regex.Replace(t, @"\{[^}]+\}", " ");
         t = Regex.Replace(t, @"\breduced\b", "increased");
         t = Regex.Replace(t, @"\bfewer\b", "additional");
@@ -815,7 +856,7 @@ sealed class TrackerWindow : Form
         return n;
     }
 
-    static IEnumerable<string> RolledQueries(string name, string typeLine, IReadOnlyList<RollFilter> filters, bool relax = false, bool? corrupted = null, string rarity = "", int? runeSockets = null)
+    static IEnumerable<string> RolledQueries(string name, string typeLine, IReadOnlyList<RollFilter> filters, bool relax = false, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false)
     {
         JsonArray FilterArray()
         {
@@ -867,28 +908,58 @@ sealed class TrackerWindow : Form
             return bag;
         }
 
-        JsonObject Body(bool includeType)
+        JsonObject TypeFilters(bool includeCategory)
+        {
+            var bag = new JsonObject();
+            var unique = rarity.Equals("Unique", StringComparison.OrdinalIgnoreCase);
+            if (includeCategory && !string.IsNullOrWhiteSpace(category))
+                bag["category"] = new JsonObject { ["option"] = category };
+            if (unique)
+                bag["rarity"] = new JsonObject { ["option"] = "unique" };
+            else if (rarity.Equals("Rare", StringComparison.OrdinalIgnoreCase) ||
+                     rarity.Equals("Magic", StringComparison.OrdinalIgnoreCase) ||
+                     rarity.Equals("Normal", StringComparison.OrdinalIgnoreCase))
+                bag["rarity"] = new JsonObject { ["option"] = "nonunique" };
+            return bag;
+        }
+
+        JsonObject Body(bool includeType, bool includeCategory)
         {
             var unique = rarity.Equals("Unique", StringComparison.OrdinalIgnoreCase);
+            var filtersBag = MiscFilters();
+            var typeBag = TypeFilters(includeCategory);
+            if (typeBag.Count > 0)
+                filtersBag["type_filters"] = new JsonObject { ["filters"] = typeBag };
+            var stats = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["type"] = "and",
+                    ["filters"] = FilterArray(),
+                },
+            };
+            if (ravenTouched)
+            {
+                stats.Add(new JsonObject
+                {
+                    ["type"] = "count",
+                    ["value"] = new JsonObject { ["min"] = 1 },
+                    ["filters"] = new JsonArray
+                    {
+                        new JsonObject { ["id"] = "explicit.stat_3198163869", ["disabled"] = false },
+                        new JsonObject { ["id"] = "rune.stat_3198163869", ["disabled"] = false },
+                    },
+                });
+            }
             var query = new JsonObject
             {
                 ["status"] = new JsonObject { ["option"] = "any" },
-                ["stats"] = new JsonArray
-                {
-                    new JsonObject
-                    {
-                        ["type"] = "and",
-                        ["filters"] = FilterArray(),
-                    },
-                },
-                ["filters"] = MiscFilters(),
+                ["stats"] = stats,
+                ["filters"] = filtersBag,
             };
             if (unique && !string.IsNullOrWhiteSpace(name))
                 query["name"] = name;
-            else if (!unique && string.IsNullOrWhiteSpace(typeLine) && !string.IsNullOrWhiteSpace(name))
-                query["name"] = name;
-            if (includeType && !string.IsNullOrWhiteSpace(typeLine) &&
-                !typeLine.Equals(name, StringComparison.OrdinalIgnoreCase))
+            if (includeType && !string.IsNullOrWhiteSpace(typeLine))
                 query["type"] = typeLine;
             return new JsonObject
             {
@@ -897,12 +968,17 @@ sealed class TrackerWindow : Form
             };
         }
 
-        if (!string.IsNullOrWhiteSpace(typeLine))
-            yield return Body(true).ToJsonString();
-        yield return Body(false).ToJsonString();
+        var hasType = !string.IsNullOrWhiteSpace(typeLine);
+        var hasCat = !string.IsNullOrWhiteSpace(category);
+        if (hasType)
+            yield return Body(true, hasCat).ToJsonString();
+        if (hasCat)
+            yield return Body(false, true).ToJsonString();
+        if (!hasType && !hasCat)
+            yield return Body(false, false).ToJsonString();
     }
 
-    async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters, bool? corrupted = null, string rarity = "", int? runeSockets = null)
+    async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false)
     {
         var searchUri = "https://www.pathofexile.com/api/trade2/search/poe2/" + Uri.EscapeDataString(league);
         string? lastId = null;
@@ -951,7 +1027,7 @@ sealed class TrackerWindow : Form
             }
         }
 
-        foreach (var body in RolledQueries(name, typeLine, filters, false, corrupted, rarity, runeSockets))
+        foreach (var body in RolledQueries(name, typeLine, filters, false, corrupted, rarity, runeSockets, category, ravenTouched))
         {
             var got = await Run(body);
             if (got is { RateLimited: true } or { Forbidden: true }) return got;
@@ -960,7 +1036,7 @@ sealed class TrackerWindow : Form
         }
         if (filters.Count > 0 && lastTotal == 0)
         {
-            foreach (var body in RolledQueries(name, typeLine, filters, true, corrupted, rarity, runeSockets).Take(1))
+            foreach (var body in RolledQueries(name, typeLine, filters, true, corrupted, rarity, runeSockets, category, ravenTouched).Take(1))
             {
                 var got = await Run(body);
                 if (got is { RateLimited: true } or { Forbidden: true }) return got;
@@ -1401,10 +1477,12 @@ sealed class TrackerWindow : Form
                     else if (corrEl.ValueKind == JsonValueKind.False) corrupted = false;
                 }
                 var rarity = root.TryGetProperty("rarity", out var rarityEl) ? rarityEl.GetString() ?? "" : "";
+                var category = root.TryGetProperty("category", out var catEl) ? catEl.GetString() ?? "" : "";
                 int? runeSockets = null;
                 if (root.TryGetProperty("runeSockets", out var runeEl) && JsonInt(runeEl, out var runeN) && runeN is >= 0 and <= 6)
                     runeSockets = runeN;
-                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets);
+                var ravenTouched = root.TryGetProperty("ravenTouched", out var ravenEl) && ravenEl.ValueKind == JsonValueKind.True;
+                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets, category, ravenTouched);
                 return;
             }
             if (type == "backup-info")

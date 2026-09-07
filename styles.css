@@ -2376,6 +2376,12 @@ button.roll-chip:hover {
   align-items: center;
 }
 
+.price-overlay-card .item-tip-head {
+  grid-template-columns: 56px 1fr auto;
+  padding-right: 22px;
+  align-items: start;
+}
+
 .item-tip-name {
   font-family: var(--font-display);
   color: var(--unique-2);
@@ -2509,6 +2515,26 @@ button.roll-chip:hover {
   color: #e08070;
 }
 
+.price-overlay-sec {
+  display: grid;
+  gap: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.price-overlay-sec-label {
+  color: var(--gold-2);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.price-overlay-empty {
+  color: var(--muted);
+  font-size: 0.82rem;
+  padding: 2px 6px;
+}
+
 .price-overlay-rune {
   display: flex;
   flex-wrap: wrap;
@@ -2516,6 +2542,7 @@ button.roll-chip:hover {
   gap: 6px;
   color: var(--muted);
   font-size: 0.78rem;
+  padding: 2px 0 0;
 }
 
 .price-overlay-rune .price-overlay-flag.is-on {
@@ -2523,56 +2550,188 @@ button.roll-chip:hover {
   color: var(--gold-2);
 }
 
-.price-overlay-mods {
-  display: grid;
-  gap: 2px;
-}
-
-.price-overlay-mod {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  width: 100%;
-  text-align: left;
-  background: transparent;
+.price-overlay-corrupt {
+  align-self: start;
+  margin: 0;
+  padding: 2px 0 0;
   border: 0;
-  border-radius: 6px;
-  color: #7aa2ff;
+  background: transparent;
+  color: var(--muted);
   font: inherit;
-  font-size: 0.88rem;
-  line-height: 1.35;
-  padding: 3px 6px;
+  font-size: 0.82rem;
+  line-height: 1.25;
+  text-align: right;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.price-overlay-tag {
-  flex: 0 0 4.6em;
-  font-size: 0.68rem;
+.price-overlay-flags {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.price-overlay-raven {
+  align-self: start;
+  margin: 0;
+  padding: 2px 0 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.25;
+  text-align: right;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.price-overlay-corrupt.is-on {
+  color: #e24a3a;
+  font-weight: 700;
+  font-style: normal;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--muted);
 }
 
-.price-overlay-mod.is-implicit {
-  color: #8888ff;
-  font-style: italic;
+.price-overlay-raven.is-on {
+  color: #7aa2ff;
+  font-weight: 700;
+  font-style: normal;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.price-overlay-mod.is-enchant {
-  color: #7ad0c8;
+.roll-chip.is-flag.is-raven.is-on {
+  color: #7aa2ff;
+  border-color: #7aa2ff;
+  background: color-mix(in srgb, #7aa2ff 16%, transparent);
 }
 
-.price-overlay-mod.is-rune {
+.price-overlay-mods {
+  display: grid;
+  gap: 0;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.price-overlay-mod,
+.price-overlay-affix {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  margin: 0;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  color: #7aa2ff;
+  font: inherit;
+  font-size: 0.88rem;
+  line-height: 1.3;
+  padding: 7px 4px 8px;
+  cursor: pointer;
+}
+
+.price-overlay-mod-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  justify-items: start;
+}
+
+.price-overlay-mod-text,
+.price-overlay-hybrid-line {
+  color: inherit;
+}
+
+.price-overlay-hybrid-lines {
+  display: grid;
+  gap: 1px;
+  pointer-events: none;
+}
+
+.price-overlay-pill {
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: #9aa3b5;
+}
+
+.price-overlay-mod.is-enchant,
+.price-overlay-affix.is-enchant {
+  color: #d7c4ff;
+}
+
+.price-overlay-pill.is-enchant {
+  background: #6d28d9;
+  color: #f3e8ff;
+}
+
+.price-overlay-mod.is-corrupt,
+.price-overlay-affix.is-corrupt {
+  color: #f0b4b0;
+}
+
+.price-overlay-pill.is-corrupt {
+  background: #b91c1c;
+  color: #fee2e2;
+}
+
+.price-overlay-mod.is-skill,
+.price-overlay-affix.is-skill,
+.price-overlay-mod.is-implicit,
+.price-overlay-affix.is-implicit {
+  color: #c5c9d6;
+}
+
+.price-overlay-pill.is-skill,
+.price-overlay-pill.is-implicit {
+  background: transparent;
+  padding: 1px 0;
+  color: #8b93a7;
+}
+
+.price-overlay-mod.is-rune,
+.price-overlay-affix.is-rune {
   color: #c4a35a;
 }
 
-.price-overlay-mod.is-ghost {
+.price-overlay-pill.is-rune {
+  background: #2563eb;
+  color: #dbeafe;
+}
+
+.price-overlay-pill.is-prefix,
+.price-overlay-pill.is-suffix {
+  background: transparent;
+  padding: 1px 0;
+  color: #7aa2ff;
+}
+
+.price-overlay-mod.is-ghost,
+.price-overlay-affix.is-ghost {
   opacity: 0.78;
 }
 
 .price-overlay-mod:hover,
-.price-overlay-mod.is-on {
-  background: color-mix(in srgb, var(--gold) 16%, transparent);
+.price-overlay-mod.is-on,
+.price-overlay-affix:hover,
+.price-overlay-affix.is-on {
+  background: color-mix(in srgb, var(--gold) 12%, transparent);
+}
+
+.price-overlay-mod.is-on .price-overlay-mod-text,
+.price-overlay-affix.is-on .price-overlay-hybrid-line {
   color: var(--gold-2);
 }
 
@@ -2590,6 +2749,10 @@ button.roll-chip:hover {
   border-top: 1px solid var(--line);
 }
 
+.price-overlay-foot .price-overlay-rune {
+  padding: 0;
+}
+
 .price-overlay-row {
   display: flex;
   justify-content: space-between;
@@ -2597,6 +2760,19 @@ button.roll-chip:hover {
   gap: 10px;
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.price-overlay-trade-btns {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.price-overlay-web {
+  padding: 6px 10px;
+  white-space: nowrap;
 }
 
 .price-overlay-status {
