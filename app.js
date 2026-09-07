@@ -1,12 +1,11 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.10";
+const APP_VERSION = "1.0.11";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
   ["all", "All"],
   ["pinnacle", "Pinnacle"],
   ["citadel", "Citadels"],
-  ["custom", "Custom"],
 ];
 
 const ui = {
@@ -629,9 +628,10 @@ function updateBossScale() {
     root.style.setProperty("--boss-scale", "1");
     return;
   }
-  const w = root.clientWidth || window.innerWidth || 1280;
-  const h = root.clientHeight || window.innerHeight || 800;
-  const scale = Math.max(0.82, Math.min(1.28, w / 1360, h / 980));
+  const slot = document.querySelector(".boss-stage-slot");
+  const w = slot?.clientWidth || root.clientWidth || window.innerWidth || 1280;
+  const h = slot?.clientHeight || root.clientHeight || window.innerHeight || 800;
+  const scale = Math.max(0.78, Math.min(1.12, w / 1180, h / 760));
   root.style.setProperty("--boss-scale", scale.toFixed(3));
 }
 
@@ -675,6 +675,27 @@ function formatWhen(ts) {
   });
 }
 
+function hourStamp(ts = Date.now()) {
+  const d = new Date(ts);
+  d.setMinutes(0, 0, 0);
+  d.setMilliseconds(0);
+  return d.getTime();
+}
+
+function formatHour(ts) {
+  return new Date(hourStamp(ts)).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+  });
+}
+
+function ninjaNextAt(fetchedAt = prices.fetchedAt) {
+  if (!fetchedAt) return Date.now();
+  if (hourStamp(fetchedAt) < hourStamp()) return Date.now();
+  return hourStamp(fetchedAt) + 60 * 60 * 1000;
+}
+
 function rarityLabel(rarity) {
   return (rarity || "common").replace("-", " ");
 }
@@ -707,6 +728,20 @@ function removeLastKill(bossId) {
 function deleteLog(id) {
   if (liveKill.logId === id) clearLiveKill();
   state.logs = state.logs.filter((log) => log.id !== id);
+  save();
+  render();
+}
+
+function clearBossLogs(bossId) {
+  if (!bossId) return;
+  const ids = new Set(logsFor(bossId).map((log) => log.id));
+  if (!ids.size) return;
+  if (ids.has(liveKill.logId)) clearLiveKill();
+  state.logs = state.logs.filter((log) => log.bossId !== bossId);
+  for (let i = dropUndo.length - 1; i >= 0; i--) {
+    if (ids.has(dropUndo[i].logId)) dropUndo.splice(i, 1);
+  }
+  closeInspect();
   save();
   render();
 }
@@ -759,8 +794,10 @@ function tradeFetch(name, league, bust = false, thorough = false, extra = {}) {
       corrupted: extra.corrupted === true ? true : extra.corrupted === false ? false : undefined,
       ravenTouched: extra.ravenTouched === true,
       runeSockets: Number.isInteger(extra.runeSockets) ? extra.runeSockets : undefined,
+      exchange: extra.exchange === true,
+      have: extra.have || "",
     },
-    extra.rolls?.length || filters.length ? 60000 : 45000,
+    extra.rolls?.length || filters.length ? 90000 : 45000,
     "PoE 2 trade timed out"
   );
 }
@@ -889,17 +926,75 @@ function foldKeyVariants(key) {
   return [...new Set([k, k.replace(/#%/g, "# %"), k.replace(/# %/g, "#%"), k.replace(/ to /g, "to "), k.replace(/to /g, " to ")])].filter(Boolean);
 }
 
+function propLineTail(raw, label) {
+  const m = String(raw || "").match(new RegExp("^" + label + "\\s*(.+)$", "im"));
+  return m ? m[1] : "";
+}
+
+function parseAvgDamage(text) {
+  const clean = String(text || "").replace(/\([^)]*\)/g, " ");
+  const pairs = [...clean.matchAll(/(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)/g)];
+  if (pairs.length) return pairs.reduce((sum, pair) => sum + (Number(pair[1]) + Number(pair[2])) / 2, 0);
+  const n = clean.replace(/,/g, "").match(/(\d+(?:\.\d+)?)/);
+  return n ? Number(n[1]) : NaN;
+}
+
+function parsePropNumber(raw, label) {
+  const n = String(propLineTail(raw, label)).replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+  return n ? Number(n[0]) : NaN;
+}
+
 function parseLocalProps(raw) {
   const t = String(raw || "");
+  function num(label) {
+    return parsePropNumber(t, label);
+  }
+  function dmg(label) {
+    const v = parseAvgDamage(propLineTail(t, label));
+    return Number.isFinite(v) && v > 0 ? v : NaN;
+  }
+  const quality = num("Quality:");
+  const ar = num("Armour:");
+  const ev = num("Evasion Rating:");
+  const es = num("Energy Shield:");
+  const wardHit = num("Runic Ward:");
+  const ward = Number.isFinite(wardHit) ? wardHit : num("Ward:");
+  const blockHit = num("Block chance:");
+  const block = Number.isFinite(blockHit) ? blockHit : num("Block Chance:") || num("Chance to Block:");
+  const phys = dmg("Physical Damage:");
+  let ele = dmg("Elemental Damage:");
+  if (!Number.isFinite(ele)) {
+    const parts = [dmg("Fire Damage:"), dmg("Cold Damage:"), dmg("Lightning Damage:")].filter(Number.isFinite);
+    ele = parts.length ? parts.reduce((a, b) => a + b, 0) : NaN;
+  }
+  const chaos = dmg("Chaos Damage:");
+  const critHit = num("Critical Hit Chance:");
+  const crit = Number.isFinite(critHit) ? critHit : num("Critical Strike Chance:");
+  const aps = num("Attacks per Second:");
+  const spirit = num("Spirit:");
+  const reload = num("Reload Time:");
   return {
-    armour: /^Armour:/im.test(t),
-    evasion: /^Evasion Rating:/im.test(t),
-    energyShield: /^Energy Shield:/im.test(t),
-    block: /^(?:Block Chance|Chance to Block):/im.test(t),
-    physicalDamage: /^Physical Damage:/im.test(t),
-    crit: /^Critical (?:Hit|Strike) Chance:/im.test(t),
-    aps: /^Attacks per Second:/im.test(t),
+    armour: Number.isFinite(ar),
+    evasion: Number.isFinite(ev),
+    energyShield: Number.isFinite(es),
+    block: Number.isFinite(block),
+    physicalDamage: Number.isFinite(phys),
+    crit: Number.isFinite(crit),
+    aps: Number.isFinite(aps),
     accuracy: /^Accuracy Rating:/im.test(t),
+    quality: Number.isFinite(quality) ? quality : undefined,
+    ar: Number.isFinite(ar) ? ar : undefined,
+    ev: Number.isFinite(ev) ? ev : undefined,
+    es: Number.isFinite(es) ? es : undefined,
+    ward: Number.isFinite(ward) ? ward : undefined,
+    blockChance: Number.isFinite(block) ? block : undefined,
+    phys: Number.isFinite(phys) ? phys : undefined,
+    ele: Number.isFinite(ele) ? ele : undefined,
+    chaos: Number.isFinite(chaos) ? chaos : undefined,
+    apsVal: Number.isFinite(aps) ? aps : undefined,
+    critVal: Number.isFinite(crit) ? crit : undefined,
+    spirit: Number.isFinite(spirit) ? spirit : undefined,
+    reload: Number.isFinite(reload) ? reload : undefined,
   };
 }
 
@@ -1052,35 +1147,411 @@ function mergeTabletUseFilter(drop, index, filters) {
   return next;
 }
 
+function parseRollHit(hit) {
+  const value = Number(hit?.[1]);
+  let lo = Number(hit?.[2]);
+  let hi = Number(hit?.[3]);
+  if (!Number.isFinite(value) || !Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+  if (lo > hi) {
+    const swap = lo;
+    lo = hi;
+    hi = swap;
+  }
+  if (lo === hi) return null;
+  return { value, lo, hi };
+}
+
+function parseRollSpan(raw) {
+  const t = parseAffixStrings(String(raw || ""));
+  const hits = [...t.matchAll(/(-?\d+(?:\.\d+)?)\s*\(\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\s*\)/g)];
+  const first = parseRollHit(hits[0]);
+  if (!first) return null;
+  let spanLo = first.lo;
+  let spanHi = first.hi;
+  const extras = [];
+  for (let i = 1; i < hits.length; i++) {
+    const extra = parseRollHit(hits[i]);
+    if (extra) extras.push(extra);
+  }
+  const bracket = t.match(/\[\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\s*\]/);
+  if (bracket) {
+    let a = Number(bracket[1]);
+    let b = Number(bracket[2]);
+    if (Number.isFinite(a) && Number.isFinite(b)) {
+      if (a > b) {
+        const swap = a;
+        a = b;
+        b = swap;
+      }
+      spanLo = Math.min(spanLo, a);
+      spanHi = Math.max(spanHi, b);
+    }
+  }
+  return { value: first.value, lo: first.lo, hi: first.hi, spanLo, spanHi, extras };
+}
+
+function foldAffixRange(text) {
+  return String(text || "")
+    .replace(/[\r\n]+/g, " ")
+    .toLowerCase()
+    .replace(/\((?:augmented|unmet|implicit|enchant|rune)\)/gi, " ")
+    .replace(/\(\s*-?\d+(?:\.\d+)?\s*[-–—]\s*-?\d+(?:\.\d+)?\s*\)/g, " # ")
+    .replace(/[+-]?\d+(?:\.\d+)?/g, "#")
+    .replace(/#to /g, "# to ")
+    .replace(/#%/g, "#%")
+    .replace(/%(\S)/g, "% $1")
+    .replace(/\s+/g, " ")
+    .replace(/^\+/, "")
+    .trim();
+}
+
+function itemPoolTags(drop) {
+  const cls = String(drop?.className || "").toLowerCase();
+  const tags = [];
+  function add(tag) {
+    if (tag && !tags.includes(tag)) tags.push(tag);
+  }
+  if (/body\s*armours?/.test(cls)) add("body_armour");
+  if (/helmets?/.test(cls)) add("helmet");
+  if (/gloves/.test(cls)) add("gloves");
+  if (/boots/.test(cls)) add("boots");
+  if (/bucklers?/.test(cls)) add("shield");
+  else if (/shields?/.test(cls)) add("shield");
+  if (/\bfoci\b|\bfocus\b/.test(cls)) add("focus");
+  if (/quivers?/.test(cls)) add("quiver");
+  if (/amulets?/.test(cls)) add("amulet");
+  if (/belts?/.test(cls)) add("belt");
+  if (/rings?/.test(cls)) add("ring");
+  if (/crossbows?/.test(cls)) add("crossbow");
+  if (/quarterstaves|quarterstaff|warstaves|warstaff/.test(cls)) add("warstaff");
+  else if (/staves|\bstaff\b/.test(cls)) add("staff");
+  if (/\bbows?\b/.test(cls)) add("bow");
+  if (/wands?/.test(cls)) add("wand");
+  if (/spears?/.test(cls)) add("spear");
+  if (/flails?/.test(cls)) add("flail");
+  if (/maces?/.test(cls)) add("mace");
+  if (/swords?/.test(cls)) add("sword");
+  if (/axes?/.test(cls)) add("axe");
+  if (/claws?/.test(cls)) add("claw");
+  if (/daggers?/.test(cls)) add("dagger");
+  if (/sceptres?/.test(cls)) add("sceptre");
+  if (/talismans?/.test(cls)) add("talisman");
+  if (/traps?/.test(cls)) add("trap");
+  const weapon = ["bow", "wand", "staff", "warstaff", "mace", "axe", "sword", "spear", "flail", "claw", "dagger", "sceptre", "talisman", "crossbow", "trap"].some((tag) => tags.includes(tag));
+  if (weapon) add("weapon");
+  if (tags.includes("bow") || tags.includes("crossbow") || tags.includes("wand")) add("ranged");
+  const two = /two\s*-?\s*hand/.test(cls) || tags.includes("bow") || tags.includes("crossbow") || tags.includes("staff") || tags.includes("warstaff");
+  const one =
+    /one\s*-?\s*hand/.test(cls) ||
+    tags.includes("wand") ||
+    tags.includes("claw") ||
+    tags.includes("dagger") ||
+    tags.includes("sceptre") ||
+    tags.includes("spear") ||
+    tags.includes("flail") ||
+    tags.includes("talisman");
+  if (two) add("two_hand_weapon");
+  if (one || (weapon && !two)) add("one_hand_weapon");
+  if (tags.includes("body_armour") || tags.includes("helmet") || tags.includes("gloves") || tags.includes("boots") || tags.includes("shield") || tags.includes("focus")) add("armour");
+  const props = drop?.props || {};
+  const ar = !!props.armour;
+  const ev = !!props.evasion;
+  const es = !!props.energyShield;
+  if (ar && ev && es) add("str_dex_int_armour");
+  else if (ar && es) add("str_int_armour");
+  else if (ar && ev) add("str_dex_armour");
+  else if (ev && es) add("dex_int_armour");
+  else if (ar) add("str_armour");
+  else if (ev) add("dex_armour");
+  else if (es) add("int_armour");
+  if (tags.includes("shield")) {
+    if (ar && ev) add("str_dex_shield");
+    else if (ar && es) add("str_int_shield");
+    else if (ar) add("str_shield");
+  }
+  add("default");
+  return tags;
+}
+
+function spawnWeight(keys, vals, tags) {
+  const have = new Set(tags || []);
+  const k = keys || [];
+  const w = vals || [];
+  for (let i = 0; i < k.length; i++) {
+    if (have.has(k[i])) return Number(w[i]) || 0;
+  }
+  return 0;
+}
+
+function foldListIndex(list, fold) {
+  const want = foldKeyVariants(fold);
+  for (let i = 0; i < (list || []).length; i++) {
+    if (want.includes(list[i]) || foldKeyVariants(list[i]).some((v) => want.includes(v))) return i;
+  }
+  return -1;
+}
+
+function encodeSpanTiers(tiers) {
+  return (tiers || [])
+    .map((t) => Number(t.lo) + "," + Number(t.hi))
+    .filter((s) => /^-?\d/.test(s))
+    .join(";");
+}
+
+function parseSpanTiers(raw) {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((t) => {
+        const lo = Number(t?.lo);
+        const hi = Number(t?.hi);
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+        return { lo: Math.min(lo, hi), hi: Math.max(lo, hi) };
+      })
+      .filter(Boolean);
+  }
+  return String(raw || "")
+    .split(";")
+    .map((part) => {
+      const bits = part.split(",");
+      const lo = Number(bits[0]);
+      const hi = Number(bits[1]);
+      if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+      return { lo: Math.min(lo, hi), hi: Math.max(lo, hi) };
+    })
+    .filter(Boolean);
+}
+
+function tierPos(tiers, value) {
+  const list = parseSpanTiers(tiers);
+  if (!list.length || !Number.isFinite(value)) return null;
+  for (let i = 0; i < list.length; i++) {
+    const lo = list[i].lo;
+    const hi = list[i].hi;
+    if (value + 0.01 >= lo && value - 0.01 <= hi) return { i, u: hi > lo ? (value - lo) / (hi - lo) : 1 };
+  }
+  if (value > list[0].hi) return { i: 0, u: 1 };
+  if (value < list[list.length - 1].lo) return { i: list.length - 1, u: 0 };
+  let best = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < list.length; i++) {
+    const d = value > list[i].hi ? value - list[i].hi : list[i].lo - value;
+    if (d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  }
+  return { i: best, u: value < list[best].lo ? 0 : 1 };
+}
+
+function mapByTier(fromTiers, value, toTiers) {
+  const to = parseSpanTiers(toTiers);
+  const pos = tierPos(fromTiers, value);
+  if (!pos || !to[pos.i]) return NaN;
+  const t = to[pos.i];
+  return t.lo + pos.u * (t.hi - t.lo);
+}
+
+function rollUsesDecimals(roll) {
+  const nums = [roll?.lo, roll?.hi, roll?.spanLo, roll?.spanHi];
+  for (const t of parseSpanTiers(roll?.spanTiers)) nums.push(t.lo, t.hi);
+  return nums.some((n) => Number.isFinite(n) && Math.abs(n - Math.round(n)) > 0.001);
+}
+
+function snapRollNum(n, roll) {
+  if (!Number.isFinite(n)) return n;
+  return rollUsesDecimals(roll) ? Math.round(n * 10) / 10 : Math.round(n);
+}
+
+function lookupAffixLadder(row, ctx, siblings) {
+  const ladders = typeof window !== "undefined" ? window.AFFIX_LADDERS : null;
+  if (!Array.isArray(ladders) || !ladders.length) return null;
+  const fold = foldAffixRange(row?.text);
+  if (!fold) return null;
+  const sibs = (siblings && siblings.length ? siblings : [row]).map((line) => foldAffixRange(line?.text)).filter(Boolean);
+  const hybrid = sibs.length > 1;
+  const tags = itemPoolTags(ctx);
+  const lo = Number(row?.lo);
+  const hi = Number(row?.hi);
+  let best = null;
+  let bestScore = -1;
+  for (const group of ladders) {
+    const folds = group?.f || [];
+    if (hybrid) {
+      if (folds.length !== sibs.length) continue;
+      if (!sibs.every((line) => foldListIndex(folds, line) >= 0)) continue;
+    } else if (folds.length !== 1 || foldListIndex(folds, fold) < 0) continue;
+    const line = foldListIndex(folds, fold);
+    if (line < 0) continue;
+    const counts = group.n || [];
+    let offset = 0;
+    for (let i = 0; i < line; i++) offset += 2 * (Number(counts[i]) || 1);
+    const pairs = Number(counts[line]) || 1;
+    const eligible = (group.r || []).filter((tier) => spawnWeight(tier.k, tier.w, tags) > 0);
+    if (!eligible.length) continue;
+    let spanLo = Infinity;
+    let spanHi = -Infinity;
+    const extra = [];
+    const brackets = [];
+    for (let p = 1; p < pairs; p++) extra.push({ lo: Infinity, hi: -Infinity });
+    let contained = false;
+    for (const tier of eligible) {
+      const a = tier.a || [];
+      const tLo = a[offset];
+      const tHi = a[offset + 1];
+      if (!Number.isFinite(tLo) || !Number.isFinite(tHi)) continue;
+      spanLo = Math.min(spanLo, tLo);
+      spanHi = Math.max(spanHi, tHi);
+      brackets.push({ lo: Math.min(tLo, tHi), hi: Math.max(tLo, tHi) });
+      if (Number.isFinite(lo) && Number.isFinite(hi) && lo + 0.01 >= tLo && hi - 0.01 <= tHi) contained = true;
+      for (let p = 1; p < pairs; p++) {
+        const eLo = a[offset + p * 2];
+        const eHi = a[offset + p * 2 + 1];
+        if (!Number.isFinite(eLo) || !Number.isFinite(eHi)) continue;
+        extra[p - 1].lo = Math.min(extra[p - 1].lo, eLo);
+        extra[p - 1].hi = Math.max(extra[p - 1].hi, eHi);
+      }
+    }
+    if (!Number.isFinite(spanLo) || !Number.isFinite(spanHi) || !contained) continue;
+    const tiers = brackets.sort((a, b) => b.hi - a.hi || b.lo - a.lo);
+    const score = (contained ? 4 : 0) + (folds.length === sibs.length ? 2 : 0);
+    if (score < bestScore) continue;
+    bestScore = score;
+    best = { spanLo, spanHi, extra, steps: tiers.length, tiers, contained };
+  }
+  return best;
+}
+
+function siblingRolls(rows, row) {
+  if (!row?.hybrid || !row.affix) return [row];
+  return (rows || []).filter((line) => line.affix === row.affix);
+}
+
+function expandRollSpan(row, ctx, siblings) {
+  const lo = Number(row.lo);
+  const hi = Number(row.hi);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return row;
+  function clipExtra() {
+    if (!Array.isArray(row.extra)) return;
+    row.extra = row.extra
+      .map((ex) => {
+        const elo = Number(ex?.lo);
+        const ehi = Number(ex?.hi);
+        if (!Number.isFinite(elo) || !Number.isFinite(ehi) || elo === ehi) return null;
+        return {
+          value: Number.isFinite(ex.value) ? Number(ex.value) : elo,
+          lo: elo,
+          hi: ehi,
+          spanLo: elo,
+          spanHi: ehi,
+        };
+      })
+      .filter(Boolean);
+  }
+  if (!rollHasAffixTiers(row)) {
+    row.spanLo = lo;
+    row.spanHi = hi;
+    delete row.spanSteps;
+    delete row.spanTiers;
+    clipExtra();
+    return row;
+  }
+  const hit = lookupAffixLadder(row, ctx, siblings);
+  if (hit && Number.isFinite(hit.spanLo) && Number.isFinite(hit.spanHi)) {
+    row.spanLo = Math.min(hit.spanLo, lo);
+    row.spanHi = Math.max(hit.spanHi, hi);
+    if (hit.steps > 1) row.spanSteps = hit.steps;
+    else delete row.spanSteps;
+    if (Array.isArray(hit.tiers) && hit.tiers.length) row.spanTiers = hit.tiers;
+    else delete row.spanTiers;
+    if (Array.isArray(row.extra)) {
+      row.extra = row.extra
+        .map((ex, i) => {
+          const elo = Number(ex?.lo);
+          const ehi = Number(ex?.hi);
+          if (!Number.isFinite(elo) || !Number.isFinite(ehi) || elo === ehi) return null;
+          const span = hit.extra?.[i];
+          return {
+            value: Number.isFinite(ex.value) ? Number(ex.value) : elo,
+            lo: elo,
+            hi: ehi,
+            spanLo: span && Number.isFinite(span.lo) ? Math.min(span.lo, elo) : elo,
+            spanHi: span && Number.isFinite(span.hi) ? Math.max(span.hi, ehi) : ehi,
+          };
+        })
+        .filter(Boolean);
+    }
+    return row;
+  }
+  row.spanLo = lo;
+  row.spanHi = hi;
+  delete row.spanSteps;
+  delete row.spanTiers;
+  clipExtra();
+  return row;
+}
+
+function expandRollSpans(rows, ctx) {
+  for (const row of rows || []) expandRollSpan(row, ctx, siblingRolls(rows, row));
+  return rows;
+}
+
+function applyRollSpan(row, raw) {
+  const span = parseRollSpan(raw);
+  if (span) {
+    if (!Number.isFinite(row.lo) || !Number.isFinite(row.hi) || row.lo === row.hi) {
+      row.value = span.value;
+      row.lo = span.lo;
+      row.hi = span.hi;
+      row.spanLo = span.spanLo;
+      row.spanHi = span.spanHi;
+    } else {
+      if (!Number.isFinite(row.value)) row.value = span.value;
+      if (!Number.isFinite(row.spanLo)) row.spanLo = span.spanLo;
+      if (!Number.isFinite(row.spanHi)) row.spanHi = span.spanHi;
+    }
+    if (span.extras?.length) {
+      row.extra = span.extras.map((ex) => ({ value: ex.value, lo: ex.lo, hi: ex.hi }));
+    }
+  }
+  if (!Number.isFinite(row?.lo) || !Number.isFinite(row?.hi) || row.lo === row.hi) return row;
+  if (!Number.isFinite(row.value)) row.value = firstClipboardRoll(row.text);
+  if (!Number.isFinite(row.wantMin)) row.wantMin = Number.isFinite(row.value) ? row.value : row.lo;
+  return row;
+}
+
 function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
-  const out = [];
-  const seen = new Set();
+  const grouped = new Map();
   for (const roll of rolls || []) {
     const raw = rollLineText(roll);
     const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
     const text = stripAdvancedRanges(parseAffixStrings(raw));
     if (!isTradeableRoll(text, kind, roll)) continue;
     const hit = findTradeStat(index, text, kind, { preferLocal: localModApplies(foldTradeMatcher(text), extra) });
-    if (!hit?.id || seen.has(hit.id)) continue;
-    seen.add(hit.id);
+    if (!hit?.id) continue;
     const inverted = invertedTradeRoll(raw);
-    const amount = firstClipboardRoll(raw, inverted);
-    const row = { id: hit.id, text };
+    const amount = Number.isFinite(roll?.wantMin) ? Number(roll.wantMin) : firstClipboardRoll(raw, inverted);
+    const row = grouped.get(hit.id) || { id: hit.id, text, n: 0, option: String(hit.id).includes("|") };
+    row.n += 1;
     if (Number.isFinite(amount)) {
-      if (inverted) row.max = amount;
-      else row.min = amount;
+      if (inverted) {
+        if (!Number.isFinite(row.max) || amount > row.max) row.max = amount;
+      } else if (!Number.isFinite(row.min) || amount < row.min) row.min = amount;
     }
-    out.push(row);
-    if (out.length >= 10) break;
+    grouped.set(hit.id, row);
+    if (grouped.size >= 12) break;
   }
-  const rows = exact ? out : (() => {
-    const rings = out.filter((row) => /bonuses gained from .*ring/i.test(row.text || ""));
-    return rings.length ? rings : out;
-  })();
+  let rows = [...grouped.values()];
+  if (!exact) {
+    const rings = rows.filter((row) => /bonuses gained from .*ring/i.test(row.text || ""));
+    if (rings.length) rows = rings;
+  }
   return rows.map((row) => {
     const next = { id: row.id };
-    if (Number.isFinite(row.min)) next.min = row.min;
-    if (Number.isFinite(row.max)) next.max = row.max;
+    if (row.option && row.n > 1) next.min = row.n;
+    else {
+      if (Number.isFinite(row.min)) next.min = row.min;
+      if (Number.isFinite(row.max)) next.max = row.max;
+    }
     return next;
   });
 }
@@ -1657,10 +2128,11 @@ function rememberPrice(name, divine, listings, icon, amount, unit, source, repla
 
 function toDivine(value, primary) {
   if (!Number.isFinite(value)) return NaN;
-  if (!primary || primary === "divine") return value;
-  if (primary === "exalted") return prices.exaltedPerDivine ? value / prices.exaltedPerDivine : NaN;
-  if (primary === "chaos") return prices.chaosPerDivine ? value / prices.chaosPerDivine : NaN;
-  return value;
+  const unit = tradeUnit(primary);
+  if (!unit || unit === "divine") return value;
+  if (unit === "exalted") return prices.exaltedPerDivine ? value / prices.exaltedPerDivine : NaN;
+  if (unit === "chaos") return prices.chaosPerDivine ? value / prices.chaosPerDivine : NaN;
+  return NaN;
 }
 
 function sparkFromLine(line) {
@@ -1900,8 +2372,15 @@ function formatNum(n) {
 
 function formatAmount(value, unit) {
   if (!Number.isFinite(value)) return "—";
-  const suffix = unit === "exalted" || unit === "ex" ? "ex" : unit === "chaos" || unit === "c" ? "c" : "d";
-  return formatNum(value) + suffix;
+  return formatNum(value) + unitShort(unit);
+}
+
+function unitShort(unit) {
+  const hit = tradeCurrency(unit);
+  if (hit?.short === "d" || hit?.short === "ex" || hit?.short === "c") return hit.short;
+  if (hit?.short) return " " + hit.short;
+  if (!unit) return "d";
+  return " " + String(unit).replace(/-/g, " ");
 }
 
 function allConvertUnits() {
@@ -1933,6 +2412,7 @@ function setConvertMain(unit) {
   state.convertMain = unit;
   save();
   render();
+  paintLivePrices();
 }
 
 function amountInDivine(amount, unit) {
@@ -1951,12 +2431,6 @@ function amountFromDivine(divine, unit) {
   return divine;
 }
 
-function unitShort(unit) {
-  if (unit === "exalted" || unit === "ex") return "ex";
-  if (unit === "chaos" || unit === "c") return "c";
-  return "d";
-}
-
 function unitLabel(unit) {
   if (unit === "exalted") return "Exalt";
   if (unit === "chaos") return "Chaos";
@@ -1969,20 +2443,49 @@ function convertSteps(unit) {
   return [1, 10, 20, 50, 100, 200, 500, 1000];
 }
 
-function formatDivine(divine) {
-  if (!Number.isFinite(divine)) return "—";
+function priceDisplay(divine) {
+  if (!Number.isFinite(divine)) return { label: "—", unit: "divine", amount: NaN };
   const main = convertMain();
-  const converted = amountFromDivine(divine, main);
-  if (Number.isFinite(converted)) return formatAmount(converted, main);
-  if (main !== "exalted" && prices.exaltedPerDivine) return formatAmount(amountFromDivine(divine, "exalted"), "exalted");
-  if (main !== "chaos" && prices.chaosPerDivine) return formatAmount(amountFromDivine(divine, "chaos"), "chaos");
-  return formatAmount(divine, "divine");
+  let unit = main;
+  let amount = amountFromDivine(divine, unit);
+  if (unit === "divine" && divine > 0 && divine < 1) {
+    const ex = amountFromDivine(divine, "exalted");
+    const chaos = amountFromDivine(divine, "chaos");
+    if (Number.isFinite(ex) && ex >= 1) {
+      unit = "exalted";
+      amount = ex;
+    } else if (Number.isFinite(chaos) && chaos >= 1) {
+      unit = "chaos";
+      amount = chaos;
+    } else if (Number.isFinite(ex)) {
+      unit = "exalted";
+      amount = ex;
+    } else if (Number.isFinite(chaos)) {
+      unit = "chaos";
+      amount = chaos;
+    }
+  }
+  if (!Number.isFinite(amount)) {
+    if (unit !== "exalted" && prices.exaltedPerDivine) {
+      unit = "exalted";
+      amount = amountFromDivine(divine, "exalted");
+    } else if (unit !== "chaos" && prices.chaosPerDivine) {
+      unit = "chaos";
+      amount = amountFromDivine(divine, "chaos");
+    } else {
+      unit = "divine";
+      amount = divine;
+    }
+  }
+  return { label: formatAmount(amount, unit), unit, amount };
+}
+
+function formatDivine(divine) {
+  return priceDisplay(divine).label;
 }
 
 function currencyNameForUnit(unit) {
-  if (unit === "exalted" || unit === "ex") return "Exalted Orb";
-  if (unit === "chaos" || unit === "c") return "Chaos Orb";
-  return "Divine Orb";
+  return tradeCurrency(unit).name;
 }
 
 function valueFromAmount(amount, unit) {
@@ -1991,8 +2494,8 @@ function valueFromAmount(amount, unit) {
 }
 
 function rowValueHtml(row) {
-  if (row?.unit && Number.isFinite(row.amount)) return valueFromAmount(row.amount, row.unit);
-  return valueHtml(row?.divine);
+  const divine = Number.isFinite(row?.divine) ? row.divine : toDivine(row?.amount, row?.unit);
+  return valueHtml(divine);
 }
 
 function itemHoverAttr(name) {
@@ -2011,10 +2514,7 @@ function itemNameHtml(name, size) {
 }
 
 function currencyForAmount(divine) {
-  const label = formatDivine(divine);
-  if (label.endsWith("ex")) return "Exalted Orb";
-  if (label.endsWith("c")) return "Chaos Orb";
-  return "Divine Orb";
+  return currencyNameForUnit(priceDisplay(divine).unit);
 }
 
 function hitDivine(hit) {
@@ -2052,9 +2552,9 @@ function paintLivePrices() {
 }
 
 function valueHtml(divine) {
-  const name = currencyForAmount(divine);
-  const label = formatDivine(divine);
-  return `<span class="value-with-icon" ${itemHoverAttr(name)}>${itemIconHtml(name)}${esc(label)}</span>`;
+  const shown = priceDisplay(divine);
+  const name = currencyNameForUnit(shown.unit);
+  return `<span class="value-with-icon" ${itemHoverAttr(name)}>${itemIconHtml(name)}${esc(shown.label)}</span>`;
 }
 
 function srcLabel(hit) {
@@ -2156,11 +2656,56 @@ function uniquePricedHits(map = prices.byName) {
   return rows;
 }
 
+function sparkLen(spark) {
+  return sparkPoints(spark?.data).length;
+}
+
+function mergeSpark(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const pick = sparkLen(b) > sparkLen(a) ? b : a;
+  const change = Number.isFinite(Number(b?.change)) ? Number(b.change) : Number(a?.change);
+  return {
+    change: Number.isFinite(change) ? change : 0,
+    data: Array.isArray(pick?.data) ? pick.data : [],
+  };
+}
+
+function mergeTableRows(oldRows, newRows) {
+  const map = new Map();
+  const keyOf = (row) => `${row?.type || ""}::${row?.ninjaId ?? ""}::${priceKey(row?.name || "")}`;
+  for (const row of oldRows || []) {
+    if (!row?.name) continue;
+    map.set(keyOf(row), row);
+  }
+  for (const row of newRows || []) {
+    if (!row?.name) continue;
+    const key = keyOf(row);
+    const prev = map.get(key);
+    if (!prev) {
+      map.set(key, row);
+      continue;
+    }
+    map.set(key, { ...prev, ...row, spark: mergeSpark(prev.spark, row.spark) });
+  }
+  return [...map.values()];
+}
+
+function mergeTables(prev, next) {
+  if (!next || !Object.keys(next).length) return prev && typeof prev === "object" ? prev : {};
+  if (!prev || !Object.keys(prev).length) return next;
+  const out = { ...prev };
+  for (const [type, rows] of Object.entries(next)) {
+    out[type] = mergeTableRows(prev[type], rows);
+  }
+  return out;
+}
+
 function compactSpark(spark, mode = "short") {
   const change = Number(spark?.change);
   const compactChange = Number.isFinite(change) ? Number(change.toFixed(4)) : 0;
   if (mode === "bare" || mode === "change") return { change: compactChange, data: [] };
-  const data = Array.isArray(spark?.data) ? spark.data.slice(-8) : [];
+  const data = Array.isArray(spark?.data) ? spark.data.slice(-14) : [];
   return {
     change: compactChange,
     data: data.map((v) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(Number(v).toFixed(3)))),
@@ -2278,7 +2823,7 @@ function mergeLeagueEntry(prev, next) {
     ...prev,
     ...next,
     items: mergePriceRows(prev.items, next.items),
-    tables: { ...(prev.tables || {}), ...(next.tables || {}) },
+    tables: mergeTables(prev.tables, next.tables),
     empty: [...new Set([...(prev.empty || []), ...(next.empty || [])])],
     fetchedAt: Math.max(Number(prev.fetchedAt) || 0, Number(next.fetchedAt) || 0),
     exaltedPerDivine: Number(next.exaltedPerDivine) || Number(prev.exaltedPerDivine) || 0,
@@ -2297,7 +2842,6 @@ function catalogCacheEntry() {
     exaltedPerDivine: prices.exaltedPerDivine,
     chaosPerDivine: prices.chaosPerDivine,
     items: items.length ? items : catalogPriceRows(),
-    tables: compactPriceTables(prices.tables, "bare"),
     empty: [...prices.checkedEmpty],
   };
 }
@@ -2381,6 +2925,16 @@ function persistCatalogCache() {
   writePriceDisk({ version: 3, leagues });
 }
 
+function persistEconomyDisk(entry) {
+  if (!entry?.tables || !Object.keys(entry.tables).length) return;
+  const local = readBossPriceStore();
+  const diskLeagues = catalogDiskStore?.leagues && typeof catalogDiskStore.leagues === "object" ? catalogDiskStore.leagues : {};
+  const prev = local.leagues?.[entry.league] || diskLeagues[entry.league];
+  const merged = mergeLeagueEntry(prev, entry);
+  if (!priceStoreHasData(merged)) return;
+  writePriceDisk({ version: 3, leagues: prunePriceLeagues({ ...local.leagues, ...diskLeagues, [entry.league]: merged }) });
+}
+
 function hydrateFromDump(dump, cached = true) {
   if (!dump) return false;
   const items = Array.isArray(dump.items) ? dump.items : [];
@@ -2388,13 +2942,13 @@ function hydrateFromDump(dump, cached = true) {
   const tableRows = Object.values(tables).flatMap((rows) => (Array.isArray(rows) ? rows : []));
   const hasItems = items.length > 0 || tableRows.some((row) => pricedHit(row));
   if (!hasItems && !(Number(dump.exaltedPerDivine) > 0) && !Object.keys(tables).length) return false;
-  if (Object.keys(tables).length) prices.tables = { ...prices.tables, ...tables };
+  if (Object.keys(tables).length) prices.tables = mergeTables(prices.tables, tables);
   if (dump.primary) prices.primary = dump.primary;
   if (Number(dump.exaltedPerDivine) > 0) prices.exaltedPerDivine = Number(dump.exaltedPerDivine);
   if (Number(dump.chaosPerDivine) > 0) prices.chaosPerDivine = Number(dump.chaosPerDivine);
   if (dump.league) prices.league = dump.league;
   if (Number(dump.fetchedAt) > (prices.fetchedAt || 0)) prices.fetchedAt = Number(dump.fetchedAt);
-  if (Number(dump.nextAt) > 0) prices.nextAt = Number(dump.nextAt);
+  prices.nextAt = ninjaNextAt(prices.fetchedAt);
   prices.cached = true;
   prices.status = "ready";
   prices.error = "";
@@ -2468,21 +3022,25 @@ function persistPrices() {
     { items, sparkMode: "none" },
     { items: catalogItems, sparkMode: "none" },
   ];
+  let sparkEntry = null;
   for (const attempt of attempts) {
     const entry = {
       ...base,
       items: attempt.items,
       tables: attempt.sparkMode === "none" ? {} : compactPriceTables(prices.tables, attempt.sparkMode),
     };
+    if (attempt.sparkMode === "short") sparkEntry = entry;
     const leagues = prunePriceLeagues({ ...store.leagues, [league]: mergeLeagueEntry(store.leagues[league], entry) });
     try {
       localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify({ version: 2, leagues }));
+      if (sparkEntry) persistEconomyDisk(sparkEntry);
       persistCatalogCache();
       return;
     } catch {
       /* quota — try a smaller payload */
     }
   }
+  if (sparkEntry) persistEconomyDisk(sparkEntry);
   persistCatalogCache();
 }
 
@@ -2506,15 +3064,14 @@ function hydratePriceCache() {
       const tables = dump.tables && typeof dump.tables === "object" ? dump.tables : {};
       const tableRows = Object.values(tables).flatMap((rows) => (Array.isArray(rows) ? rows : []));
       if (!prices.byName.size) {
-        prices.tables = tables;
-        prices.history = {};
+        prices.tables = mergeTables(prices.tables, tables);
         bustPriceLookup();
         prices.primary = dump.primary || "divine";
         prices.exaltedPerDivine = Number(dump.exaltedPerDivine) || 0;
         prices.chaosPerDivine = Number(dump.chaosPerDivine) || 0;
         prices.league = dump.league || leagueId();
         prices.fetchedAt = Number(dump.fetchedAt) || 0;
-        prices.nextAt = Number(dump.nextAt) || 0;
+        prices.nextAt = ninjaNextAt(prices.fetchedAt);
         prices.cached = true;
         prices.status = "ready";
         prices.error = "";
@@ -2566,9 +3123,7 @@ function restoreCachedMisses(oldMap) {
 
 function restoreCachedTables(oldTables) {
   if (!oldTables) return;
-  for (const [type, rows] of Object.entries(oldTables)) {
-    if (!prices.tables[type] && Array.isArray(rows) && rows.length) prices.tables[type] = rows;
-  }
+  prices.tables = mergeTables(oldTables, prices.tables);
 }
 
 function formatCountdown(ms) {
@@ -2580,8 +3135,8 @@ function formatCountdown(ms) {
 
 function ninjaLiveLabel() {
   if (prices.status === "loading") return "live check";
-  const due = prices.nextAt || (prices.fetchedAt ? prices.fetchedAt + PRICE_REFRESH_MS : 0);
-  if (!due) return "live on boot";
+  const due = prices.nextAt || ninjaNextAt();
+  if (!due) return "live on the hour";
   const ms = due - Date.now();
   if (ms <= 0) return "live · next soon";
   return "live · next " + formatCountdown(ms);
@@ -2591,7 +3146,7 @@ function paintPriceClock() {
   const el = document.getElementById("price-clock-time");
   const clock = document.getElementById("price-clock");
   if (clock) {
-    clock.title = "poe.ninja prices load on launch, then every hour. Click to refresh now. F7 overlay uses PoE 2 trade only.";
+    clock.title = "poe.ninja updates on the hour. Click to refresh now. F7 overlay uses PoE 2 trade only.";
   }
   const live = document.getElementById("econ-live");
   if (live) {
@@ -2608,7 +3163,7 @@ function paintPriceClock() {
     text = total ? `Boss prices ${done}/${total}` : "Checking listings…";
     if (tradeWaiting()) text += " · waiting";
   } else if (prices.looking.size) text = prices.looking.size ? `Listings ${prices.looking.size}…` : "Checking listings…";
-  else if (prices.fetchedAt) text = (prices.cached ? "Last recorded " : "Checked ") + formatWhen(prices.fetchedAt);
+  else if (prices.fetchedAt) text = (prices.cached ? "Last recorded " : "As of ") + formatHour(prices.fetchedAt);
   else if (prices.byName.size) text = "Last recorded";
   if (el.textContent !== text) el.textContent = text;
 }
@@ -2675,7 +3230,7 @@ async function refreshPrices(force = false) {
     linkCatalogPrices();
     prices.league = league;
     prices.fetchedAt = Date.now();
-    prices.nextAt = Date.now() + PRICE_REFRESH_MS;
+    prices.nextAt = ninjaNextAt(prices.fetchedAt);
     prices.cached = false;
     prices.status = "ready";
     prices.checkedEmpty = new Set();
@@ -2724,8 +3279,7 @@ function pricesHaveBeenSeeded() {
 
 function ninjaPricesDue() {
   if (!prices.fetchedAt || !prices.byName.size) return true;
-  if (prices.nextAt) return Date.now() >= prices.nextAt;
-  return Date.now() - prices.fetchedAt >= PRICE_REFRESH_MS;
+  return hourStamp(prices.fetchedAt) < hourStamp();
 }
 
 function maybeRefreshNinja() {
@@ -2740,6 +3294,11 @@ function kickFirstPriceCheck() {
   maybeRefreshNinja.enabled = true;
   if (!window.chrome?.webview) return;
   if (prices.status === "loading" || prices.filling) return;
+  if (!ninjaPricesDue()) {
+    prices.nextAt = ninjaNextAt();
+    paintPriceClock();
+    return;
+  }
   refreshPrices(false);
 }
 
@@ -2759,12 +3318,75 @@ function dashboardPriceNames() {
   return names;
 }
 
+function tradeCurrency(unit) {
+  const c = String(unit || "")
+    .toLowerCase()
+    .replace(/_/g, "-")
+    .trim();
+  const rows = {
+    divine: { name: "Divine Orb", short: "d" },
+    exalted: { name: "Exalted Orb", short: "ex" },
+    chaos: { name: "Chaos Orb", short: "c" },
+    regal: { name: "Regal Orb", short: "regal" },
+    alchemy: { name: "Orb of Alchemy", short: "alch" },
+    transmutation: { name: "Orb of Transmutation", short: "transmute" },
+    augmentation: { name: "Orb of Augmentation", short: "aug" },
+    chance: { name: "Orb of Chance", short: "chance" },
+    vaal: { name: "Vaal Orb", short: "vaal" },
+    annul: { name: "Annulment Orb", short: "annul" },
+    annulment: { name: "Annulment Orb", short: "annul" },
+    mirror: { name: "Mirror of Kalandra", short: "mirror" },
+    blessed: { name: "Blessed Orb", short: "blessed" },
+    jewellers: { name: "Jeweller's Orb", short: "jeweller" },
+    gcp: { name: "Gemcutter's Prism", short: "gcp" },
+    gemcutter: { name: "Gemcutter's Prism", short: "gcp" },
+    "gemcutters-prism": { name: "Gemcutter's Prism", short: "gcp" },
+    bauble: { name: "Glassblower's Bauble", short: "bauble" },
+    "glassblowers-bauble": { name: "Glassblower's Bauble", short: "bauble" },
+    artificers: { name: "Artificer's Orb", short: "artificer" },
+    "artificers-orb": { name: "Artificer's Orb", short: "artificer" },
+    whetstone: { name: "Blacksmith's Whetstone", short: "whetstone" },
+    "blacksmiths-whetstone": { name: "Blacksmith's Whetstone", short: "whetstone" },
+    armourers: { name: "Armourer's Scrap", short: "scrap" },
+    "armourers-scrap": { name: "Armourer's Scrap", short: "scrap" },
+    etcher: { name: "Arcanist's Etcher", short: "etcher" },
+    "arcanists-etcher": { name: "Arcanist's Etcher", short: "etcher" },
+    wisdom: { name: "Scroll of Wisdom", short: "wisdom" },
+    "scroll-of-wisdom": { name: "Scroll of Wisdom", short: "wisdom" },
+  };
+  if (rows[c]) return rows[c];
+  if (c.startsWith("divine")) return rows.divine;
+  if (c.startsWith("exalt")) return rows.exalted;
+  if (c.startsWith("chaos")) return rows.chaos;
+  if (c.includes("regal")) return rows.regal;
+  if (c.includes("alch")) return rows.alchemy;
+  if (c.includes("transmute") || c.includes("transmutation")) return rows.transmutation;
+  if (c.includes("augment")) return rows.augmentation;
+  if (c.includes("annul")) return rows.annul;
+  if (c.includes("vaal")) return rows.vaal;
+  if (c.includes("mirror")) return rows.mirror;
+  if (c.includes("jeweller")) return rows.jewellers;
+  if (!c) return rows.divine;
+  const label = c
+    .replace(/-orb$/, "")
+    .replace(/-/g, " ")
+    .replace(/\b\w/g, (ch) => ch.toUpperCase());
+  const name = /orb|mirror|omen|prism|scrap|bauble|etcher|whetstone|wisdom/i.test(label) ? label : label + " Orb";
+  return { name, short: c.replace(/-orb$/, "").replace(/-/g, " ") };
+}
+
 function tradeUnit(currency) {
   const c = String(currency || "").toLowerCase();
+  if (!c) return "";
   if (c === "divine" || c.startsWith("divine")) return "divine";
   if (c.startsWith("exalt")) return "exalted";
   if (c.startsWith("chaos")) return "chaos";
   return c;
+}
+
+function quoteCurrencyName(quote) {
+  if (quote?.unit) return tradeCurrency(quote.unit).name;
+  return currencyForAmount(quote?.divine);
 }
 
 function sleep(ms) {
@@ -3274,7 +3896,8 @@ function parsePoeItem(text) {
   const corrupted =
     /^\s*(Corrupted|Twice Corrupted|Double Corrupted|Unmodifiable)\s*$/im.test(raw) ||
     /\{[^}]*Corruption Enhancement/i.test(raw);
-  const parsedMods = parseClipboardMods(blocks.slice(1), rarity, corrupted, name, baseType);
+  const props = parseLocalProps(raw);
+  const parsedMods = parseClipboardMods(blocks.slice(1), rarity, corrupted, name, baseType, className, props);
   const mods = parsedMods.mods;
   const ravenTouched =
     parsedMods.ravenTouched || /raven-?touched/i.test(parseAffixStrings(raw).replace(/[\u2010-\u2015]/g, "-"));
@@ -3285,9 +3908,10 @@ function parsePoeItem(text) {
   const sock = raw.match(/^Sockets:\s*(.+)$/im);
   if (sock) runeSockets = (sock[1].match(/S/gi) || []).length;
   runeSockets = Math.max(runeSockets, runeMods);
-  const props = parseLocalProps(raw);
+  const charmHit = raw.match(/^Charm Slots:\s*(\d+)/im);
+  const charmSlots = charmHit ? Math.max(0, Number(charmHit[1]) || 0) : 0;
   const isCorrupted = corrupted || mods.some((mod) => canonicalRollKind(mod.kind) === "corrupt");
-  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, ravenTouched, mods, usesRemaining, runeSockets, props };
+  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, ravenTouched, mods, usesRemaining, runeSockets, charmSlots, props };
 }
 
 function canonicalRollKind(kind) {
@@ -3303,6 +3927,13 @@ function isBaseModKind(kind) {
 function rollSlot(roll) {
   const s = String(roll && typeof roll === "object" ? roll.slot : "").toLowerCase();
   return s === "prefix" || s === "suffix" ? s : "";
+}
+
+function rollHasAffixTiers(roll) {
+  if (roll?.unique || roll?.ghost) return false;
+  const kind = canonicalRollKind(roll?.kind);
+  if (kind === "corrupt" || kind === "implicit" || kind === "enchant" || kind === "rune" || kind === "skill") return false;
+  return !!rollSlot(roll);
 }
 
 function parseModInfoLine(rawLine) {
@@ -3325,7 +3956,7 @@ function parseModInfoLine(rawLine) {
   if (/\b(?:added )?augment modifier\b/i.test(inner) || /\brune modifier\b/i.test(inner) || /^(?:rune|augment|added augment)\b/i.test(inner)) {
     return { kind: "rune", slot: "", tier, unique: false };
   }
-  if (/\bunique modifier\b/i.test(inner)) return { kind: "explicit", slot: "", tier, unique: true };
+  if (/\b(?:vaal )?unique modifier\b/i.test(inner)) return { kind: "explicit", slot: "", tier: 0, unique: true };
   if (/\bexplicit modifier\b/i.test(inner) || /^explicit\b/i.test(inner)) return { kind: "explicit", slot: "", tier, unique: false };
   return { kind: "explicit", slot: "", tier, unique: false };
 }
@@ -3338,8 +3969,10 @@ function kindFromLineTag(rawLine) {
   return "";
 }
 
-function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase = "") {
+function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase = "", className = "", props = null) {
   if (/^(currency|gem|divination card)$/i.test(rarity)) return { mods: [], ravenTouched: false };
+  const charm = /charm/i.test(className);
+  const uniqueItem = /unique/i.test(String(rarity || ""));
   const groups = [];
   let affix = 0;
   let afterFooter = false;
@@ -3393,6 +4026,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         affix: sawHeader ? headerAffix : 0,
         tier: sawHeader ? sectionTier : 0,
         unique: sawHeader ? sectionUnique : false,
+        charm,
       });
     }
     let seenSlot = false;
@@ -3401,6 +4035,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       else if (
         !seenSlot &&
         !mod.unique &&
+        !uniqueItem &&
         canonicalRollKind(mod.kind) === "explicit" &&
         !rollSlot(mod) &&
         !isAllocatesRoll(mod.text) &&
@@ -3424,7 +4059,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
   if (cut > 0) {
     for (let i = 0; i < cut; i++) {
       for (const mod of groups[i]) {
-        if (mod.unique || canonicalRollKind(mod.kind) !== "explicit" || rollSlot(mod)) continue;
+        if (uniqueItem || mod.unique || canonicalRollKind(mod.kind) !== "explicit" || rollSlot(mod)) continue;
         if (isAllocatesRoll(mod.text) || isGrantedSkillRoll(mod.text)) continue;
         mod.kind = corrupted ? "corrupt" : "implicit";
       }
@@ -3438,7 +4073,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       if (group === last) continue;
       if (!corrupted && group !== modGroups[0]) continue;
       for (const mod of group) {
-        if (mod.unique || isAllocatesRoll(mod.text) || isGrantedSkillRoll(mod.text)) continue;
+        if (uniqueItem || mod.unique || isAllocatesRoll(mod.text) || isGrantedSkillRoll(mod.text)) continue;
         mod.kind = "implicit";
       }
     }
@@ -3447,8 +4082,12 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
   for (const mod of flat) {
     if (isGrantedSkillRoll(mod.text)) mod.kind = "skill";
     if (isAllocatesRoll(mod.text) && !rollSlot(mod)) mod.kind = "enchant";
+    if (uniqueItem && canonicalRollKind(mod.kind) === "explicit" && !rollSlot(mod)) {
+      mod.unique = true;
+      mod.tier = 0;
+    }
   }
-  return { mods: cleanClipboardRolls(flat), ravenTouched };
+  return { mods: cleanClipboardRolls(flat, { className, props }), ravenTouched };
 }
 
 function parseAffixStrings(text) {
@@ -3473,7 +4112,7 @@ function isUsefulRoll(text, kind, extra) {
   if (/^you cannot use this item/i.test(t)) return false;
   if (/stats will be ignored/i.test(t)) return false;
   if (/^place into an item socket/i.test(t)) return false;
-  if (/^used when you/i.test(t)) return false;
+  if (/^used when you/i.test(t) && !extra?.charm) return false;
   if (/^right click/i.test(t)) return false;
   if (/^this item can be anointed/i.test(t)) return false;
   if (/^can have up to/i.test(t)) return false;
@@ -3499,6 +4138,32 @@ function keepRollMeta(roll, text, kind, slot, pick) {
   if (Number.isInteger(roll?.affix) && roll.affix > 0) row.affix = roll.affix;
   if (Number(roll?.tier) > 0) row.tier = Number(roll.tier);
   if (roll?.unique) row.unique = true;
+  if (roll?.charm) row.charm = true;
+  if (Number.isInteger(roll?.rid) && roll.rid > 0) row.rid = roll.rid;
+  if (Number.isFinite(roll?.lo) && Number.isFinite(roll?.hi) && roll.lo !== roll.hi) {
+    row.lo = Number(roll.lo);
+    row.hi = Number(roll.hi);
+    row.value = Number.isFinite(roll.value) ? Number(roll.value) : firstClipboardRoll(text);
+    row.wantMin = Number.isFinite(roll.wantMin) ? Number(roll.wantMin) : row.value;
+    if (Number.isFinite(roll.spanLo)) row.spanLo = Number(roll.spanLo);
+    if (Number.isFinite(roll.spanHi)) row.spanHi = Number(roll.spanHi);
+    if (Number(roll.spanSteps) > 1) row.spanSteps = Number(roll.spanSteps);
+    const tiers = parseSpanTiers(roll.spanTiers);
+    if (tiers.length) row.spanTiers = tiers;
+    if (Array.isArray(roll.extra) && roll.extra.length) {
+      row.extra = roll.extra
+        .map((ex) => {
+          const lo = Number(ex?.lo);
+          const hi = Number(ex?.hi);
+          if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) return null;
+          const next = { lo, hi, value: Number.isFinite(ex.value) ? Number(ex.value) : lo };
+          if (Number.isFinite(ex.spanLo)) next.spanLo = Number(ex.spanLo);
+          if (Number.isFinite(ex.spanHi)) next.spanHi = Number(ex.spanHi);
+          return next;
+        })
+        .filter(Boolean);
+    }
+  }
   return row;
 }
 
@@ -3515,26 +4180,27 @@ function markHybridRolls(rows) {
   return rows;
 }
 
-function cleanClipboardRolls(mods) {
+function cleanClipboardRolls(mods, ctx) {
   const out = [];
-  const seen = new Set();
+  let rid = 0;
   for (const mod of mods || []) {
     const kind = canonicalRollKind(mod && typeof mod === "object" ? mod.kind : "");
     const slot = rollSlot(mod);
+    const raw = rollLineText(mod) || String(mod || "");
     const text = stripAdvancedRanges(
-      parseAffixStrings(rollLineText(mod) || String(mod || ""))
+      parseAffixStrings(raw)
         .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune)\)/gi, "")
         .replace(/\s+/g, " ")
         .trim()
     );
     if (!isUsefulRoll(text, kind, mod)) continue;
-    const key = kind + ":" + slot + ":" + (mod?.affix || "") + ":" + text.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(keepRollMeta(mod, text, kind, slot, false));
-    if (out.length >= 24) break;
+    const row = keepRollMeta(mod, text, kind, slot, false);
+    row.rid = ++rid;
+    applyRollSpan(row, raw);
+    out.push(row);
+    if (out.length >= 32) break;
   }
-  return markHybridRolls(out);
+  return expandRollSpans(markHybridRolls(out), ctx);
 }
 
 function shortRoll(text) {
@@ -3573,21 +4239,26 @@ function rollLineText(roll) {
   return typeof roll === "string" ? roll : roll?.text || "";
 }
 
-function normalizeRolls(rolls) {
+function normalizeRolls(rolls, ctx) {
   const out = [];
-  const seen = new Set();
+  let rid = 0;
+  for (const roll of rolls || []) {
+    if (Number.isInteger(roll?.rid) && roll.rid > rid) rid = roll.rid;
+  }
   for (const roll of rolls || []) {
     const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
     const slot = rollSlot(roll);
-    const text = stripAdvancedRanges(parseAffixStrings(rollLineText(roll)));
+    const raw = rollLineText(roll);
+    const text = stripAdvancedRanges(parseAffixStrings(raw));
     if (!isUsefulRoll(text, kind, roll)) continue;
-    const key = kind + ":" + slot + ":" + (roll?.affix || "") + ":" + text.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(keepRollMeta(roll, text, kind, slot, !!(roll && typeof roll === "object" && roll.pick)));
-    if (out.length >= 24) break;
+    const row = keepRollMeta(roll, text, kind, slot, !!(roll && typeof roll === "object" && roll.pick));
+    if (!Number.isInteger(row.rid) || row.rid < 1) row.rid = ++rid;
+    else if (row.rid > rid) rid = row.rid;
+    applyRollSpan(row, raw);
+    out.push(row);
+    if (out.length >= 32) break;
   }
-  return markHybridRolls(out);
+  return expandRollSpans(markHybridRolls(out), ctx);
 }
 
 function tabletUsesText(drop) {
@@ -3619,12 +4290,12 @@ function withTabletUsesRoll(drop, rolls) {
 }
 
 function pickedRolls(drop) {
-  const rolls = withTabletUsesRoll(drop, normalizeRolls(drop?.rolls)).filter((roll) => roll.pick);
+  const rolls = withTabletUsesRoll(drop, normalizeRolls(drop?.rolls, drop)).filter((roll) => roll.pick);
   return rolls;
 }
 
 function inspectRolls(drop) {
-  const rolls = normalizeRolls(drop?.rolls);
+  const rolls = normalizeRolls(drop?.rolls, drop);
   let list = rolls;
   if (!rolls.some((roll) => {
     const kind = canonicalRollKind(roll.kind);
@@ -3715,16 +4386,31 @@ function handleOverlayClick(msg) {
     setDropRunePick(log, drop, msg.pickRunes);
     return;
   }
-  if (msg.pickText || msg.pickAffix) {
+  if (msg.pickProp) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    togglePickProp(log, drop, msg.pickProp);
+    return;
+  }
+  if (msg.spanRid) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    const live = msg.spanLive === true || msg.spanLive === "true";
+    setRollWantMin(log, drop, msg.spanRid, msg.spanMin, live);
+    return;
+  }
+  if (msg.pickRid || msg.pickText || msg.pickAffix) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    if (msg.pickRid) {
+      toggleInspectRoll(log, drop, msg.pickText, msg.pickKind, msg.pickRid);
+      return;
+    }
     if (msg.pickText) {
       toggleInspectRoll(log, drop, msg.pickText, msg.pickKind);
       return;
     }
     if (!drop) return;
-    drop.rolls = normalizeRolls(drop.rolls);
+    drop.rolls = normalizeRolls(drop.rolls, drop);
     const row = drop.rolls.find((roll) => String(roll.affix) === String(msg.pickAffix));
-    if (row) toggleInspectRoll(log, drop, row.text, row.kind);
+    if (row) toggleInspectRoll(log, drop, row.text, row.kind, row.rid);
     return;
   }
   if (msg.quoteDrop) {
@@ -3863,7 +4549,7 @@ function submitFeedback(form, via = "send") {
     });
 }
 
-function rollKindLabel(roll) {
+function rollKindLabel(roll, tierOverride) {
   if (roll?.ghost) return "Typical";
   const kind = canonicalRollKind(roll?.kind);
   let tag = "";
@@ -3877,8 +4563,8 @@ function rollKindLabel(roll) {
     if (slot === "prefix") tag = "Prefix";
     else if (slot === "suffix") tag = "Suffix";
   }
-  const tier = Number(roll?.tier);
-  if (tag && tier > 0) tag += " T" + tier;
+  const tier = Number.isInteger(tierOverride) && tierOverride > 0 ? tierOverride : Number(roll?.tier);
+  if (tag && tier > 0 && !roll?.unique && (rollHasAffixTiers(roll) || kind === "corrupt")) tag += " T" + tier;
   if (tag && roll?.hybrid) tag += " · hyb";
   return tag;
 }
@@ -3902,10 +4588,116 @@ function overlayModText(roll) {
   return text;
 }
 
+function formatRollNum(n, step) {
+  if (!Number.isFinite(n)) return "";
+  if (step === "0.1") return String(Math.round(n * 10) / 10);
+  return String(Math.round(n));
+}
+
+function extraLiveValue(roll, extra) {
+  const lo = Number.isFinite(roll?.spanLo) ? Number(roll.spanLo) : Number(roll?.lo);
+  const hi = Number.isFinite(roll?.spanHi) ? Number(roll.spanHi) : Number(roll?.hi);
+  const v = overlayLiveValue(roll);
+  const elo = Number.isFinite(extra?.spanLo) ? Number(extra.spanLo) : Number(extra?.lo);
+  const ehi = Number.isFinite(extra?.spanHi) ? Number(extra.spanHi) : Number(extra?.hi);
+  if (!Number.isFinite(v) || !(hi > lo) || !(ehi > elo)) return Number.isFinite(extra?.value) ? Number(extra.value) : elo;
+  const n = elo + ((v - lo) / (hi - lo)) * (ehi - elo);
+  if (String(elo).includes(".") || String(ehi).includes(".")) return Math.round(n * 10) / 10;
+  return Math.round(n);
+}
+
+function overlayLiveValue(roll) {
+  const lo = Number.isFinite(roll?.spanLo) ? Number(roll.spanLo) : Number(roll?.lo);
+  const hi = Number.isFinite(roll?.spanHi) ? Number(roll.spanHi) : Number(roll?.hi);
+  const v = Number.isFinite(roll?.wantMin) ? Number(roll.wantMin) : Number.isFinite(roll?.value) ? Number(roll.value) : lo;
+  if (!Number.isFinite(v)) return NaN;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return snapRollNum(v, roll);
+  return snapRollNum(Math.min(hi, Math.max(lo, v)), roll);
+}
+
+function overlayModTextHtml(roll) {
+  const text = overlayModText(roll);
+  const n = overlayLiveValue(roll);
+  if (!Number.isFinite(n) || !Number.isFinite(roll?.lo) || roll.lo === roll.hi) return esc(text);
+  const extras = Array.isArray(roll.extra) ? roll.extra : [];
+  const values = [n, ...extras.map((ex) => extraLiveValue(roll, ex))];
+  const rid = Number.isInteger(roll.rid) && roll.rid > 0 ? String(roll.rid) : "";
+  const re = /([+-]?)(\d+(?:\.\d+)?)/g;
+  let out = "";
+  let last = 0;
+  let i = 0;
+  let hit;
+  while (i < values.length && (hit = re.exec(text))) {
+    const shown = formatRollNum(values[i], rollUsesDecimals(roll) ? "0.1" : "1");
+    out += esc(text.slice(last, hit.index)) + esc(hit[1] || "");
+    if (i === 0) {
+      const lo = Number.isFinite(roll.spanLo) ? Number(roll.spanLo) : Number(roll.lo);
+      const hi = Number.isFinite(roll.spanHi) ? Number(roll.spanHi) : Number(roll.hi);
+      const tiers = encodeSpanTiers(parseSpanTiers(roll.spanTiers));
+      const tierAttr = tiers ? ` data-span-tiers="${esc(tiers)}"` : "";
+      out += `<b data-roll-live="${esc(rid)}" data-span-lo="${lo}" data-span-hi="${hi}"${tierAttr}>${esc(shown)}</b>`;
+    }
+    else {
+      const ex = extras[i - 1];
+      const elo = Number.isFinite(ex?.spanLo) ? Number(ex.spanLo) : Number(ex?.lo);
+      const ehi = Number.isFinite(ex?.spanHi) ? Number(ex.spanHi) : Number(ex?.hi);
+      out += `<b data-roll-extra="${esc(rid)}" data-extra-lo="${elo}" data-extra-hi="${ehi}">${esc(shown)}</b>`;
+    }
+    last = hit.index + hit[0].length;
+    i += 1;
+  }
+  if (!i) return esc(text);
+  return out + esc(text.slice(last));
+}
+
+function rollTierWidth(roll) {
+  const w = Number(roll?.hi) - Number(roll?.lo);
+  return Number.isFinite(w) && w > 0 ? w : 1;
+}
+
+function rollTierAtValue(roll, value) {
+  const tiers = parseSpanTiers(roll?.spanTiers);
+  if (tiers.length && Number.isFinite(value)) {
+    for (let i = 0; i < tiers.length; i++) {
+      if (value + 0.01 >= tiers[i].lo && value - 0.01 <= tiers[i].hi) return i + 1;
+    }
+    if (value > tiers[0].hi) return 1;
+    return tiers.length;
+  }
+  const t0 = Number(roll?.tier);
+  if (!(t0 > 0) || !Number.isFinite(value)) return 0;
+  const v0 = Number.isFinite(roll.value) ? Number(roll.value) : Number(roll.lo);
+  return Math.max(1, Math.round(t0 - (value - v0) / rollTierWidth(roll)));
+}
+
 function canHaveRunes(drop) {
-  if (/currency|gem|divination/i.test(drop?.rarity || "")) return false;
-  if (/currency|gem|divination/i.test(drop?.className || "")) return false;
+  if (/currency|gem|divination|charm|flask|jewel|belt|amulet|ring|waystone|tablet|relic|map/i.test(drop?.rarity || "")) return false;
+  if (/currency|gem|divination|charm|flask|jewel|belt|amulet|ring|waystone|tablet|relic|map|socketable|omen/i.test(drop?.className || "")) return false;
   return true;
+}
+
+function isCharmItem(drop) {
+  return /charm/i.test(drop?.className || "");
+}
+
+function isBeltItem(drop) {
+  return /belt/i.test(drop?.className || "");
+}
+
+function isCharmSlotRoll(roll) {
+  return /^has\b.+\bcharm slots?\b/i.test(String(roll?.text || ""));
+}
+
+function charmSlotBounds(drop) {
+  const roll = (drop?.rolls || []).find(isCharmSlotRoll);
+  const value = Number.isFinite(roll?.value)
+    ? Number(roll.value)
+    : Number.isInteger(drop?.charmSlots) && drop.charmSlots > 0
+      ? drop.charmSlots
+      : 0;
+  const lo = Number.isFinite(roll?.spanLo) ? Number(roll.spanLo) : Number.isFinite(roll?.lo) ? Number(roll.lo) : 1;
+  const hi = Number.isFinite(roll?.spanHi) ? Number(roll.spanHi) : Number.isFinite(roll?.hi) ? Number(roll.hi) : 3;
+  return { roll, value, lo: Math.max(1, lo), hi: Math.max(Math.max(1, lo), hi) };
 }
 
 function setDropRunePick(log, drop, value) {
@@ -3932,6 +4724,17 @@ function overlayRuneHtml(log, drop) {
   return `<div class="price-overlay-rune"><span>Sockets</span>${chips}</div>`;
 }
 
+function overlayCharmHtml(log, drop) {
+  if (!isBeltItem(drop) && !charmSlotBounds(drop).roll) return "";
+  const { roll, value, lo, hi } = charmSlotBounds(drop);
+  if (!roll && !(value > 0) && !isBeltItem(drop)) return "";
+  const want = Number.isFinite(roll?.wantMin) ? Number(roll.wantMin) : value || lo;
+  const clamped = Math.min(hi, Math.max(lo, want));
+  const pct = hi > lo ? (((clamped - lo) / (hi - lo)) * 100).toFixed(2) : "0";
+  const rid = roll?.rid || "charm";
+  return `<div class="price-overlay-rune price-overlay-charms"><span>Charm slots</span><div class="price-overlay-span"><span>${esc(String(lo))}</span><div class="price-overlay-span-bar"><input type="range" min="${lo}" max="${hi}" step="1" value="${clamped}" style="--fill:${pct}%" data-span-rid="${rid}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" /></div><span>${esc(String(hi))}</span></div><em>${esc(String(clamped))}</em></div>`;
+}
+
 function overlayCorruptHtml(log, drop) {
   if (/currency|gem|divination/i.test(drop?.rarity || "") || /currency|gem|divination/i.test(drop?.className || "")) return "";
   if (drop.corrupted !== true) return "";
@@ -3952,20 +4755,160 @@ function overlayFlagsHtml(log, drop) {
   return `<div class="price-overlay-flags">${raven}${corrupt}</div>`;
 }
 
+function equipTradeKey(id) {
+  return (
+    {
+      "item.armour": "ar",
+      "item.evasion_rating": "ev",
+      "item.energy_shield": "es",
+      "item.runic_ward": "ward",
+      "item.block": "block",
+      "item.total_dps": "dps",
+      "item.physical_dps": "pdps",
+      "item.elemental_dps": "edps",
+      "item.crit": "crit",
+      "item.aps": "aps",
+      "item.spirit": "spirit",
+    }[id] || ""
+  );
+}
+
+function formatOverlayProp(value, kind) {
+  if (!Number.isFinite(value)) return "";
+  if (kind === "pct") return "+" + Math.round(value) + "%";
+  if (kind === "aps") return (Math.round(value * 100) / 100).toFixed(2);
+  if (kind === "crit") return (Math.round(value * 100) / 100).toFixed(2) + "%";
+  if (kind === "block") return Math.round(value) + "%";
+  return String(Math.round(value));
+}
+
+function dropPropRows(drop) {
+  const p = drop?.props || {};
+  const aps = Number(p.apsVal);
+  const phys = Number(p.phys);
+  const ele = Number(p.ele);
+  const chaos = Number(p.chaos);
+  const pdps = Number.isFinite(aps) && Number.isFinite(phys) ? aps * phys : NaN;
+  const edps = Number.isFinite(aps) && Number.isFinite(ele) ? aps * ele : NaN;
+  const cdps = Number.isFinite(aps) && Number.isFinite(chaos) ? aps * chaos : NaN;
+  const dps = [pdps, edps, cdps].filter(Number.isFinite).reduce((a, b) => a + b, 0);
+  const rows = [];
+  function add(id, label, value, kind) {
+    if (!Number.isFinite(value) || value <= 0) return;
+    rows.push({ id: id || "", label, value, kind: kind || "", shown: formatOverlayProp(value, kind) });
+  }
+  add("", "Quality", Number(p.quality), "pct");
+  add("item.physical_dps", "PDPS", pdps);
+  add("item.elemental_dps", "EDPS", edps);
+  if ((pdps > 0 && edps > 0) || cdps > 0) add("item.total_dps", "DPS", dps);
+  add("item.aps", "APS", aps, "aps");
+  add("item.crit", "Crit", Number(p.critVal), "crit");
+  add("", "Reload", Number(p.reload), "aps");
+  add("item.spirit", "Spirit", Number(p.spirit));
+  add("item.armour", "Armour", Number(p.ar));
+  add("item.evasion_rating", "Evasion", Number(p.ev));
+  add("item.energy_shield", "Energy Shield", Number(p.es));
+  add("item.runic_ward", "Ward", Number(p.ward));
+  add("item.block", "Block", Number(p.blockChance), "block");
+  return rows;
+}
+
+function pickedPropFilters(drop) {
+  return dropPropRows(drop)
+    .filter((row) => row.id && drop?.pickProps?.[row.id])
+    .map((row) => {
+      const next = { id: row.id };
+      if (Number.isFinite(row.value)) next.min = row.value;
+      return next;
+    });
+}
+
+function togglePickProp(log, drop, id) {
+  if (!drop || !id || !equipTradeKey(id)) return;
+  drop.pickProps = drop.pickProps && typeof drop.pickProps === "object" ? drop.pickProps : {};
+  if (drop.pickProps[id]) delete drop.pickProps[id];
+  else drop.pickProps[id] = true;
+  drop.quoteTried = false;
+  delete drop.quote;
+  if (log?.id) save();
+  paintPriceOverlay();
+}
+
+function overlayPropsHtml(log, drop) {
+  const rows = dropPropRows(drop);
+  if (!rows.length) return "";
+  return `<div class="price-overlay-props">${rows
+    .map((row) => {
+      const shown = `<span>${esc(row.label)}</span><b>${esc(row.shown)}</b>`;
+      if (!row.id) return `<div class="price-overlay-prop is-static">${shown}</div>`;
+      const on = drop.pickProps?.[row.id] ? " is-on" : "";
+      return `<button type="button" class="price-overlay-prop${on}" data-pick-prop="${esc(row.id)}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${shown}</button>`;
+    })
+    .join("")}</div>`;
+}
+
+function overlayUsesExchange(drop) {
+  const rarity = String(drop?.rarity || "");
+  const cls = String(drop?.className || "");
+  if (/gem/i.test(rarity) || /gem/i.test(cls)) return false;
+  return /currency|omen/i.test(rarity) || /currency|stackable currency|^omen$/i.test(cls);
+}
+
+function exchangeWantTag(drop) {
+  if (drop?.quote?.tag) return String(drop.quote.tag);
+  const folded = String(drop?.name || drop?.baseType || "")
+    .toLowerCase()
+    .replace(/['’`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const aliases = {
+    "scroll of wisdom": "wisdom",
+    "orb of transmutation": "transmute",
+    "orb of augmentation": "aug",
+    "orb of chance": "chance",
+    "orb of alchemy": "alch",
+    "chaos orb": "chaos",
+    "vaal orb": "vaal",
+    "regal orb": "regal",
+    "exalted orb": "exalted",
+    "divine orb": "divine",
+    "orb of annulment": "annul",
+    "artificers orb": "artificers",
+    "mirror of kalandra": "mirror",
+    "armourers scrap": "scrap",
+    "blacksmiths whetstone": "whetstone",
+    "arcanists etcher": "etcher",
+    "glassblowers bauble": "bauble",
+    "gemcutters prism": "gcp",
+  };
+  if (aliases[folded]) return aliases[folded];
+  return folded.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function exchangeHaveCurrencies(drop) {
+  const want = exchangeWantTag(drop);
+  const main = convertMain();
+  const all = ["exalted", "chaos", "divine"].filter((tag) => tag !== want);
+  if (all.includes(main)) return [main, ...all.filter((tag) => tag !== main)];
+  return all;
+}
+
 function tradeSiteQuery(drop, filters) {
   const rarity = String(drop?.rarity || "");
   const unique = /^unique$/i.test(rarity);
   const typeLine = tradeBaseType(drop);
   const category = tradeCategory(drop.className);
-  const statsRows = (filters || []).map((row) => {
-    const next = { id: row.id, disabled: false };
-    if (Number.isFinite(row.min) || Number.isFinite(row.max)) {
-      next.value = {};
-      if (Number.isFinite(row.min)) next.value.min = row.min;
-      if (Number.isFinite(row.max)) next.value.max = row.max;
-    }
-    return next;
-  });
+  const statsRows = (filters || [])
+    .filter((row) => !equipTradeKey(row.id))
+    .map((row) => {
+      const next = { id: row.id, disabled: false };
+      if (Number.isFinite(row.min) || Number.isFinite(row.max)) {
+        next.value = {};
+        if (Number.isFinite(row.min)) next.value.min = row.min;
+        if (Number.isFinite(row.max)) next.value.max = row.max;
+      }
+      return next;
+    });
   const stats = [{ type: "and", filters: statsRows }];
   if (wantsRavenTouched(drop)) {
     stats.push({
@@ -3978,7 +4921,7 @@ function tradeSiteQuery(drop, filters) {
     });
   }
   const query = {
-    status: { option: "any" },
+    status: { option: "available" },
     stats,
     filters: {},
   };
@@ -3992,10 +4935,20 @@ function tradeSiteQuery(drop, filters) {
   if (typeof searchCorrupted(drop) === "boolean") {
     query.filters.misc_filters = { filters: { corrupted: { option: searchCorrupted(drop) ? "true" : "false" } } };
   }
+  const equip = {};
   if (Number.isInteger(drop?.pickRunes)) {
     const n = Math.max(0, Math.min(6, drop.pickRunes));
-    query.filters.equipment_filters = { filters: { rune_sockets: { min: n, max: n } } };
+    equip.rune_sockets = { min: n, max: n };
   }
+  for (const row of filters || []) {
+    const key = equipTradeKey(row.id);
+    if (!key) continue;
+    const range = {};
+    if (Number.isFinite(row.min)) range.min = row.min;
+    if (Number.isFinite(row.max)) range.max = row.max;
+    if (Object.keys(range).length) equip[key] = range;
+  }
+  if (Object.keys(equip).length) query.filters.equipment_filters = { filters: equip };
   return { query, sort: { price: "asc" } };
 }
 
@@ -4003,11 +4956,23 @@ async function tradeSiteUrl(drop) {
   const league = leagueId();
   if (!league) return "";
   if (drop?.quote?.url) return drop.quote.url;
+  if (overlayUsesExchange(drop)) {
+    const want = exchangeWantTag(drop);
+    if (!want) return "";
+    const q = JSON.stringify({
+      exchange: {
+        status: { option: "online" },
+        have: exchangeHaveCurrencies(drop),
+        want: [want],
+      },
+    });
+    return "https://www.pathofexile.com/trade2/exchange/poe2/" + encodeURIComponent(league) + "?q=" + encodeURIComponent(q);
+  }
   let filters = [];
   try {
     const index = await ensureTradeStats();
     const picked = pickedRolls(drop).filter((roll) => !isTabletUsesRoll(roll.text));
-    filters = mergeTabletUseFilter(drop, index, mapRollsToTradeFilters(picked, index, true, { props: drop.props, className: drop.className }));
+    filters = mergeTabletUseFilter(drop, index, mapRollsToTradeFilters(picked, index, true, { props: drop.props, className: drop.className })).concat(pickedPropFilters(drop));
   } catch {
     filters = [];
   }
@@ -4036,24 +5001,40 @@ function overlayQuoteHtml(drop, logId) {
     const listed = quote.listings ? quote.listings.toLocaleString() + " listings" : "trade";
     if (pricedHit(quote) && Number(quote.amount) > 0) {
       const label = quote.unit && Number.isFinite(quote.amount) ? formatAmount(quote.amount, quote.unit) : formatDivine(quote.divine);
-      const currency = currencyForAmount(quote.divine);
-      const inner = `${itemIconHtml(currency)}${esc(label)} · ${esc(listed)}`;
-      if (quote.url) return `<button type="button" class="btn gold" data-open-trade="${esc(quote.url)}" title="${esc(listed)}">${inner}</button>`;
-      return `<span class="btn gold">${inner}</span>`;
+      const currency = quoteCurrencyName(quote);
+      return `<span class="btn gold" title="${esc(listed)}">${itemIconHtml(currency)}${esc(label)} · ${esc(listed)}</span>`;
     }
-    if (quote.url) {
-      return `<button type="button" class="btn ghost" data-open-trade="${esc(quote.url)}">${n ? "No listing with these mods" : "No listings"}</button>`;
-    }
+    return `<span class="price-overlay-status">${n ? "No listing with these mods" : "No listings"}</span>`;
   }
   const err = quote?.error ? ` · ${quote.error}` : "";
   const label = n ? "Check this roll" : "Check trade";
   return `<button type="button" class="btn gold" data-quote-drop="${esc(drop.id || "")}" data-quote-log="${esc(logId || "")}">${esc(label)}${esc(err)}</button>`;
 }
 
+function overlayOffersHtml(drop) {
+  const offers = drop?.quote?.offers;
+  if (!Array.isArray(offers) || !offers.length) return "";
+  const rows = offers
+    .map((offer) => {
+      const amount = Number(offer?.amount);
+      if (!Number.isFinite(amount) || amount <= 0) return "";
+      const unit = tradeUnit(offer.currency);
+      const label = formatAmount(amount, unit);
+      const currency = tradeCurrency(unit).name;
+      const who = String(offer.ign || "seller").trim() || "seller";
+      const tag = offer.instant ? "buyout" : "in person";
+      return `<div class="price-overlay-offer"><span class="price-overlay-offer-who">${esc(who)}</span><span class="price-overlay-offer-tag">${esc(tag)}</span><span class="price-overlay-offer-price">${itemIconHtml(currency)}${esc(label)}</span></div>`;
+    })
+    .filter(Boolean)
+    .join("");
+  if (!rows) return "";
+  return `<div class="price-overlay-offers">${rows}</div>`;
+}
+
 function priceOverlayHtml(log, drop) {
   const rolls = inspectRolls(drop);
   const order = ["enchant", "corrupt", "rune", "skill", "implicit", "explicit"];
-  const listed = order.flatMap((kind) => rolls.filter((roll) => canonicalRollKind(roll.kind) === kind));
+  const listed = order.flatMap((kind) => rolls.filter((roll) => canonicalRollKind(roll.kind) === kind && !isCharmSlotRoll(roll)));
   function affixGroups(list) {
     const out = [];
     for (const roll of list) {
@@ -4069,38 +5050,79 @@ function priceOverlayHtml(log, drop) {
   }
   function pickAttrs(roll) {
     const affix = Number.isInteger(roll.affix) && roll.affix > 0 ? ` data-pick-affix="${roll.affix}"` : "";
-    return `data-pick-text="${esc(roll.text)}" data-pick-kind="${esc(canonicalRollKind(roll.kind))}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"${affix}`;
+    const rid = Number.isInteger(roll.rid) && roll.rid > 0 ? ` data-pick-rid="${roll.rid}"` : "";
+    return `data-pick-text="${esc(roll.text)}" data-pick-kind="${esc(canonicalRollKind(roll.kind))}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"${affix}${rid}`;
   }
-  function pillHtml(tag, kind) {
+  function pillHtml(tag, kind, roll) {
     if (!tag) return "";
-    return `<span class="price-overlay-pill${kind}">${esc(tag)}</span>`;
+    const live = rollHasAffixTiers(roll) && Number(roll?.tier) > 0
+      ? ` data-roll-tier data-pill-base="${esc(String(tag || "").replace(/\s*·\s*hyb/i, "").replace(/\s+T\d+\s*$/i, "").trim())}"`
+      : "";
+    return `<span class="price-overlay-pill${kind}"${live}>${esc(tag)}</span>`;
+  }
+  function rollSpanHtml(roll) {
+    if (!Number.isFinite(roll?.lo) || !Number.isFinite(roll?.hi) || roll.lo === roll.hi) return "";
+    const lo = Number.isFinite(roll.spanLo) ? Number(roll.spanLo) : Number(roll.lo);
+    const hi = Number.isFinite(roll.spanHi) ? Number(roll.spanHi) : Number(roll.hi);
+    if (!(hi > lo)) return "";
+    const clamped = overlayLiveValue(roll);
+    const step = String(lo).includes(".") || String(hi).includes(".") || String(clamped).includes(".") ? "0.1" : "1";
+    const w = rollTierWidth(roll);
+    const tiers = parseSpanTiers(roll.spanTiers);
+    const steps = tiers.length > 1 ? tiers.length : Number(roll.spanSteps) > 1 ? Number(roll.spanSteps) : 0;
+    let ticks = "";
+    if (tiers.length > 2) {
+      ticks = `<div class="price-overlay-span-ticks">`;
+      for (let i = 0; i < tiers.length - 1; i++) {
+        const at = ((tiers[i].lo - lo) / (hi - lo)) * 100;
+        if (at > 0 && at < 100) ticks += `<i style="left:${at.toFixed(2)}%"></i>`;
+      }
+      ticks += `</div>`;
+    } else if (steps > 2) {
+      ticks = `<div class="price-overlay-span-ticks">`;
+      for (let i = 1; i < steps; i++) ticks += `<i style="left:${((i / steps) * 100).toFixed(2)}%"></i>`;
+      ticks += `</div>`;
+    }
+    const t0 = rollHasAffixTiers(roll) && Number(roll.tier) > 0 ? Number(roll.tier) : "";
+    const v0 = Number.isFinite(roll.value) ? Number(roll.value) : clamped;
+    const pct = hi > lo ? (((clamped - lo) / (hi - lo)) * 100).toFixed(2) : "0";
+    const tierAttr = tiers.length ? ` data-span-tiers="${esc(encodeSpanTiers(tiers))}"` : "";
+    return `<div class="price-overlay-span"><span>${esc(String(lo))}</span><div class="price-overlay-span-bar">${ticks}<input type="range" min="${lo}" max="${hi}" step="${step}" value="${clamped}" style="--fill:${pct}%" data-span-rid="${roll.rid}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" data-tier0="${t0}" data-value0="${v0}" data-tier-w="${w}"${tierAttr} /></div><span>${esc(String(hi))}</span></div>`;
   }
   function oneModButton(roll, tag) {
     const on = roll.pick ? " is-on" : "";
     const kind = rollKindClass(roll);
     const ghost = roll.ghost ? " is-ghost" : "";
     const hint = roll.ghost ? "Typical implicit · F8 this item to capture the real roll · " : tag ? tag + " · " : "";
-    const text = overlayModText(roll);
-    return `<button type="button" class="price-overlay-mod${on}${kind}${ghost}" ${pickAttrs(roll)} title="${esc(hint + roll.text)}"><span class="price-overlay-mod-main"><span class="price-overlay-mod-text">${esc(text)}</span>${pillHtml(tag, kind)}</span></button>`;
+    const live = rollHasAffixTiers(roll) && Number(roll.tier) > 0 ? rollKindLabel(roll, rollTierAtValue(roll, overlayLiveValue(roll))) : tag;
+    return `<div class="price-overlay-mod-wrap${on}${ghost}"><button type="button" class="price-overlay-mod${kind}" ${pickAttrs(roll)} title="${esc(hint + roll.text)}"><span class="price-overlay-mod-main"><span class="price-overlay-mod-text">${overlayModTextHtml(roll)}</span>${pillHtml(live, kind, roll)}</span></button>${rollSpanHtml(roll)}</div>`;
   }
   function modButtons(list) {
     return affixGroups(list)
       .map((group) => {
         const sample = group.rolls[0];
-        const together = group.rolls.length > 1 && Number.isInteger(sample.affix) && sample.affix > 0;
+        const together = group.rolls.length > 1 && Number.isInteger(sample.affix) && sample.affix > 0 && group.rolls.some((roll) => roll.text !== sample.text);
         const tag = rollKindLabel({ ...sample, hybrid: !!(together && sample.hybrid) });
-        if (!together) return oneModButton(sample, tag);
+        if (!together) return group.rolls.map((roll) => oneModButton(roll, tag)).join("");
         const on = group.rolls.some((roll) => roll.pick) ? " is-on" : "";
         const kind = rollKindClass(sample);
         const hint = (tag ? tag + " · " : "") + group.rolls.map((roll) => roll.text).join(" / ");
-        const lines = group.rolls.map((roll) => `<span class="price-overlay-hybrid-line">${esc(overlayModText(roll))}</span>`).join("");
-        return `<button type="button" class="price-overlay-affix is-hybrid${on}${kind}" ${pickAttrs(sample)} title="${esc(hint)}"><span class="price-overlay-mod-main"><span class="price-overlay-hybrid-lines">${lines}</span>${pillHtml(tag, kind)}</span></button>`;
+        const liveTag = rollHasAffixTiers(sample) && Number(sample.tier) > 0 ? rollKindLabel({ ...sample, hybrid: true }, rollTierAtValue(sample, overlayLiveValue(sample))) : tag;
+        const driver = group.rolls.find((roll) => Number.isFinite(roll.lo) && Number.isFinite(roll.hi) && roll.lo !== roll.hi) || sample;
+        const lines = group.rolls.map((roll) => `<span class="price-overlay-hybrid-line">${overlayModTextHtml(roll)}</span>`).join("");
+        return `<div class="price-overlay-mod-wrap${on}"><button type="button" class="price-overlay-affix is-hybrid${kind}" ${pickAttrs(sample)} title="${esc(hint)}"><span class="price-overlay-mod-main"><span class="price-overlay-hybrid-lines">${lines}</span>${pillHtml(liveTag, kind, sample)}</span></button>${rollSpanHtml(driver)}</div>`;
       })
       .join("");
   }
   const runeExtra = overlayRuneHtml(log, drop);
-  const kindClass = String(drop.rarity || "unique").toLowerCase().replace(/\s+/g, "-") || "unique";
+  const charmExtra = overlayCharmHtml(log, drop);
+  const kindClass = [
+    String(drop.rarity || "unique").toLowerCase().replace(/\s+/g, "-") || "unique",
+    isCharmItem(drop) ? "is-charm" : "",
+    isBeltItem(drop) ? "is-belt" : "",
+  ].filter(Boolean).join(" ");
   const mods = listed.length ? `<div class="price-overlay-mods">${modButtons(listed)}</div>` : "";
+  const props = overlayPropsHtml(log, drop);
   return `
     <article class="price-overlay-card item-tip-card ${esc(kindClass)}">
       <button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button>
@@ -4112,10 +5134,13 @@ function priceOverlayHtml(log, drop) {
         </div>
         ${overlayFlagsHtml(log, drop)}
       </div>
+      ${props}
       ${mods}
       <div class="price-overlay-foot">
+        ${charmExtra}
         ${runeExtra}
         <div class="price-overlay-row"><span>PoE 2 trade</span><span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span></div>
+        ${overlayOffersHtml(drop)}
       </div>
     </article>`;
 }
@@ -4141,7 +5166,7 @@ function paintPriceOverlay(forceInApp = false, fresh = false) {
   root.innerHTML = `<div class="price-overlay-back" data-close-inspect></div>${html}`;
 }
 
-function toggleInspectRoll(log, drop, text, kind) {
+function toggleInspectRoll(log, drop, text, kind, rid) {
   if (!drop) return;
   const want = String(text || "").trim();
   if (isTabletUsesRoll(want)) {
@@ -4152,17 +5177,21 @@ function toggleInspectRoll(log, drop, text, kind) {
     paintPriceOverlay();
     return;
   }
-  drop.rolls = normalizeRolls(drop.rolls);
+  drop.rolls = normalizeRolls(drop.rolls, drop);
   const as = canonicalRollKind(kind);
-  let row = drop.rolls.find((roll) => canonicalRollKind(roll.kind) === as && String(roll.text).toLowerCase() === want.toLowerCase());
+  let row = Number.isInteger(Number(rid)) && Number(rid) > 0
+    ? drop.rolls.find((roll) => String(roll.rid) === String(rid))
+    : null;
+  if (!row) row = drop.rolls.find((roll) => !roll.pick && canonicalRollKind(roll.kind) === as && String(roll.text).toLowerCase() === want.toLowerCase());
+  if (!row) row = drop.rolls.find((roll) => canonicalRollKind(roll.kind) === as && String(roll.text).toLowerCase() === want.toLowerCase());
   if (!row) row = drop.rolls.find((roll) => String(roll.text).toLowerCase() === want.toLowerCase());
   if (!row) {
-    row = { text: want, kind: as, slot: "", pick: false };
+    row = { text: want, kind: as, slot: "", pick: false, rid: drop.rolls.reduce((n, roll) => Math.max(n, Number(roll.rid) || 0), 0) + 1 };
     if (as !== "explicit") drop.rolls.unshift(row);
     else drop.rolls.push(row);
   }
   row.pick = !row.pick;
-  if (Number.isInteger(row.affix) && row.affix > 0) {
+  if (Number.isInteger(row.affix) && row.affix > 0 && drop.rolls.some((roll) => roll.affix === row.affix && roll.text !== row.text)) {
     const on = row.pick;
     drop.rolls.forEach((roll) => {
       if (roll.affix === row.affix) roll.pick = on;
@@ -4174,8 +5203,132 @@ function toggleInspectRoll(log, drop, text, kind) {
   paintPriceOverlay();
 }
 
+function ensureCharmSlotRoll(drop) {
+  drop.rolls = normalizeRolls(drop.rolls, drop);
+  let row = drop.rolls.find(isCharmSlotRoll);
+  if (row) return row;
+  const n = Number.isInteger(drop.charmSlots) && drop.charmSlots > 0 ? drop.charmSlots : 1;
+  row = {
+    text: "Has " + n + " Charm Slots",
+    kind: "implicit",
+    slot: "",
+    pick: true,
+    rid: drop.rolls.reduce((m, roll) => Math.max(m, Number(roll.rid) || 0), 0) + 1,
+    value: n,
+    lo: 1,
+    hi: 3,
+    spanLo: 1,
+    spanHi: 3,
+    wantMin: n,
+  };
+  drop.rolls.unshift(row);
+  return row;
+}
+
+function overlayLiveEl(wrap, rid, extra) {
+  if (!wrap) return extra ? [] : null;
+  const attr = extra ? "data-roll-extra" : "data-roll-live";
+  const nodes = [...wrap.querySelectorAll("[" + attr + "]")];
+  const matched = rid ? nodes.filter((el) => el.getAttribute(attr) === rid) : nodes;
+  if (extra) return matched;
+  return matched[0] || nodes[0] || null;
+}
+
+function paintOverlaySpanLive(input) {
+  if (!input) return;
+  const value = Number(input.value);
+  if (!Number.isFinite(value)) return;
+  const min = Number(input.min);
+  const max = Number(input.max);
+  const pct = Number.isFinite(min) && Number.isFinite(max) && max > min ? ((value - min) / (max - min)) * 100 : 0;
+  input.style.setProperty("--fill", pct + "%");
+  const wrap = input.closest(".price-overlay-mod-wrap");
+  const host = wrap || input.closest(".price-overlay-charms");
+  if (!host) return;
+  const step = input.step === "0.1" ? "0.1" : "1";
+  const shown = step === "0.1" ? String(Math.round(value * 10) / 10) : String(Math.round(value));
+  const rid = String(input.dataset.spanRid || "");
+  const driverTiers = parseSpanTiers(input.dataset.spanTiers);
+  const u = Number.isFinite(min) && Number.isFinite(max) && max > min ? (value - min) / (max - min) : 0;
+  function showAt(n, lo, hi) {
+    if (String(lo).includes(".") || String(hi).includes(".")) return String(Math.round(n * 10) / 10);
+    return String(Math.round(n));
+  }
+  function mapped(el, elo, ehi) {
+    const lineTiers = parseSpanTiers(el.dataset.spanTiers);
+    const n = mapByTier(driverTiers, value, lineTiers);
+    if (Number.isFinite(n)) return showAt(n, elo, ehi);
+    if (ehi > elo) return showAt(elo + u * (ehi - elo), elo, ehi);
+    return "";
+  }
+  for (const el of wrap ? wrap.querySelectorAll("[data-roll-live]") : []) {
+    const elo = Number(el.dataset.spanLo);
+    const ehi = Number(el.dataset.spanHi);
+    const text = mapped(el, elo, ehi);
+    if (text) el.textContent = text;
+    else if (el.getAttribute("data-roll-live") === rid) el.textContent = shown;
+  }
+  for (const el of overlayLiveEl(wrap, "", true)) {
+    const elo = Number(el.dataset.extraLo);
+    const ehi = Number(el.dataset.extraHi);
+    if (!(ehi > elo)) continue;
+    el.textContent = showAt(elo + u * (ehi - elo), elo, ehi);
+  }
+  const em = host.querySelector("em");
+  if (em) em.textContent = shown;
+  const pill = wrap?.querySelector("[data-roll-tier]");
+  const t0 = Number(input.dataset.tier0);
+  const v0 = Number(input.dataset.value0);
+  const w = Number(input.dataset.tierW) || 1;
+  const base = String(pill?.dataset.pillBase || "").trim();
+  if (pill && t0 > 0 && base) {
+    const tier = rollTierAtValue({ spanTiers: input.dataset.spanTiers, tier: t0, value: v0, lo: Number(input.min), hi: Number(input.max) }, value);
+    const hyb = /hyb/i.test(pill.textContent) ? " · hyb" : "";
+    pill.textContent = base + " T" + tier + hyb;
+  }
+}
+
+function scaleLinkedRolls(drop, row, want) {
+  const lo = Number.isFinite(row?.spanLo) ? Number(row.spanLo) : Number(row?.lo);
+  const hi = Number.isFinite(row?.spanHi) ? Number(row.spanHi) : Number(row?.hi);
+  if (!(hi > lo) || !Number.isFinite(want)) return;
+  const u = (want - lo) / (hi - lo);
+  for (const sib of drop?.rolls || []) {
+    if (sib === row) continue;
+    if (!(row.hybrid && row.affix && sib.affix === row.affix)) continue;
+    const slo = Number.isFinite(sib.spanLo) ? Number(sib.spanLo) : Number(sib.lo);
+    const shi = Number.isFinite(sib.spanHi) ? Number(sib.spanHi) : Number(sib.hi);
+    if (!(shi > slo)) continue;
+    const mapped = mapByTier(row.spanTiers, want, sib.spanTiers);
+    sib.wantMin = snapRollNum(Number.isFinite(mapped) ? mapped : slo + u * (shi - slo), sib);
+  }
+}
+
+function setRollWantMin(log, drop, rid, raw, live) {
+  if (!drop) return;
+  drop.rolls = normalizeRolls(drop.rolls, drop);
+  let row = drop.rolls.find((roll) => String(roll.rid) === String(rid));
+  if (!row && (String(rid) === "charm" || isBeltItem(drop))) row = ensureCharmSlotRoll(drop);
+  if (!row) return;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return;
+  const lo = Number.isFinite(row.spanLo) ? Number(row.spanLo) : Number(row.lo);
+  const hi = Number.isFinite(row.spanHi) ? Number(row.spanHi) : Number(row.hi);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+  row.wantMin = snapRollNum(Math.min(hi, Math.max(lo, n)), row);
+  scaleLinkedRolls(drop, row, row.wantMin);
+  if (live) return;
+  if (isCharmSlotRoll(row)) row.pick = true;
+  drop.quoteTried = false;
+  delete drop.quote;
+  delete drop.quoting;
+  if (log?.id) save();
+  paintPriceOverlay();
+  if (row.pick) quoteRolledDrop(log, drop, true);
+}
+
 function rollChipsHtml(drop, logId) {
-  const rolls = normalizeRolls(drop?.rolls || (Array.isArray(drop) ? drop : []));
+  const rolls = normalizeRolls(drop?.rolls || (Array.isArray(drop) ? drop : []), Array.isArray(drop) ? null : drop);
   const dropId = drop?.id || "";
   const canPick = dropId && logId;
   const ravenFlag = drop && !Array.isArray(drop) && drop.ravenTouched
@@ -4216,7 +5369,7 @@ function tradeWaiting() {
 async function quoteRolledDrop(log, drop, force = false) {
   if (!window.chrome?.webview) return;
   if (!drop.id) drop.id = uid();
-  drop.rolls = normalizeRolls(drop.rolls);
+  drop.rolls = normalizeRolls(drop.rolls, drop);
   const picked = pickedRolls(drop);
   if (!inspectTarget()) openInspect(log, drop);
   if (drop.quoting) return;
@@ -4236,27 +5389,29 @@ async function quoteRolledDrop(log, drop, force = false) {
   paintPriceOverlay();
   const league = leagueId();
   try {
-    const typeLine = tradeBaseType(drop);
-    const category = tradeCategory(drop.className);
-    const index = await ensureTradeStats();
-    const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
-    const mappedMods = mapRollsToTradeFilters(pickedMods, index, true, { props: drop.props, className: drop.className });
-    const filters = mergeTabletUseFilter(drop, index, mappedMods);
-    if (pickedMods.length && mappedMods.length < pickedMods.length) {
-      const skipped = pickedMods.length - mappedMods.length;
-      showToast(filters.length ? skipped + " mod" + (skipped === 1 ? "" : "s") + " aren't on trade — checking the rest." : "Trade has no filter for those mods. Searching the item instead.");
-    }
-    const rolls = picked.map((roll) => roll.text);
     const extra = {
-      typeLine,
-      category,
+      typeLine: tradeBaseType(drop),
+      category: tradeCategory(drop.className),
       rarity: drop.rarity || "",
-      rolls,
-      filters,
     };
-    if (typeof searchCorrupted(drop) === "boolean") extra.corrupted = searchCorrupted(drop);
-    if (wantsRavenTouched(drop)) extra.ravenTouched = true;
-    if (Number.isInteger(drop.pickRunes)) extra.runeSockets = drop.pickRunes;
+    if (overlayUsesExchange(drop)) {
+      extra.exchange = true;
+      extra.have = convertMain();
+    } else {
+      const index = await ensureTradeStats();
+      const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
+      const mappedMods = mapRollsToTradeFilters(pickedMods, index, true, { props: drop.props, className: drop.className });
+      const filters = mergeTabletUseFilter(drop, index, mappedMods);
+      if (pickedMods.length && mappedMods.length < pickedMods.length) {
+        const skipped = pickedMods.length - mappedMods.length;
+        showToast(filters.length ? skipped + " mod" + (skipped === 1 ? "" : "s") + " aren't on trade — checking the rest." : "Trade has no filter for those mods. Searching the item instead.");
+      }
+      extra.rolls = picked.map((roll) => roll.text);
+      extra.filters = filters.concat(pickedPropFilters(drop));
+      if (typeof searchCorrupted(drop) === "boolean") extra.corrupted = searchCorrupted(drop);
+      if (wantsRavenTouched(drop)) extra.ravenTouched = true;
+      if (Number.isInteger(drop.pickRunes)) extra.runeSockets = drop.pickRunes;
+    }
     const row = await tradeFetch(drop.name, league, !!force, false, extra);
     const target = findLoggedDrop(log?.id, drop.id) || drop;
     const unit = tradeUnit(row?.currency);
@@ -4268,8 +5423,11 @@ async function quoteRolledDrop(log, drop, force = false) {
       listings: row.listings || 0,
       divine: priced ? toDivine(amount, unit) : null,
       url: row.url || "",
+      tag: row.tag || "",
+      bulk: !!row.bulk,
       league: row.league || league,
       mapped: row.mapped || 0,
+      offers: Array.isArray(row.offers) ? row.offers : [],
       at: Date.now(),
     };
   } catch (err) {
@@ -4362,10 +5520,11 @@ function ingestClipboardItem(text, mode) {
     }
     if (parsed.props) drop.props = parsed.props;
     if (parsed.usesRemaining > 0) drop.usesRemaining = parsed.usesRemaining;
-    if (parsed.runeSockets > 0) {
+    if (parsed.runeSockets > 0 && canHaveRunes(parsed)) {
       drop.runeSockets = parsed.runeSockets;
       drop.pickRunes = parsed.runeSockets;
     }
+    if (parsed.charmSlots > 0) drop.charmSlots = parsed.charmSlots;
     if (!isClipboardCurrency(parsed) && parsed.mods?.length) drop.rolls = parsed.mods.slice(0, 24);
     openInspect({ id: "", drops: [drop] }, drop);
     return;
@@ -4390,10 +5549,11 @@ function ingestClipboardItem(text, mode) {
   }
   if (parsed.props) entry.props = parsed.props;
   if (parsed.usesRemaining > 0) entry.usesRemaining = parsed.usesRemaining;
-  if (parsed.runeSockets > 0) {
+  if (parsed.runeSockets > 0 && canHaveRunes(parsed)) {
     entry.runeSockets = parsed.runeSockets;
     entry.pickRunes = parsed.runeSockets;
   }
+  if (parsed.charmSlots > 0) entry.charmSlots = parsed.charmSlots;
   if (!isClipboardCurrency(parsed) && parsed.mods?.length) entry.rolls = parsed.mods.slice(0, 24);
   farmLogDrop(matched.boss?.id || farmBossId(), entry);
 }
@@ -4451,7 +5611,7 @@ function renderDash() {
           )
         )} · ${
           prices.cached ? "last recorded " : ""
-        }${esc(formatWhen(prices.fetchedAt))}`
+        }${esc(formatHour(prices.fetchedAt))}`
       : prices.status === "loading" && prices.byName.size
         ? "Updating last recorded prices…"
         : prices.status === "loading"
@@ -4463,6 +5623,8 @@ function renderDash() {
               : "Fetching prices…";
   const recent = state.logs.slice(0, 8);
   const onKill = new Set((liveForFarm?.drops || []).map((drop) => drop.uniqueId || drop.name));
+  const progress = uniqueProgress(farm);
+  const progressPct = progress.total ? Math.round((progress.have / progress.total) * 100) : 0;
   const dropTiles = (farm?.uniques || [])
     .map((item) => {
       const qty = counts[item.id] || 0;
@@ -4475,6 +5637,16 @@ function renderDash() {
       </button>`;
     })
     .join("");
+  const canClear = !!(kills || (liveForFarm?.drops || []).length);
+  const completeTile = `<div class="farm-complete">
+        <div class="metrics">
+          <div class="metric"><span>Kills</span><strong>${kills}</strong></div>
+          <div class="metric"><span>Uniques</span><strong>${progress.total ? `${progress.have}/${progress.total}` : "—"}</strong></div>
+          <div class="metric"><span>Complete</span><strong>${progress.total ? esc(formatPct(progress.have, progress.total)) : "—"}</strong></div>
+        </div>
+        <div class="progress" aria-hidden="true"><i style="width:${progressPct}%"></i></div>
+        <button class="btn danger" data-clear-boss="${esc(farmId)}" ${canClear ? "" : "disabled"} type="button">Clear all</button>
+      </div>`;
   return `
     <section class="dash">
       <article class="farm-pad">
@@ -4483,7 +5655,7 @@ function renderDash() {
           ${bossArtHtml(farm, "farm-portrait")}
           <div>
             <h2>${esc(farm?.name || "Pick a boss")}</h2>
-            <p class="muted">${esc(farm?.area || "")} · ${kills} kills · loot ${esc(formatPct(lootHit(farmId), kills))}</p>
+            ${farm?.area ? `<p class="muted">${esc(farm.area)}</p>` : ""}
           </div>
           <label class="league-field">
             <span>Boss</span>
@@ -4511,7 +5683,10 @@ function renderDash() {
             <input id="farm-extra" type="text" autocomplete="off" spellcheck="false" placeholder="Something else — divine, mirror, unique…" />
             <div class="suggest-list" id="farm-extra-suggest" hidden></div>
           </div>
-          <button class="btn ghost" data-minus="${esc(farmId)}" ${dropUndo.length || (liveForFarm?.drops || []).length || kills ? "" : "disabled"} type="button">Undo</button>
+          <div class="farm-foot-end">
+            ${completeTile}
+            <button class="btn ghost" data-minus="${esc(farmId)}" ${dropUndo.length || (liveForFarm?.drops || []).length || kills ? "" : "disabled"} type="button">Undo</button>
+          </div>
         </div>
       </article>
       <p class="muted ninja-note">${ninjaNote}</p>
@@ -4680,8 +5855,8 @@ function econRowHtml(row, type) {
 }
 
 function rowPriceLabel(row) {
-  if (row?.unit && Number.isFinite(row.amount)) return formatAmount(row.amount, row.unit);
-  return formatDivine(row?.divine);
+  const divine = Number.isFinite(row?.divine) ? row.divine : toDivine(row?.amount, row?.unit);
+  return formatDivine(divine);
 }
 
 function econChartHtml() {
@@ -4823,7 +5998,7 @@ function renderEcon() {
         <div class="econ-head">
           <div>
             <h2>Economy</h2>
-            <p class="muted">${esc(prices.league || leagueId())}${prices.fetchedAt ? " · " + (prices.cached ? "last recorded " : "") + esc(formatWhen(prices.fetchedAt)) : ""} · <span id="econ-live">${esc(ninjaLiveLabel())}</span>${
+            <p class="muted">${esc(prices.league || leagueId())}${prices.fetchedAt ? " · " + (prices.cached ? "last recorded " : "") + esc(formatHour(prices.fetchedAt)) : ""} · <span id="econ-live">${esc(ninjaLiveLabel())}</span>${
               prices.status === "loading" && haveEcon ? " · updating" : ""
             }${
               showBases ? " · bases listed separately" : ""
@@ -5101,9 +6276,12 @@ function renderBossCard(boss) {
     : progress.total
       ? `<span class="badge">${progress.have}/${progress.total}</span>`
       : `<span class="badge muted">No drop table</span>`;
+  const artState = progress.total
+    ? `<div class="card-art-state${done ? " is-done" : ""}"><b>${progress.have}/${progress.total}</b><span>${done ? "Complete" : esc(formatPct(progress.have, progress.total))}</span></div>`
+    : "";
   return `
     <article class="card ${esc(boss.category)}${done ? " is-complete" : ""}" data-open="${esc(boss.id)}">
-      <div class="card-art" aria-hidden="true">${bossArtHtml(boss, "card-art-img")}</div>
+      <div class="card-art" aria-hidden="true">${bossArtHtml(boss, "card-art-img")}${artState}</div>
       <div class="card-body">
       <div class="card-top">
         <div class="tags">
@@ -5441,7 +6619,6 @@ function renderBossDialog(boss) {
       </div>
       <div class="card-actions">
         <button class="btn gold" data-farm="${esc(boss.id)}" type="button">Farm this</button>
-        ${boss.category === "custom" ? `<button class="btn danger" data-remove-custom="${esc(boss.id)}" type="button">Remove boss</button>` : ""}
       </div>
       ${rollHistory}
       ${rewards ? `<div><h3>First-kill rewards</h3><div class="check-grid" style="margin-top:10px">${rewards}</div></div>` : ""}
@@ -5495,7 +6672,7 @@ function dropPriceChip(drop, logId) {
   if (quote?.url && mapped > 0 && n) {
     if (pricedHit(quote) && Number(quote.amount) > 0) {
       const label = quote.unit && Number.isFinite(quote.amount) ? formatAmount(quote.amount, quote.unit) : formatDivine(quote.divine);
-      const currency = currencyForAmount(quote.divine);
+      const currency = quoteCurrencyName(quote);
       return `<button type="button" class="price-chip" data-open-trade="${esc(quote.url)}" title="${esc(title)}" ${itemHoverAttr(currency)}>${itemIconHtml(currency)}${esc(label)}</button>`;
     }
     return `<button type="button" class="price-chip is-empty is-lookup" data-open-trade="${esc(quote.url)}" title="${esc(title)}">no listing</button>`;
@@ -5795,7 +6972,7 @@ function wireFarmPad() {
 
 function render() {
   const shown = document.getElementById("item-tip")?.dataset.for || "";
-  if (ui.view === "hunt") ui.view = "dash";
+  if (ui.view === "hunt" || ui.view === "bosses") ui.view = "dash";
   const onTitle = ui.view === "title";
   document.body.classList.toggle("on-title", onTitle);
   document.body.classList.toggle("view-bosses", ui.view === "bosses");
@@ -5867,6 +7044,7 @@ function render() {
   }
   paintPriceOverlay();
   updateBossScale();
+  if (ui.view === "bosses") requestAnimationFrame(updateBossScale);
   paintPriceClock();
 }
 
@@ -5961,12 +7139,20 @@ function onClick(event) {
     setDropRunePick(log, drop, pickRunes.dataset.pickRunes);
     return;
   }
+  const pickProp = event.target.closest("[data-pick-prop]");
+  if (pickProp) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickProp.dataset.pickLog, pickProp.dataset.pickDrop);
+    togglePickProp(log, drop, pickProp.dataset.pickProp);
+    return;
+  }
   const pickText = event.target.closest("[data-pick-text]");
   if (pickText) {
     event.preventDefault();
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickText.dataset.pickLog, pickText.dataset.pickDrop);
-    toggleInspectRoll(log, drop, pickText.dataset.pickText, pickText.dataset.pickKind);
+    toggleInspectRoll(log, drop, pickText.dataset.pickText, pickText.dataset.pickKind, pickText.dataset.pickRid);
     return;
   }
   const pickRoll = event.target.closest("[data-pick-roll]");
@@ -5976,13 +7162,14 @@ function onClick(event) {
     const log = state.logs.find((item) => item.id === pickRoll.dataset.pickLog) || liveLog();
     const drop = (log?.drops || []).find((item) => item.id === pickRoll.dataset.pickDrop);
     if (!drop) return;
-    drop.rolls = normalizeRolls(drop.rolls);
+    drop.rolls = normalizeRolls(drop.rolls, drop);
     const i = Number(pickRoll.dataset.pickRoll);
     if (!drop.rolls[i]) return;
     drop.rolls[i].pick = !drop.rolls[i].pick;
-    if (Number.isInteger(drop.rolls[i].affix) && drop.rolls[i].affix > 0) {
-      const on = drop.rolls[i].pick;
-      const affix = drop.rolls[i].affix;
+    const row = drop.rolls[i];
+    if (Number.isInteger(row.affix) && row.affix > 0 && drop.rolls.some((roll) => roll.affix === row.affix && roll.text !== row.text)) {
+      const on = row.pick;
+      const affix = row.affix;
       drop.rolls.forEach((roll) => {
         if (roll.affix === affix) roll.pick = on;
       });
@@ -6089,6 +7276,12 @@ function onClick(event) {
     undoLastDrop(minus.dataset.minus);
     return;
   }
+  const clearBoss = event.target.closest("[data-clear-boss]");
+  if (clearBoss) {
+    event.stopPropagation();
+    if (confirm("Clear all kills for this boss?")) clearBossLogs(clearBoss.dataset.clearBoss);
+    return;
+  }
   const loot = event.target.closest("[data-loot]");
   if (loot) {
     event.stopPropagation();
@@ -6168,15 +7361,6 @@ function onClick(event) {
     deleteLog(del.dataset.deleteLog);
     return;
   }
-  const removeCustom = event.target.closest("[data-remove-custom]");
-  if (removeCustom) {
-    if (!confirm("Remove this custom boss? Kill history for it stays in the loot log.")) return;
-    state.customBosses = state.customBosses.filter((boss) => boss.id !== removeCustom.dataset.removeCustom);
-    document.getElementById("boss-dialog").close();
-    save();
-    render();
-    return;
-  }
   const bind = event.target.closest("[data-hotkey-bind]");
   if (bind) {
     const slot = bind.dataset.hotkeyBind === "next" ? "next" : bind.dataset.hotkeyBind === "price" ? "price" : "log";
@@ -6212,14 +7396,6 @@ function onClick(event) {
     }
     return;
   }
-  if (event.target.id === "add-boss-btn") {
-    document.getElementById("custom-dialog").showModal();
-    return;
-  }
-  if (event.target.id === "custom-cancel") {
-    document.getElementById("custom-dialog").close();
-    return;
-  }
   if (event.target.closest("#settings-update-btn")) {
     startAppUpdate();
     return;
@@ -6236,6 +7412,12 @@ function onClick(event) {
 }
 
 function onChange(event) {
+  const span = event.target.closest("[data-span-rid]");
+  if (span) {
+    const { log, drop } = overlayLogDrop(span.dataset.pickLog, span.dataset.pickDrop);
+    setRollWantMin(log, drop, span.dataset.spanRid, span.value);
+    return;
+  }
   const convertMainBox = event.target.closest("[data-convert-main]");
   if (convertMainBox) {
     setConvertMain(convertMainBox.dataset.convertMain);
@@ -6299,6 +7481,13 @@ document.addEventListener("click", onClick);
 document.addEventListener("contextmenu", (event) => event.preventDefault());
 document.addEventListener("change", onChange);
 document.addEventListener("input", (event) => {
+  const span = event.target.closest("[data-span-rid]");
+  if (span) {
+    paintOverlaySpanLive(span);
+    const { log, drop } = overlayLogDrop(span.dataset.pickLog, span.dataset.pickDrop);
+    setRollWantMin(log, drop, span.dataset.spanRid, span.value, true);
+    return;
+  }
   const theme = event.target.closest("[data-theme]");
   if (theme) {
     setTheme({ [theme.dataset.theme]: theme.value });
@@ -6357,29 +7546,6 @@ document.addEventListener("submit", (event) => {
     clearLiveKill();
     document.getElementById("log-dialog").close();
     return;
-  }
-  if (event.target.id === "custom-form") {
-    event.preventDefault();
-    const data = new FormData(event.target);
-    const name = String(data.get("name") || "").trim();
-    if (!name) return;
-    state.customBosses.push({
-      id: "custom-" + uid(),
-      name,
-      category: "custom",
-      group: String(data.get("group") || "Custom").trim() || "Custom",
-      act: "custom",
-      area: String(data.get("area") || "").trim(),
-      optional: true,
-      uniques: [],
-      rewards: [],
-    });
-    save();
-    ui.filter = "custom";
-    ui.bossId = state.customBosses.at(-1).id;
-    event.target.reset();
-    document.getElementById("custom-dialog").close();
-    render();
   }
   if (event.target.id === "feedback-form") {
     event.preventDefault();

@@ -9,11 +9,16 @@
     <div class="inbox-shell">
       <header class="inbox-head">
         <img class="sigil tiny" src="still-sane-sigil.png" alt="" />
-        <div>
-          <h1>Still Sane Inbox</h1>
-          <p class="muted" id="inbox-count">Waiting for notes…</p>
+        <div class="inbox-head-copy">
+          <p class="inbox-kicker">Still Sane Inbox</p>
+          <h1>Issues / Feedback</h1>
+          <p class="muted" id="inbox-count">Waiting…</p>
         </div>
-        <button class="btn ghost" id="inbox-refresh" type="button">Refresh</button>
+        <div class="inbox-head-actions">
+          <div class="inbox-filters" id="inbox-filters"></div>
+          <button class="btn ghost" id="inbox-refresh" type="button">Refresh</button>
+          <button class="btn ghost" id="inbox-settings" type="button">Settings</button>
+        </div>
       </header>
       <div class="inbox-layout">
         <div class="inbox-list" id="inbox-list"></div>
@@ -22,11 +27,38 @@
         </article>
       </div>
     </div>
+    <div class="inbox-modal" id="inbox-modal" hidden>
+      <div class="inbox-modal-card panel">
+        <div class="inbox-modal-top">
+          <h2>Settings</h2>
+          <button class="btn ghost" id="inbox-settings-close" type="button">Close</button>
+        </div>
+        <p class="muted" id="inbox-settings-note">Keys stay on this PC. Never in the player pack.</p>
+        <form id="inbox-config" class="feedback-form">
+          <label>Project URL
+            <input name="url" autocomplete="off" spellcheck="false" />
+          </label>
+          <label>anon public
+            <input name="anonKey" type="password" autocomplete="off" spellcheck="false" />
+          </label>
+          <label>service_role
+            <input name="serviceKey" type="password" autocomplete="off" spellcheck="false" />
+          </label>
+          <div class="row-actions">
+            <button class="btn gold" type="submit">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
     <script>
       let items = [];
+      let issues = [];
       let openId = "";
+      let filter = "all";
       let cloud = false;
       let needSetup = true;
+      let host = "";
+      let cfg = { url: "", anonKey: "", serviceKey: "" };
 
       function esc(text) {
         return String(text || "")
@@ -46,66 +78,101 @@
         if (window.chrome?.webview) chrome.webview.postMessage(msg);
       }
 
-      function setupHtml() {
-        return `
-          <h2>Supabase</h2>
-          <p class="muted">Keys stay on this PC.</p>
-          <form id="inbox-config" class="feedback-form">
-            <label>Project URL
-              <input name="url" value="" autocomplete="off" />
-            </label>
-            <label>anon public
-              <input name="anonKey" value="" autocomplete="off" />
-            </label>
-            <label>service_role
-              <input name="serviceKey" value="" autocomplete="off" />
-            </label>
-            <div class="row-actions">
-              <button class="btn gold" type="submit">Save</button>
-            </div>
-          </form>`;
+      function rows() {
+        const notes = items.map((item) => ({
+          id: item.id,
+          kind: "app",
+          title: item.title,
+          body: item.body,
+          at: item.at,
+          read: !!item.read,
+          version: item.version,
+          league: item.league,
+          page: item.page,
+        }));
+        const git = issues.map((item) => ({
+          id: item.id,
+          kind: "github",
+          title: item.title,
+          body: item.body,
+          at: item.at,
+          read: true,
+          number: item.number,
+          url: item.url,
+        }));
+        const all = notes.concat(git).sort((a, b) => (b.at || 0) - (a.at || 0));
+        if (filter === "new") return all.filter((row) => row.kind === "app" && !row.read);
+        if (filter === "github") return all.filter((row) => row.kind === "github");
+        if (filter === "app") return all.filter((row) => row.kind === "app");
+        return all;
       }
 
-      function paint() {
-        const list = document.getElementById("inbox-list");
-        const count = document.getElementById("inbox-count");
+      function paintFilters() {
         const unread = items.filter((item) => !item.read).length;
-        count.textContent = cloud
-          ? items.length
-            ? items.length + " note" + (items.length === 1 ? "" : "s") + (unread ? " · " + unread + " new" : "") + " · Supabase"
-            : "Supabase connected. No notes yet."
-          : needSetup
-            ? "Paste your Supabase keys to receive notes from other PCs."
-            : items.length
-              ? items.length + " local note" + (items.length === 1 ? "" : "s")
-              : "No notes yet. Send from Settings → Feedback.";
-        list.innerHTML =
-          `<button type="button" class="inbox-item${openId === "setup" ? " is-on" : ""}" data-open="setup"><strong>Supabase</strong><span>${cloud ? "Connected" : "Set up"}</span></button>` +
-          items
-            .map((item) => {
-              const on = item.id === openId ? " is-on" : "";
-              const fresh = item.read ? "" : " is-unread";
-              return `<button type="button" class="inbox-item${on}${fresh}" data-open="${esc(item.id)}">
-              <strong>${esc(item.title)}</strong>
-              <span>${esc(when(item.at))}</span>
-            </button>`;
-            })
-            .join("");
-        const detail = document.getElementById("inbox-detail");
-        if (openId === "setup" || (needSetup && !openId)) {
-          openId = "setup";
-          detail.innerHTML = setupHtml();
+        const chips = [
+          ["all", "All"],
+          ["new", "New" + (unread ? " " + unread : "")],
+          ["app", "App"],
+          ["github", "GitHub"],
+        ];
+        document.getElementById("inbox-filters").innerHTML = chips
+          .map(([id, label]) => `<button type="button" class="inbox-chip${filter === id ? " is-on" : ""}" data-filter="${id}">${esc(label)}</button>`)
+          .join("");
+      }
+
+      function paintList() {
+        const list = document.getElementById("inbox-list");
+        const shown = rows();
+        if (!shown.length) {
+          list.innerHTML = `<div class="inbox-empty"><strong>Nothing here</strong><span>Player Send and GitHub issues show up in this list.</span></div>`;
           return;
         }
-        const item = items.find((row) => row.id === openId) || items[0];
+        list.innerHTML = shown
+          .map((row) => {
+            const on = row.id === openId ? " is-on" : "";
+            const fresh = row.kind === "app" && !row.read ? " is-unread" : "";
+            const tag = row.kind === "github" ? "#" + row.number : "App";
+            return `<button type="button" class="inbox-item${on}${fresh}" data-open="${esc(row.id)}">
+              <span class="inbox-item-top">
+                <span class="inbox-tag inbox-tag-${row.kind}">${esc(tag)}</span>
+                ${row.kind === "app" && !row.read ? `<span class="inbox-dot"></span>` : ""}
+              </span>
+              <strong>${esc(row.title)}</strong>
+              <span>${esc(when(row.at))}</span>
+            </button>`;
+          })
+          .join("");
+      }
+
+      function paintDetail() {
+        const detail = document.getElementById("inbox-detail");
+        const shown = rows();
+        const item = shown.find((row) => row.id === openId) || shown[0];
         if (!item) {
-          openId = "setup";
-          detail.innerHTML = setupHtml();
+          openId = "";
+          detail.innerHTML = `
+            <div class="inbox-hero">
+              <img class="sigil" src="still-sane-sigil.png" alt="" />
+              <h2>Issues / Feedback</h2>
+              <p class="muted">Notes from the player app and open GitHub issues.</p>
+            </div>`;
           return;
         }
         openId = item.id;
+        if (item.kind === "github") {
+          detail.innerHTML = `
+            <p class="inbox-tag inbox-tag-github">GitHub #${esc(item.number)}</p>
+            <h2>${esc(item.title)}</h2>
+            <p class="muted">${esc(when(item.at))}</p>
+            <pre class="inbox-body">${esc(item.body || "(no body)")}</pre>
+            <div class="row-actions">
+              <button class="btn gold" data-open-url="${esc(item.url)}" type="button">Open on GitHub</button>
+            </div>`;
+          return;
+        }
         const meta = [item.version && "v" + item.version, item.league, item.page].filter(Boolean).join(" · ");
         detail.innerHTML = `
+          <p class="inbox-tag inbox-tag-app">App</p>
           <h2>${esc(item.title)}</h2>
           <p class="muted">${esc(when(item.at))}${meta ? " · " + esc(meta) : ""}</p>
           <pre class="inbox-body">${esc(item.body)}</pre>
@@ -113,6 +180,47 @@
             <button class="btn ghost" data-delete="${esc(item.id)}" type="button">Delete</button>
             <button class="btn gold" data-toggle="${esc(item.id)}" type="button">${item.read ? "Mark new" : "Mark read"}</button>
           </div>`;
+      }
+
+      function paintCount() {
+        const count = document.getElementById("inbox-count");
+        const unread = items.filter((item) => !item.read).length;
+        const bits = [];
+        if (items.length) bits.push(items.length + " note" + (items.length === 1 ? "" : "s"));
+        if (unread) bits.push(unread + " new");
+        if (issues.length) bits.push(issues.length + " GitHub");
+        if (cloud && host) bits.push(host);
+        count.textContent = bits.length ? bits.join(" · ") : needSetup ? "Set up Supabase in Settings to receive notes." : "No notes yet.";
+        const settings = document.getElementById("inbox-settings");
+        settings.classList.toggle("is-alert", needSetup);
+      }
+
+      function paint() {
+        paintFilters();
+        paintCount();
+        paintList();
+        paintDetail();
+      }
+
+      function fillSettings() {
+        const form = document.getElementById("inbox-config");
+        if (!form) return;
+        form.url.value = cfg.url || "";
+        form.anonKey.value = cfg.anonKey || "";
+        form.serviceKey.value = cfg.serviceKey || "";
+        const note = document.getElementById("inbox-settings-note");
+        note.textContent = cloud
+          ? "Connected" + (host ? " · " + host : "") + ". Keys stay on this PC."
+          : "Keys stay on this PC. Never in the player pack.";
+      }
+
+      function openSettings(on) {
+        const modal = document.getElementById("inbox-modal");
+        modal.hidden = !on;
+        if (on) {
+          send({ type: "inbox-config" });
+          fillSettings();
+        }
       }
 
       chrome.webview?.addEventListener("message", (event) => {
@@ -125,14 +233,27 @@
           }
         }
         if (msg?.type === "inbox-toast") {
-          const count = document.getElementById("inbox-count");
-          if (count) count.textContent = String(msg.text || "");
+          const note = document.getElementById("inbox-settings-note");
+          if (note) note.textContent = String(msg.text || "");
+          return;
+        }
+        if (msg?.type === "inbox-config") {
+          cfg = {
+            url: String(msg.url || ""),
+            anonKey: String(msg.anonKey || ""),
+            serviceKey: String(msg.serviceKey || ""),
+          };
+          cloud = !!msg.cloud;
+          host = String(msg.host || host || "");
+          fillSettings();
           return;
         }
         if (msg?.type === "inbox-list") {
           items = Array.isArray(msg.items) ? msg.items : [];
+          issues = Array.isArray(msg.issues) ? msg.issues : [];
           cloud = !!msg.cloud;
           needSetup = !!msg.needSetup;
+          host = String(msg.host || "");
           paint();
         }
       });
@@ -154,6 +275,25 @@
           send({ type: "inbox-refresh" });
           return;
         }
+        if (event.target.closest("#inbox-settings")) {
+          openSettings(true);
+          return;
+        }
+        if (event.target.closest("#inbox-settings-close") || event.target.id === "inbox-modal") {
+          openSettings(false);
+          return;
+        }
+        const chip = event.target.closest("[data-filter]");
+        if (chip) {
+          filter = chip.dataset.filter;
+          paint();
+          return;
+        }
+        const href = event.target.closest("[data-open-url]");
+        if (href) {
+          send({ type: "open-url", url: href.dataset.openUrl });
+          return;
+        }
         const open = event.target.closest("[data-open]");
         if (open) {
           openId = open.dataset.open;
@@ -173,6 +313,10 @@
           const item = items.find((row) => row.id === toggle.dataset.toggle);
           send({ type: item?.read ? "inbox-unread" : "inbox-read", id: toggle.dataset.toggle });
         }
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") openSettings(false);
       });
 
       send({ type: "inbox-ready" });

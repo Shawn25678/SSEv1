@@ -19,6 +19,17 @@
         max-height: none;
         margin: 0;
         box-shadow: none;
+        cursor: grab;
+      }
+      .price-overlay-card.is-drag {
+        cursor: grabbing;
+      }
+      .price-overlay-card :is(button, a, input, .price-overlay-offers, .price-overlay-mods, .price-overlay-span, .price-overlay-prop) {
+        cursor: pointer;
+      }
+      .price-overlay-offers,
+      .price-overlay-offer {
+        cursor: default;
       }
     </style>
   </head>
@@ -26,6 +37,8 @@
     <div id="root"></div>
     <script>
       const root = document.getElementById("root");
+      let drag = null;
+      let skipClick = false;
 
       function camel(name) {
         return String(name || "")
@@ -74,9 +87,174 @@
 
       document.addEventListener("contextmenu", (event) => event.preventDefault());
 
+      document.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        if (event.target.closest("button, a, input, textarea, .price-overlay-offers, .price-overlay-mods, .price-overlay-span")) return;
+        const card = event.target.closest(".price-overlay-card");
+        if (!card || !window.chrome?.webview) return;
+        drag = { x: event.screenX, y: event.screenY, moved: false, id: event.pointerId };
+        card.classList.add("is-drag");
+        try {
+          document.body.setPointerCapture(event.pointerId);
+        } catch {
+          /* keep going */
+        }
+      });
+
+      document.addEventListener("pointermove", (event) => {
+        if (!drag || event.pointerId !== drag.id || !window.chrome?.webview) return;
+        const dx = event.screenX - drag.x;
+        const dy = event.screenY - drag.y;
+        if (!dx && !dy) return;
+        drag.x = event.screenX;
+        drag.y = event.screenY;
+        drag.moved = true;
+        chrome.webview.postMessage({ type: "overlay-drag", dx, dy });
+      });
+
+      function endDrag(event) {
+        if (!drag || (event && event.pointerId !== drag.id)) return;
+        if (drag.moved) skipClick = true;
+        root.querySelector(".price-overlay-card")?.classList.remove("is-drag");
+        drag = null;
+      }
+
+      document.addEventListener("pointerup", endDrag);
+      document.addEventListener("pointercancel", endDrag);
+
+      document.addEventListener(
+        "click",
+        (event) => {
+          if (skipClick) {
+            skipClick = false;
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        },
+        true
+      );
+
+      function paintSpan(t) {
+        const value = Number(t.value);
+        if (!Number.isFinite(value)) return;
+        const min = Number(t.min);
+        const max = Number(t.max);
+        const pct = Number.isFinite(min) && Number.isFinite(max) && max > min ? ((value - min) / (max - min)) * 100 : 0;
+        t.style.setProperty("--fill", pct + "%");
+        const wrap = t.closest(".price-overlay-mod-wrap");
+        const host = wrap || t.closest(".price-overlay-charms");
+        if (!host) return;
+        const step = t.step === "0.1" ? "0.1" : "1";
+        const shown = step === "0.1" ? String(Math.round(value * 10) / 10) : String(Math.round(value));
+        const rid = String(t.dataset.spanRid || "");
+        const u = Number.isFinite(min) && Number.isFinite(max) && max > min ? (value - min) / (max - min) : 0;
+        function parseTiers(spec) {
+          return String(spec || "")
+            .split(";")
+            .map((part) => {
+              const bits = part.split(",");
+              const a = Number(bits[0]);
+              const b = Number(bits[1]);
+              if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+              return { lo: Math.min(a, b), hi: Math.max(a, b) };
+            })
+            .filter(Boolean);
+        }
+        function posInTiers(parts, v) {
+          if (!parts.length || !Number.isFinite(v)) return null;
+          for (let i = 0; i < parts.length; i++) {
+            if (v + 0.01 >= parts[i].lo && v - 0.01 <= parts[i].hi) return { i, u: parts[i].hi > parts[i].lo ? (v - parts[i].lo) / (parts[i].hi - parts[i].lo) : 1 };
+          }
+          if (v > parts[0].hi) return { i: 0, u: 1 };
+          if (v < parts[parts.length - 1].lo) return { i: parts.length - 1, u: 0 };
+          return { i: parts.length - 1, u: 0 };
+        }
+        function showAt(n, lo, hi) {
+          if (String(lo).includes(".") || String(hi).includes(".")) return String(Math.round(n * 10) / 10);
+          return String(Math.round(n));
+        }
+        const driverTiers = parseTiers(t.dataset.spanTiers);
+        const liveNodes = wrap ? [...wrap.querySelectorAll("[data-roll-live]")] : [];
+        for (const el of liveNodes) {
+          const elo = Number(el.dataset.spanLo);
+          const ehi = Number(el.dataset.spanHi);
+          const lineTiers = parseTiers(el.dataset.spanTiers);
+          const pos = posInTiers(driverTiers, value);
+          let n = NaN;
+          if (pos && lineTiers[pos.i]) n = lineTiers[pos.i].lo + pos.u * (lineTiers[pos.i].hi - lineTiers[pos.i].lo);
+          else if (ehi > elo) n = elo + u * (ehi - elo);
+          if (Number.isFinite(n)) el.textContent = showAt(n, elo, ehi);
+          else if (el.getAttribute("data-roll-live") === rid) el.textContent = shown;
+        }
+        const extraNodes = wrap ? [...wrap.querySelectorAll("[data-roll-extra]")] : [];
+        for (const el of extraNodes) {
+          const elo = Number(el.dataset.extraLo);
+          const ehi = Number(el.dataset.extraHi);
+          if (!(ehi > elo)) continue;
+          el.textContent = showAt(elo + u * (ehi - elo), elo, ehi);
+        }
+        const em = host.querySelector("em");
+        if (em) em.textContent = shown;
+        const pill = wrap?.querySelector("[data-roll-tier]");
+        const t0 = Number(t.dataset.tier0);
+        const v0 = Number(t.dataset.value0);
+        const w = Number(t.dataset.tierW) || 1;
+        const base = String(pill?.dataset.pillBase || "").trim();
+        if (pill && t0 > 0 && base) {
+          let tier = Math.max(1, Math.round(t0 - (value - v0) / w));
+          const spec = String(t.dataset.spanTiers || "");
+          if (spec) {
+            const parts = spec.split(";").map((part) => {
+              const bits = part.split(",");
+              const a = Number(bits[0]);
+              const b = Number(bits[1]);
+              return { lo: Math.min(a, b), hi: Math.max(a, b) };
+            }).filter((p) => Number.isFinite(p.lo) && Number.isFinite(p.hi));
+            if (parts.length) {
+              tier = parts.length;
+              for (let i = 0; i < parts.length; i++) {
+                if (value + 0.01 >= parts[i].lo && value - 0.01 <= parts[i].hi) {
+                  tier = i + 1;
+                  break;
+                }
+              }
+              if (value > parts[0].hi) tier = 1;
+            }
+          }
+          const hyb = /hyb/i.test(pill.textContent) ? " · hyb" : "";
+          pill.textContent = base + " T" + tier + hyb;
+        }
+      }
+
+      function postSpan(t, live) {
+        if (!window.chrome?.webview) return;
+        const payload = { type: "overlay-click" };
+        for (const a of t.attributes) {
+          if (a.name.startsWith("data-")) payload[camel(a.name)] = a.value;
+        }
+        payload.spanMin = t.value;
+        payload.spanLive = live;
+        chrome.webview.postMessage(payload);
+      }
+
+      document.addEventListener("input", (event) => {
+        const t = event.target.closest("[data-span-rid]");
+        if (!t) return;
+        paintSpan(t);
+        postSpan(t, true);
+      });
+
+      document.addEventListener("change", (event) => {
+        const t = event.target.closest("[data-span-rid]");
+        if (!t) return;
+        paintSpan(t);
+        postSpan(t, false);
+      });
+
       document.addEventListener("click", (event) => {
+        if (event.target.closest("[data-span-rid]")) return;
         const t = event.target.closest(
-          "[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-corrupt],[data-pick-raven],[data-pick-runes],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
+          "[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-corrupt],[data-pick-raven],[data-pick-runes],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
         );
         if (!t || !window.chrome?.webview) return;
         event.preventDefault();

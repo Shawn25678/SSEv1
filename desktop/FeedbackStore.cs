@@ -27,9 +27,6 @@ sealed class SupabaseConfig
 
 static class FeedbackStore
 {
-    public const int Port = 17832;
-    public static readonly Uri LocalUri = new("http://127.0.0.1:17832/feedback");
-
     static readonly HttpClient CloudHttp = new() { Timeout = TimeSpan.FromSeconds(12) };
     static readonly JsonSerializerOptions Json = new()
     {
@@ -60,13 +57,14 @@ static class FeedbackStore
         {
             Id = Guid.NewGuid().ToString("N")[..12],
             At = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            Title = title.Trim(),
-            Body = body.Trim(),
-            Version = version.Trim(),
-            League = league.Trim(),
-            Page = page.Trim(),
+            Title = Clip(title, 80),
+            Body = Clip(body, 4000),
+            Version = Clip(version, 32),
+            League = Clip(league, 64),
+            Page = Clip(page, 64),
             Read = false,
         };
+        if (item.Title.Length == 0) item.Title = "Note";
         Write(item);
         return item;
     }
@@ -82,8 +80,14 @@ static class FeedbackStore
         {
             return null;
         }
-        if (item is null || string.IsNullOrWhiteSpace(item.Title)) return null;
-        if (string.IsNullOrWhiteSpace(item.Id)) item.Id = Guid.NewGuid().ToString("N")[..12];
+        if (item is null) return null;
+        item.Title = Clip(item.Title, 80);
+        item.Body = Clip(item.Body, 4000);
+        item.Version = Clip(item.Version, 32);
+        item.League = Clip(item.League, 64);
+        item.Page = Clip(item.Page, 64);
+        if (item.Title.Length == 0) return null;
+        if (string.IsNullOrWhiteSpace(item.Id) || item.Id.Length > 40) item.Id = Guid.NewGuid().ToString("N")[..12];
         if (item.At <= 0) item.At = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         Write(item);
         return item;
@@ -143,6 +147,21 @@ static class FeedbackStore
             items,
             cloud = cfg.ServiceKey.Length > 0,
             needSetup = cfg.Url.Length == 0 || cfg.ServiceKey.Length == 0,
+            host = ConfigHost(cfg),
+        }, Json);
+    }
+
+    public static string InboxConfigJson()
+    {
+        var cfg = LoadConfig();
+        return JsonSerializer.Serialize(new
+        {
+            type = "inbox-config",
+            url = cfg.Url,
+            anonKey = cfg.AnonKey,
+            serviceKey = cfg.ServiceKey,
+            cloud = cfg.ServiceKey.Length > 0,
+            host = ConfigHost(cfg),
         }, Json);
     }
 
@@ -177,9 +196,13 @@ static class FeedbackStore
 
     public static string SaveConfig(string url, string anonKey, string serviceKey)
     {
+        var cur = LoadConfig();
         url = (url ?? "").Trim().TrimEnd('/');
         anonKey = (anonKey ?? "").Trim();
         serviceKey = (serviceKey ?? "").Trim();
+        if (url.Length == 0) url = cur.Url;
+        if (anonKey.Length == 0) anonKey = cur.AnonKey;
+        if (serviceKey.Length == 0) serviceKey = cur.ServiceKey;
         if (url.Length > 0 && !ValidSupabaseUrl(url)) return "Use a https://….supabase.co URL.";
         var cfg = new SupabaseConfig { Url = url, AnonKey = anonKey, ServiceKey = serviceKey };
         var app = Path.Combine(AppData(), "supabase.json");
@@ -187,20 +210,6 @@ static class FeedbackStore
         var pub = JsonSerializer.Serialize(new SupabaseConfig { Url = url, AnonKey = anonKey }, Json);
         File.WriteAllText(Path.Combine(AppData(), "supabase.public.json"), pub);
         return "";
-    }
-
-    public static async Task NotifyLocalAsync(FeedbackItem item)
-    {
-        try
-        {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(1) };
-            using var content = new StringContent(ToJson(item), Encoding.UTF8, "application/json");
-            await http.PostAsync(LocalUri, content);
-        }
-        catch
-        {
-            /* inbox app is not running */
-        }
     }
 
     public static async Task NotifyHookAsync(FeedbackItem item)
@@ -337,6 +346,18 @@ static class FeedbackStore
 
     static bool CanTalk(SupabaseConfig cfg, string key) =>
         cfg.Url.Length > 0 && key.Length > 20 && ValidSupabaseUrl(cfg.Url);
+
+    static string ConfigHost(SupabaseConfig cfg)
+    {
+        if (!Uri.TryCreate(cfg.Url, UriKind.Absolute, out var uri)) return "";
+        return uri.Host;
+    }
+
+    static string Clip(string text, int max)
+    {
+        var s = (text ?? "").Trim();
+        return s.Length <= max ? s : s[..max];
+    }
 
     static bool ValidSupabaseUrl(string url)
     {

@@ -32,7 +32,12 @@ sealed class TrackerWindow : Form
     static readonly SemaphoreSlim Gate = new(3, 3);
     static readonly ConcurrentDictionary<string, (DateTime at, int status, string body)> Cache = new();
     static readonly JsonSerializerOptions JsonOut = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    const string TradeLive = "available";
+    const string TradeExchangeLive = "online";
+    const int TradeFetchBatch = 10;
+    const int TradeFetchCap = 100;
     static readonly TimeSpan CacheFor = TimeSpan.FromMinutes(10);
+    static readonly string[] ExchangeHave = ["exalted", "chaos", "divine"];
 
     readonly WebView2 _web = new()
     {
@@ -260,6 +265,9 @@ sealed class TrackerWindow : Form
     static readonly HttpClient TradeHttp = CreateTradeHttp();
     static readonly TradeLimiter SearchLimit = TradeLimiter.Default();
     static readonly TradeLimiter FetchLimit = TradeLimiter.Default();
+    static readonly TradeLimiter ExchangeLimit = TradeLimiter.Default();
+    Dictionary<string, string>? ExchangeTags;
+    DateTime ExchangeTagsAt;
     static readonly SemaphoreSlim SlotLock = new(1, 1);
     const double RateDesyncSec = 0.8;
 
@@ -426,6 +434,21 @@ sealed class TrackerWindow : Form
 
     sealed record RollFilter(string Id, double? Min, double? Max = null);
 
+    static readonly Dictionary<string, string> EquipTradeIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["item.armour"] = "ar",
+        ["item.evasion_rating"] = "ev",
+        ["item.energy_shield"] = "es",
+        ["item.runic_ward"] = "ward",
+        ["item.block"] = "block",
+        ["item.total_dps"] = "dps",
+        ["item.physical_dps"] = "pdps",
+        ["item.elemental_dps"] = "edps",
+        ["item.crit"] = "crit",
+        ["item.aps"] = "aps",
+        ["item.spirit"] = "spirit",
+    };
+
     static bool JsonInt(JsonElement el, out int n)
     {
         n = 0;
@@ -435,7 +458,14 @@ sealed class TrackerWindow : Form
     static bool JsonDouble(JsonElement el, out double n)
     {
         n = 0;
-        return el.ValueKind == JsonValueKind.Number && el.TryGetDouble(out n);
+        if (el.ValueKind != JsonValueKind.Number) return false;
+        if (el.TryGetDouble(out n)) return true;
+        if (el.TryGetInt64(out var i))
+        {
+            n = i;
+            return true;
+        }
+        return false;
     }
 
     static string JsonString(JsonElement el, string fallback = "") =>
@@ -479,7 +509,7 @@ sealed class TrackerWindow : Form
                 return hit.body;
             if (!await WaitForSlot(SearchLimit)) return null;
             using var res = await TradeHttp.GetAsync("https://www.pathofexile.com/api/trade2/data/stats");
-            NoteRate(res, search: true);
+            NoteRate(res, SearchLimit);
             var body = await res.Content.ReadAsStringAsync();
             var status = (int)res.StatusCode;
             var looksJson = body.TrimStart().StartsWith('{');
@@ -497,13 +527,14 @@ sealed class TrackerWindow : Form
         }
     }
 
-    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false)
+    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool exchange = false, string havePref = "")
     {
         name = (name ?? "").Trim();
         league = (league ?? "").Trim();
         typeLine = (typeLine ?? "").Trim();
         rarity = (rarity ?? "").Trim();
         category = (category ?? "").Trim();
+        havePref = FoldExchangeHave(havePref);
         if (!ValidLeague(league) || (name.Length is < 2 or > 80 && typeLine.Length is < 2 or > 80 && category.Length is < 2 or > 40))
         {
             Reply(id, false, 400, "{\"error\":\"bad trade query\"}");
@@ -511,7 +542,7 @@ sealed class TrackerWindow : Form
         }
         if (name.Length is < 2 or > 80) name = typeLine.Length > 0 ? typeLine : name;
         var rollList = (rolls ?? Array.Empty<string>()).Where(r => !string.IsNullOrWhiteSpace(r)).Take(12).ToArray();
-        if (SearchLimit.Limited && CombinedWaitMs() >= 1500)
+        if ((SearchLimit.Limited || ExchangeLimit.Limited) && CombinedWaitMs() >= 1500)
         {
             Reply(id, false, 429, "{\"error\":\"rate limited\"}");
             return;
@@ -519,6 +550,7 @@ sealed class TrackerWindow : Form
         IReadOnlyList<RollFilter> mapped = preMapped is { Count: > 0 } ? preMapped : Array.Empty<RollFilter>();
         if (mapped.Count == 0 && rollList.Length > 0)
             mapped = await MapRollsToFilters(rollList, category);
+        var useExchange = (exchange || WantsExchange(rarity, category)) && mapped.Count == 0 && rollList.Length == 0;
                 var extra = mapped.Count > 0
             ? ":roll:" + string.Join("|", mapped.Select(f =>
             {
@@ -531,9 +563,11 @@ sealed class TrackerWindow : Form
         extra += corrupted is true ? ":c1" : corrupted is false ? ":c0" : "";
         extra += ravenTouched ? ":rt" : "";
         extra += runeSockets is int rs ? ":r" + rs : "";
+        extra += ":st:" + (useExchange ? TradeExchangeLive : TradeLive);
         extra += ":" + rarity.ToLowerInvariant();
         extra += typeLine.Length > 0 ? ":t:" + typeLine.ToLowerInvariant() : "";
         extra += category.Length > 0 ? ":k:" + category.ToLowerInvariant() : "";
+        extra += useExchange ? ":xchg:" + havePref : "";
         var cacheKey = "trade:" + league + ":" + name.ToLowerInvariant() + extra;
         if (!bust && Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < CacheFor)
         {
@@ -548,7 +582,11 @@ sealed class TrackerWindow : Form
                 Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
                 return;
             }
-            var payload = await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets, category, ravenTouched);
+            TradeLookup? payload = null;
+            if (useExchange)
+                payload = await LookupExchangeListing(league, name, typeLine, havePref);
+            if (payload is null || (payload.Json is null && !payload.RateLimited && !payload.Forbidden))
+                payload = await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets, category, ravenTouched);
             if (payload is { RateLimited: true })
             {
                 Reply(id, false, 429, "{\"error\":\"rate limited\"}");
@@ -585,7 +623,17 @@ sealed class TrackerWindow : Form
             {
                 if (row.ValueKind != JsonValueKind.Object) continue;
                 var fid = row.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
-                if (fid.Length is < 8 or > 80) continue;
+                var equip = fid.StartsWith("item.", StringComparison.OrdinalIgnoreCase);
+                if (equip)
+                {
+                    if (fid.Length is < 8 or > 40 || !EquipTradeIds.ContainsKey(fid)) continue;
+                    if (list.Count(x => x.Id.StartsWith("item.", StringComparison.OrdinalIgnoreCase)) >= 8) continue;
+                }
+                else
+                {
+                    if (fid.Length is < 8 or > 80) continue;
+                    if (list.Count(x => !x.Id.StartsWith("item.", StringComparison.OrdinalIgnoreCase)) >= 12) continue;
+                }
                 double? min = null;
                 double? max = null;
                 if (row.TryGetProperty("min", out var minEl) && JsonDouble(minEl, out var n) && double.IsFinite(n))
@@ -593,7 +641,6 @@ sealed class TrackerWindow : Form
                 if (row.TryGetProperty("max", out var maxEl) && JsonDouble(maxEl, out var x) && double.IsFinite(x))
                     max = x;
                 list.Add(new RollFilter(fid, min, max));
-                if (list.Count >= 6) break;
             }
         }
         if (root.TryGetProperty("filtersJson", out var jsonEl) && jsonEl.ValueKind == JsonValueKind.String)
@@ -615,6 +662,49 @@ sealed class TrackerWindow : Form
 
     static string TradeSearchUrl(string league, string queryId) =>
         "https://www.pathofexile.com/trade2/search/poe2/" + Uri.EscapeDataString(league) + (string.IsNullOrWhiteSpace(queryId) ? "" : "/" + Uri.EscapeDataString(queryId));
+
+    static string TradeExchangeUrl(string league, string want, IReadOnlyList<string> have)
+    {
+        var q = JsonSerializer.Serialize(new
+        {
+            exchange = new
+            {
+                status = new { option = TradeExchangeLive },
+                have,
+                want = new[] { want },
+            },
+        }, JsonOut);
+        return "https://www.pathofexile.com/trade2/exchange/poe2/" + Uri.EscapeDataString(league) + "?q=" + Uri.EscapeDataString(q);
+    }
+
+    static bool WantsExchange(string rarity, string category) =>
+        Regex.IsMatch(rarity ?? "", @"currency|omen", RegexOptions.IgnoreCase) ||
+        Regex.IsMatch(category ?? "", @"currency|omen", RegexOptions.IgnoreCase);
+
+    static string FoldExchangeHave(string have)
+    {
+        var tag = (have ?? "").Trim().ToLowerInvariant();
+        if (tag.StartsWith("exalt")) return "exalted";
+        if (tag.StartsWith("chaos")) return "chaos";
+        if (tag.StartsWith("divine")) return "divine";
+        return "";
+    }
+
+    static string FoldExchangeName(string name)
+    {
+        var s = (name ?? "").Trim().ToLowerInvariant().Replace('\u2019', '\'').Replace('`', '\'');
+        s = Regex.Replace(s, @"[']", "");
+        return Regex.Replace(s, @"\s+", " ").Trim();
+    }
+
+    static IEnumerable<string> ExchangeNameKeys(string name, string typeLine)
+    {
+        foreach (var raw in new[] { name, typeLine })
+        {
+            var folded = FoldExchangeName(raw);
+            if (folded.Length > 0) yield return folded;
+        }
+    }
 
     async Task<IReadOnlyList<RollFilter>> MapRollsToFilters(IReadOnlyList<string> rolls, string category = "")
     {
@@ -863,6 +953,7 @@ sealed class TrackerWindow : Form
             var arr = new JsonArray();
             foreach (var filter in filters)
             {
+                if (EquipTradeIds.ContainsKey(filter.Id)) continue;
                 var obj = new JsonObject { ["id"] = filter.Id, ["disabled"] = false };
                 JsonObject? value = null;
                 if (filter.Min is double min)
@@ -895,16 +986,28 @@ sealed class TrackerWindow : Form
                     },
                 };
             }
+            var equipInner = new JsonObject();
             if (runeSockets is int n && n is >= 0 and <= 6)
+                equipInner["rune_sockets"] = new JsonObject { ["min"] = n, ["max"] = n };
+            foreach (var filter in filters)
             {
-                bag["equipment_filters"] = new JsonObject
+                if (!EquipTradeIds.TryGetValue(filter.Id, out var key)) continue;
+                var range = new JsonObject();
+                if (filter.Min is double min)
                 {
-                    ["filters"] = new JsonObject
-                    {
-                        ["rune_sockets"] = new JsonObject { ["min"] = n, ["max"] = n },
-                    },
-                };
+                    if (relax && min > 0)
+                        min = key is "aps" or "crit" ? Math.Round(min * 0.9, 2) : Math.Floor(min * 0.9);
+                    range["min"] = min;
+                }
+                if (filter.Max is double max)
+                {
+                    if (relax && max < 0) max = Math.Ceiling(max * 0.9);
+                    range["max"] = max;
+                }
+                if (range.Count > 0) equipInner[key] = range;
             }
+            if (equipInner.Count > 0)
+                bag["equipment_filters"] = new JsonObject { ["filters"] = equipInner };
             return bag;
         }
 
@@ -953,7 +1056,7 @@ sealed class TrackerWindow : Form
             }
             var query = new JsonObject
             {
-                ["status"] = new JsonObject { ["option"] = "any" },
+                ["status"] = new JsonObject { ["option"] = TradeLive },
                 ["stats"] = stats,
                 ["filters"] = filtersBag,
             };
@@ -1010,20 +1113,14 @@ sealed class TrackerWindow : Form
                 var hashes = result.EnumerateArray()
                     .Select(el => JsonString(el))
                     .Where(h => !string.IsNullOrWhiteSpace(h))
-                    .Take(10)
+                    .Take(TradeFetchCap)
                     .ToArray();
                 if (hashes.Length == 0) return null;
-                var fetchUrl = "https://www.pathofexile.com/api/trade2/fetch/" + string.Join(",", hashes) + "?query=" + Uri.EscapeDataString(lastId);
-                if (!await WaitForSlot(FetchLimit)) return new TradeLookup(RateLimited: true);
-                using var fetchRes = await TradeHttp.GetAsync(fetchUrl);
-                NoteRate(fetchRes, search: false);
-                string? fetchJson = null;
-                if ((int)fetchRes.StatusCode == 429) return new TradeLookup(RateLimited: true);
-                if ((int)fetchRes.StatusCode is 401 or 403) return new TradeLookup(Forbidden: true);
-                if (fetchRes.IsSuccessStatusCode) fetchJson = await fetchRes.Content.ReadAsStringAsync();
-                if (fetchJson is null) return null;
-                var payload = ReadCheapestListing(fetchJson, name, root, league, lastId, filters.Count);
-                return payload is not null ? new TradeLookup(payload) : null;
+                var fetched = await FetchListingOffers(hashes, lastId, name);
+                if (fetched.Rate) return new TradeLookup(RateLimited: true);
+                if (fetched.Forbidden) return new TradeLookup(Forbidden: true);
+                if (fetched.Offers is null || fetched.Offers.Count == 0) return null;
+                return new TradeLookup(ListingPayload(name, fetched.Offers, lastTotal, league, lastId, filters.Count));
             }
         }
 
@@ -1053,6 +1150,162 @@ sealed class TrackerWindow : Form
         }, JsonOut));
     }
 
+    async Task<TradeLookup> LookupExchangeListing(string league, string name, string typeLine, string havePref)
+    {
+        var tag = await ResolveExchangeTag(name, typeLine);
+        if (string.IsNullOrWhiteSpace(tag)) return new TradeLookup();
+        var have = ExchangeHave.Where(h => !h.Equals(tag, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (have.Length == 0) have = ["exalted", "chaos"];
+        if (!string.IsNullOrWhiteSpace(havePref) && have.Contains(havePref) && have[0] != havePref)
+            have = new[] { havePref }.Concat(have.Where(h => h != havePref)).ToArray();
+        var body = JsonSerializer.Serialize(new
+        {
+            engine = "new",
+            query = new
+            {
+                status = new { option = TradeExchangeLive },
+                have,
+                want = new[] { tag },
+            },
+            sort = new Dictionary<string, string> { ["have"] = "asc" },
+        }, JsonOut);
+        var uris = new[]
+        {
+            "https://www.pathofexile.com/api/trade2/exchange/poe2/" + Uri.EscapeDataString(league),
+            "https://www.pathofexile.com/api/trade2/exchange/" + Uri.EscapeDataString(league),
+        };
+        if (ExchangeLimit.Limited && CombinedWaitMs() >= 1500) return new TradeLookup(RateLimited: true);
+        string? json = null;
+        var status = 0;
+        foreach (var uri in uris)
+        {
+            (json, status) = await PostTradeExchange(uri, body);
+            if (status == 429) return new TradeLookup(RateLimited: true);
+            if (status is 401 or 403) return new TradeLookup(Forbidden: true);
+            if (json is not null) break;
+            if (status is not 404) break;
+        }
+        if (json is null) return new TradeLookup();
+        JsonDocument search;
+        try
+        {
+            search = JsonDocument.Parse(json);
+        }
+        catch (JsonException)
+        {
+            return new TradeLookup();
+        }
+        using (search)
+        {
+            var root = search.RootElement;
+            var total = root.TryGetProperty("total", out var totalEl) && JsonInt(totalEl, out var listed) ? listed : 0;
+            var offers = ReadExchangeOffers(root, name);
+            SortExchangeOffers(offers, havePref);
+            var url = TradeExchangeUrl(league, tag, have);
+            if (offers.Count == 0)
+            {
+                return new TradeLookup(JsonSerializer.Serialize(new
+                {
+                    name,
+                    listings = total,
+                    mapped = 0,
+                    league,
+                    url,
+                    tag,
+                    bulk = true,
+                }, JsonOut));
+            }
+            return new TradeLookup(ExchangePayload(name, offers, total, league, tag, url));
+        }
+    }
+
+    async Task<string?> ResolveExchangeTag(string name, string typeLine)
+    {
+        var tags = await GetExchangeTags();
+        if (tags is null) return null;
+        foreach (var key in ExchangeNameKeys(name, typeLine))
+        {
+            if (tags.TryGetValue(key, out var tag) && !string.IsNullOrWhiteSpace(tag))
+                return tag;
+        }
+        return null;
+    }
+
+    async Task<Dictionary<string, string>?> GetExchangeTags()
+    {
+        if (ExchangeTags is not null && DateTime.UtcNow - ExchangeTagsAt < TimeSpan.FromHours(12))
+            return ExchangeTags;
+        var body = await GetTradeStaticBody();
+        if (string.IsNullOrWhiteSpace(body)) return ExchangeTags;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (!doc.RootElement.TryGetProperty("result", out var groups) || groups.ValueKind != JsonValueKind.Array)
+                return ExchangeTags;
+            foreach (var group in groups.EnumerateArray())
+            {
+                if (!group.TryGetProperty("entries", out var entries) || entries.ValueKind != JsonValueKind.Array)
+                    continue;
+                foreach (var entry in entries.EnumerateArray())
+                {
+                    var tag = entry.TryGetProperty("id", out var idEl) ? JsonString(idEl) : "";
+                    var text = entry.TryGetProperty("text", out var textEl) ? JsonString(textEl) : "";
+                    if (string.IsNullOrWhiteSpace(tag) || tag == "sep" || string.IsNullOrWhiteSpace(text)) continue;
+                    map[FoldExchangeName(text)] = tag;
+                }
+            }
+            if (map.Count > 0)
+            {
+                ExchangeTags = map;
+                ExchangeTagsAt = DateTime.UtcNow;
+            }
+            return ExchangeTags;
+        }
+        catch (JsonException)
+        {
+            return ExchangeTags;
+        }
+    }
+
+    async Task<string?> GetTradeStaticBody()
+    {
+        const string cacheKey = "trade-static-v1";
+        if (Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < TimeSpan.FromHours(12) && hit.status is >= 200 and < 300)
+            return hit.body;
+        var disk = Path.Combine(AppDataDir(), "trade-static.json");
+        try
+        {
+            if (File.Exists(disk) && DateTime.UtcNow - File.GetLastWriteTimeUtc(disk) < TimeSpan.FromHours(12))
+            {
+                var stored = await File.ReadAllTextAsync(disk);
+                if (stored.TrimStart().StartsWith('{'))
+                {
+                    Cache[cacheKey] = (DateTime.UtcNow, 200, stored);
+                    return stored;
+                }
+            }
+        }
+        catch
+        {
+            /* fetch below */
+        }
+        if (CombinedWaitMs() >= 1500 && SearchLimit.Limited) return null;
+        if (!await WaitForSlot(SearchLimit)) return null;
+        using var res = await TradeHttp.GetAsync("https://www.pathofexile.com/api/trade2/data/static");
+        NoteRate(res, SearchLimit);
+        var body = await res.Content.ReadAsStringAsync();
+        var status = (int)res.StatusCode;
+        var looksJson = body.TrimStart().StartsWith('{');
+        if (res.IsSuccessStatusCode && looksJson)
+        {
+            Cache[cacheKey] = (DateTime.UtcNow, status, body);
+            try { await File.WriteAllTextAsync(disk, body); } catch { /* keep memory cache */ }
+            return body;
+        }
+        return null;
+    }
+
     async Task<TradeLookup> LookupTradeListing(string league, string name, bool thorough = false)
     {
         var searchUri = "https://www.pathofexile.com/api/trade2/search/poe2/" + Uri.EscapeDataString(league);
@@ -1077,34 +1330,14 @@ sealed class TrackerWindow : Form
             if (!root.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array || result.GetArrayLength() == 0)
                 continue;
             var queryId = root.TryGetProperty("id", out var idEl) ? JsonString(idEl) : "";
-            var hashes = result.EnumerateArray().Select(el => JsonString(el)).Where(h => !string.IsNullOrWhiteSpace(h)).Take(10).ToArray();
+            var hashes = result.EnumerateArray().Select(el => JsonString(el)).Where(h => !string.IsNullOrWhiteSpace(h)).Take(TradeFetchCap).ToArray();
             if (hashes.Length == 0) continue;
-            var fetchUrl = "https://www.pathofexile.com/api/trade2/fetch/" + string.Join(",", hashes) + "?query=" + Uri.EscapeDataString(queryId);
-            if (!await WaitForSlot(FetchLimit)) return new TradeLookup(RateLimited: true);
-            using var fetchRes = await TradeHttp.GetAsync(fetchUrl);
-            NoteRate(fetchRes, search: false);
-            string? fetchJson = null;
-            if ((int)fetchRes.StatusCode == 429)
-            {
-                var wait = RetryAfterMs(fetchRes) ?? 4000;
-                await Task.Delay(wait);
-                using var retryFetch = await TradeHttp.GetAsync(fetchUrl);
-                NoteRate(retryFetch, search: false);
-                if ((int)retryFetch.StatusCode == 429) return new TradeLookup(RateLimited: true);
-                if (!retryFetch.IsSuccessStatusCode) continue;
-                fetchJson = await retryFetch.Content.ReadAsStringAsync();
-            }
-            else if ((int)fetchRes.StatusCode is 401 or 403)
-            {
-                return new TradeLookup(Forbidden: true);
-            }
-            else if (fetchRes.IsSuccessStatusCode)
-            {
-                fetchJson = await fetchRes.Content.ReadAsStringAsync();
-            }
-            if (fetchJson is null) continue;
-            var payload = ReadCheapestListing(fetchJson, name, root, league, queryId, 0);
-            if (payload is not null) return new TradeLookup(payload);
+            var fetched = await FetchListingOffers(hashes, queryId, name);
+            if (fetched.Rate) return new TradeLookup(RateLimited: true);
+            if (fetched.Forbidden) return new TradeLookup(Forbidden: true);
+            if (fetched.Offers is null || fetched.Offers.Count == 0) continue;
+            var total = root.TryGetProperty("total", out var totalEl) && JsonInt(totalEl, out var listed) ? listed : fetched.Offers.Count;
+            return new TradeLookup(ListingPayload(name, fetched.Offers, total, league, queryId, 0));
             }
         }
         return new TradeLookup();
@@ -1124,7 +1357,20 @@ sealed class TrackerWindow : Form
         if (!await WaitForSlot(SearchLimit)) return (null, 429);
         using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
         using var searchRes = await TradeHttp.PostAsync(uri, content);
-        NoteRate(searchRes, search: true);
+        NoteRate(searchRes, SearchLimit);
+        var status = (int)searchRes.StatusCode;
+        var searchJson = await searchRes.Content.ReadAsStringAsync();
+        if (status == 429) return (null, 429);
+        if (status is 401 or 403) return (null, status);
+        return (searchRes.IsSuccessStatusCode ? searchJson : null, status);
+    }
+
+    async Task<(string? json, int status)> PostTradeExchange(string uri, string body)
+    {
+        if (!await WaitForSlot(ExchangeLimit)) return (null, 429);
+        using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+        using var searchRes = await TradeHttp.PostAsync(uri, content);
+        NoteRate(searchRes, ExchangeLimit);
         var status = (int)searchRes.StatusCode;
         var searchJson = await searchRes.Content.ReadAsStringAsync();
         if (status == 429) return (null, 429);
@@ -1134,13 +1380,128 @@ sealed class TrackerWindow : Form
 
     string? ReadCheapestListing(string fetchJson, string fallbackName, JsonElement searchRoot, string league = "", string queryId = "", int mapped = 0)
     {
+        var offers = ReadOfferRows(fetchJson, fallbackName);
+        if (offers.Count == 0) return null;
+        var total = searchRoot.TryGetProperty("total", out var totalEl) && JsonInt(totalEl, out var listed) ? listed : offers.Count;
+        return ListingPayload(fallbackName, offers, total, league, queryId, mapped);
+    }
+
+    async Task<(List<OfferRow>? Offers, bool Rate, bool Forbidden)> FetchListingOffers(string[] hashes, string queryId, string fallbackName)
+    {
+        var offers = new List<OfferRow>();
+        for (var i = 0; i < hashes.Length; i += TradeFetchBatch)
+        {
+            var batch = hashes.Skip(i).Take(TradeFetchBatch).ToArray();
+            if (batch.Length == 0) break;
+            if (!await WaitForSlot(FetchLimit))
+                return offers.Count > 0 ? (offers, false, false) : (null, true, false);
+            var fetchUrl = "https://www.pathofexile.com/api/trade2/fetch/" + string.Join(",", batch) + "?query=" + Uri.EscapeDataString(queryId ?? "");
+            using var fetchRes = await TradeHttp.GetAsync(fetchUrl);
+            NoteRate(fetchRes, FetchLimit);
+            var status = (int)fetchRes.StatusCode;
+            if (status == 429)
+                return offers.Count > 0 ? (offers, false, false) : (null, true, false);
+            if (status is 401 or 403) return (null, false, true);
+            if (!fetchRes.IsSuccessStatusCode) break;
+            offers.AddRange(ReadOfferRows(await fetchRes.Content.ReadAsStringAsync(), fallbackName));
+        }
+        return offers.Count > 0 ? (offers, false, false) : (null, false, false);
+    }
+
+    static string ListingPayload(string fallbackName, IReadOnlyList<OfferRow> offers, int total, string league, string queryId, int mapped)
+    {
+        var first = offers[0];
+        return JsonSerializer.Serialize(new
+        {
+            name = string.IsNullOrWhiteSpace(first.Name) ? fallbackName : first.Name,
+            amount = first.Amount,
+            currency = first.Currency,
+            listings = total > 0 ? total : offers.Count,
+            mapped,
+            league,
+            url = string.IsNullOrWhiteSpace(queryId) ? "" : TradeSearchUrl(league, queryId),
+            offers = offers.Select(row => new { ign = row.Ign, amount = row.Amount, currency = row.Currency, instant = row.Instant }),
+        }, JsonOut);
+    }
+
+    static string ExchangePayload(string fallbackName, IReadOnlyList<OfferRow> offers, int total, string league, string tag, string url)
+    {
+        var first = offers[0];
+        return JsonSerializer.Serialize(new
+        {
+            name = string.IsNullOrWhiteSpace(first.Name) ? fallbackName : first.Name,
+            amount = first.Amount,
+            currency = first.Currency,
+            listings = total > 0 ? total : offers.Count,
+            mapped = 0,
+            league,
+            url,
+            tag,
+            bulk = true,
+            offers = offers.Select(row => new { ign = row.Ign, amount = row.Amount, currency = row.Currency, instant = row.Instant }),
+        }, JsonOut);
+    }
+
+    static void SortExchangeOffers(List<OfferRow> offers, string pref)
+    {
+        offers.Sort((a, b) =>
+        {
+            var rank = ExchangeCurrencyRank(a.Currency, pref).CompareTo(ExchangeCurrencyRank(b.Currency, pref));
+            return rank != 0 ? rank : a.Amount.CompareTo(b.Amount);
+        });
+    }
+
+    static int ExchangeCurrencyRank(string currency, string pref)
+    {
+        if (!string.IsNullOrEmpty(pref) && currency.Equals(pref, StringComparison.OrdinalIgnoreCase)) return 0;
+        if (currency.Equals("exalted", StringComparison.OrdinalIgnoreCase)) return 1;
+        if (currency.Equals("chaos", StringComparison.OrdinalIgnoreCase)) return 2;
+        if (currency.Equals("divine", StringComparison.OrdinalIgnoreCase)) return 3;
+        return 4;
+    }
+
+    static List<OfferRow> ReadExchangeOffers(JsonElement root, string fallbackName)
+    {
+        var rows = new List<OfferRow>();
+        if (!root.TryGetProperty("result", out var result)) return rows;
+        IEnumerable<JsonElement> listings = result.ValueKind == JsonValueKind.Object
+            ? result.EnumerateObject().Select(p => p.Value)
+            : result.ValueKind == JsonValueKind.Array
+                ? result.EnumerateArray().ToArray()
+                : Array.Empty<JsonElement>();
+        foreach (var row in listings)
+        {
+            if (!row.TryGetProperty("listing", out var listing)) continue;
+            if (!listing.TryGetProperty("offers", out var offers) || offers.ValueKind != JsonValueKind.Array)
+                continue;
+            foreach (var offer in offers.EnumerateArray().Take(1))
+            {
+                if (!offer.TryGetProperty("exchange", out var ex) || !offer.TryGetProperty("item", out var item))
+                    continue;
+                var pay = ex.TryGetProperty("amount", out var payEl) && JsonDouble(payEl, out var p) ? p : double.NaN;
+                var qty = item.TryGetProperty("amount", out var qtyEl) && JsonDouble(qtyEl, out var q) ? q : 1;
+                if (!NumberIsPositive(pay) || qty <= 0 || double.IsNaN(qty)) continue;
+                var unit = pay / qty;
+                if (!NumberIsPositive(unit)) continue;
+                var currency = ex.TryGetProperty("currency", out var curEl) ? JsonString(curEl) : "";
+                if (string.IsNullOrWhiteSpace(currency)) continue;
+                var ign = ListingIgn(listing);
+                var instant = listing.TryGetProperty("fee", out var feeEl) && feeEl.ValueKind is JsonValueKind.Number or JsonValueKind.String;
+                rows.Add(new OfferRow(ign, unit, currency, instant, fallbackName));
+            }
+            if (rows.Count >= TradeFetchCap) break;
+        }
+        return rows;
+    }
+
+    sealed record OfferRow(string Ign, double Amount, string Currency, bool Instant, string Name);
+
+    static List<OfferRow> ReadOfferRows(string fetchJson, string fallbackName)
+    {
+        var rows = new List<OfferRow>();
         using var fetched = JsonDocument.Parse(fetchJson);
         if (!fetched.RootElement.TryGetProperty("result", out var listings) || listings.ValueKind != JsonValueKind.Array)
-            return null;
-        string? bestName = null;
-        string? bestCurrency = null;
-        double bestAmount = double.MaxValue;
-        var count = 0;
+            return rows;
         foreach (var row in listings.EnumerateArray())
         {
             if (!row.TryGetProperty("listing", out var listing) ||
@@ -1150,26 +1511,22 @@ sealed class TrackerWindow : Form
             var amount = price.TryGetProperty("amount", out var amountEl) && JsonDouble(amountEl, out var n) ? n : double.NaN;
             var currency = price.TryGetProperty("currency", out var curEl) ? JsonString(curEl) : "";
             if (!NumberIsPositive(amount) || string.IsNullOrWhiteSpace(currency)) continue;
-            count++;
-            if (amount < bestAmount)
-            {
-                bestAmount = amount;
-                bestCurrency = currency;
-                bestName = ItemDisplayName(row, fallbackName);
-            }
+            var ign = ListingIgn(listing);
+            var instant = listing.TryGetProperty("fee", out var feeEl) && feeEl.ValueKind is JsonValueKind.Number or JsonValueKind.String;
+            rows.Add(new OfferRow(ign, amount, currency, instant, ItemDisplayName(row, fallbackName)));
         }
-        if (count == 0 || bestCurrency is null) return null;
-        var total = searchRoot.TryGetProperty("total", out var totalEl) && JsonInt(totalEl, out var listed) ? listed : count;
-        return JsonSerializer.Serialize(new
-        {
-            name = string.IsNullOrWhiteSpace(bestName) ? fallbackName : bestName,
-            amount = bestAmount,
-            currency = bestCurrency,
-            listings = total,
-            mapped,
-            league,
-            url = string.IsNullOrWhiteSpace(queryId) ? "" : TradeSearchUrl(league, queryId),
-        }, JsonOut);
+        return rows;
+    }
+
+    static string ListingIgn(JsonElement listing)
+    {
+        if (!listing.TryGetProperty("account", out var account) || account.ValueKind != JsonValueKind.Object)
+            return "";
+        var ign = account.TryGetProperty("lastCharacterName", out var ignEl) ? JsonString(ignEl) : "";
+        if (!string.IsNullOrWhiteSpace(ign)) return ign;
+        var name = account.TryGetProperty("name", out var nameEl) ? JsonString(nameEl) : "";
+        var hash = name.IndexOf('#');
+        return hash > 0 ? name[..hash] : name;
     }
 
     static string ItemDisplayName(JsonElement row, string fallback)
@@ -1188,12 +1545,12 @@ sealed class TrackerWindow : Form
     {
         yield return JsonSerializer.Serialize(new
         {
-            query = new { status = new { option = "any" }, name },
+            query = new { status = new { option = TradeLive }, name },
             sort = new Dictionary<string, string> { ["price"] = "asc" },
         });
         yield return JsonSerializer.Serialize(new
         {
-            query = new { status = new { option = "any" }, type = name },
+            query = new { status = new { option = TradeLive }, type = name },
             sort = new Dictionary<string, string> { ["price"] = "asc" },
         });
         if (!name.EndsWith(" Support", StringComparison.OrdinalIgnoreCase) &&
@@ -1201,7 +1558,7 @@ sealed class TrackerWindow : Form
         {
             yield return JsonSerializer.Serialize(new
             {
-                query = new { status = new { option = "any" }, type = name + " Support" },
+                query = new { status = new { option = TradeLive }, type = name + " Support" },
                 sort = new Dictionary<string, string> { ["price"] = "asc" },
             });
         }
@@ -1210,7 +1567,7 @@ sealed class TrackerWindow : Form
         {
             query = new
             {
-                status = new { option = "any" },
+                status = new { option = TradeLive },
                 type = name,
                 filters = new { type_filters = new { filters = new { rarity = new { option = "unique" } } } },
             },
@@ -1376,7 +1733,6 @@ sealed class TrackerWindow : Form
                 _ = Task.Run(async () =>
                 {
                     await FeedbackStore.NotifyCloudAsync(item);
-                    await FeedbackStore.NotifyLocalAsync(item);
                     await FeedbackStore.NotifyHookAsync(item);
                 });
                 Reply(id ?? "", true, 200, "{\"ok\":true}");
@@ -1482,7 +1838,9 @@ sealed class TrackerWindow : Form
                 if (root.TryGetProperty("runeSockets", out var runeEl) && JsonInt(runeEl, out var runeN) && runeN is >= 0 and <= 6)
                     runeSockets = runeN;
                 var ravenTouched = root.TryGetProperty("ravenTouched", out var ravenEl) && ravenEl.ValueKind == JsonValueKind.True;
-                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets, category, ravenTouched);
+                var exchange = root.TryGetProperty("exchange", out var xchgEl) && xchgEl.ValueKind == JsonValueKind.True;
+                var havePref = root.TryGetProperty("have", out var haveEl) ? haveEl.GetString() ?? "" : "";
+                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets, category, ravenTouched, exchange, havePref);
                 return;
             }
             if (type == "backup-info")
@@ -1572,7 +1930,7 @@ sealed class TrackerWindow : Form
             ok,
             status,
             body,
-            rate = RatePayload(wait, ready, SearchLimit.Limited || FetchLimit.Limited, snap),
+            rate = RatePayload(wait, ready, SearchLimit.Limited || FetchLimit.Limited || ExchangeLimit.Limited, snap),
         });
         _web.CoreWebView2.PostWebMessageAsJson(payload);
     }
@@ -1586,7 +1944,7 @@ sealed class TrackerWindow : Form
         var payload = JsonSerializer.Serialize(new
         {
             type = "rate-limit",
-            rate = RatePayload(wait, ready, SearchLimit.Limited || FetchLimit.Limited, snap),
+            rate = RatePayload(wait, ready, SearchLimit.Limited || FetchLimit.Limited || ExchangeLimit.Limited, snap),
         });
         _web.CoreWebView2.PostWebMessageAsJson(payload);
     }
@@ -1605,7 +1963,7 @@ sealed class TrackerWindow : Form
         };
     }
 
-    static int CombinedWaitMs() => Math.Max(SearchLimit.WaitMs(), FetchLimit.WaitMs());
+    static int CombinedWaitMs() => Math.Max(SearchLimit.WaitMs(), Math.Max(FetchLimit.WaitMs(), ExchangeLimit.WaitMs()));
 
     async Task<bool> WaitForSlot(TradeLimiter limiter)
     {
@@ -1635,9 +1993,8 @@ sealed class TrackerWindow : Form
         }
     }
 
-    void NoteRate(HttpResponseMessage res, bool search)
+    void NoteRate(HttpResponseMessage res, TradeLimiter limiter)
     {
-        var limiter = search ? SearchLimit : FetchLimit;
         AdjustLimiter(limiter, res);
         if ((int)res.StatusCode == 429 && limiter.WaitMs() == 0)
             limiter.PenaltyUntil = DateTime.UtcNow.AddSeconds(5);
@@ -1935,6 +2292,7 @@ sealed class TrackerWindow : Form
         WriteResource(asm, "www.overlay.html", Path.Combine(dir, "overlay.html"));
         WriteResource(asm, "www.styles.css", Path.Combine(dir, "styles.css"));
         WriteResource(asm, "www.app.js", Path.Combine(dir, "app.js"));
+        WriteResource(asm, "www.affix-ladders.js", Path.Combine(dir, "affix-ladders.js"));
         WriteResource(asm, "www.decks.js", Path.Combine(dir, "decks.js"));
         WriteResource(asm, "www.deck-game.js", Path.Combine(dir, "deck-game.js"));
 
@@ -2454,7 +2812,23 @@ sealed class PriceOverlayForm : Form
                 var h = doc.RootElement.TryGetProperty("h", out var hEl) && hEl.ValueKind == JsonValueKind.Number && hEl.TryGetInt32(out var hh) ? hh : Height;
                 var screen = Screen.FromControl(this).WorkingArea;
                 Width = Math.Clamp(w, 280, Math.Max(280, screen.Width / 2));
-                Height = Math.Clamp(h, 90, Math.Max(90, (int)(screen.Height * 0.8)));
+                Height = Math.Clamp(h, 90, Math.Max(90, (int)(screen.Height * 0.92)));
+                return;
+            }
+            if (type == "overlay-drag")
+            {
+                var dx = doc.RootElement.TryGetProperty("dx", out var dxEl) && dxEl.ValueKind == JsonValueKind.Number ? (int)Math.Round(dxEl.GetDouble()) : 0;
+                var dy = doc.RootElement.TryGetProperty("dy", out var dyEl) && dyEl.ValueKind == JsonValueKind.Number ? (int)Math.Round(dyEl.GetDouble()) : 0;
+                if (dx == 0 && dy == 0) return;
+                void Move()
+                {
+                    var screen = Screen.FromControl(this).WorkingArea;
+                    var x = Math.Clamp(Location.X + dx, screen.Left, Math.Max(screen.Left, screen.Right - Width));
+                    var y = Math.Clamp(Location.Y + dy, screen.Top, Math.Max(screen.Top, screen.Bottom - Height));
+                    Location = new Point(x, y);
+                }
+                if (InvokeRequired) BeginInvoke(Move);
+                else Move();
                 return;
             }
             if (type == "overlay-click")

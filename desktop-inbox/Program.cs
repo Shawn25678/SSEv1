@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Net;
+using System.Net.Http;
 using System.Reflection;
-using System.Text;
+using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -27,15 +29,18 @@ static class InboxProgram
 
 sealed class InboxWindow : Form
 {
+    const string Repo = "Shawn25678/SSEv1";
+    static readonly HttpClient GitHttp = CreateGitHttp();
+    static readonly JsonSerializerOptions JsonOut = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
     readonly WebView2 _web = new()
     {
         Dock = DockStyle.Fill,
         DefaultBackgroundColor = Color.FromArgb(12, 10, 8),
     };
-    HttpListener? _listen;
     FileSystemWatcher? _watch;
-    CancellationTokenSource? _listenStop;
     System.Windows.Forms.Timer? _refresh;
+    List<GithubIssue> _issues = new();
 
     public InboxWindow()
     {
@@ -49,18 +54,15 @@ sealed class InboxWindow : Form
         {
             /* keep the default window icon */
         }
-        Width = 860;
-        Height = 640;
-        MinimumSize = new Size(560, 420);
+        Width = 980;
+        Height = 700;
+        MinimumSize = new Size(640, 480);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(12, 10, 8);
         Controls.Add(_web);
         Load += OnLoad;
         FormClosed += (_, _) =>
         {
-            _listenStop?.Cancel();
-            try { _listen?.Stop(); } catch { /* ignore */ }
-            _listen?.Close();
             _watch?.Dispose();
             _refresh?.Stop();
             _refresh?.Dispose();
@@ -97,9 +99,13 @@ sealed class InboxWindow : Form
         _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _web.CoreWebView2.Settings.IsWebMessageEnabled = true;
         _web.CoreWebView2.WebMessageReceived += OnWebMessage;
+        _web.CoreWebView2.NewWindowRequested += (_, ev) =>
+        {
+            ev.Handled = true;
+            OpenInboxUrl(ev.Uri);
+        };
         _web.CoreWebView2.Navigate(new Uri(page).AbsoluteUri);
         StartWatch();
-        StartListen();
         _refresh = new System.Windows.Forms.Timer { Interval = 20000 };
         _refresh.Tick += (_, _) => _ = PushListAsync(true);
         _refresh.Start();
@@ -114,9 +120,15 @@ sealed class InboxWindow : Form
     {
         try
         {
-            using var doc = System.Text.Json.JsonDocument.Parse(e.WebMessageAsJson);
+            using var doc = JsonDocument.Parse(e.WebMessageAsJson);
             var root = doc.RootElement;
             var type = root.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : "";
+            if (type == "open-url")
+            {
+                var url = root.TryGetProperty("url", out var urlEl) ? urlEl.GetString() ?? "" : "";
+                BeginInvoke(() => OpenInboxUrl(url));
+                return;
+            }
             if (type == "inbox-save-config")
             {
                 var url = root.TryGetProperty("url", out var urlEl) ? urlEl.GetString() ?? "" : "";
@@ -125,10 +137,17 @@ sealed class InboxWindow : Form
                 var err = FeedbackStore.SaveConfig(url, anon, service);
                 if (_web.CoreWebView2 is not null)
                 {
-                    var note = string.IsNullOrWhiteSpace(err) ? "Saved. Player Send can use this project." : err;
-                    _web.CoreWebView2.PostWebMessageAsJson(System.Text.Json.JsonSerializer.Serialize(new { type = "inbox-toast", text = note }));
+                    var note = string.IsNullOrWhiteSpace(err) ? "Saved." : err;
+                    _web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "inbox-toast", text = note }));
+                    _web.CoreWebView2.PostWebMessageAsJson(FeedbackStore.InboxConfigJson());
                 }
                 await PushListAsync(true);
+                return;
+            }
+            if (type == "inbox-config")
+            {
+                if (_web.CoreWebView2 is not null)
+                    _web.CoreWebView2.PostWebMessageAsJson(FeedbackStore.InboxConfigJson());
                 return;
             }
             if (type == "inbox-ready" || type == "inbox-refresh")
@@ -165,12 +184,55 @@ sealed class InboxWindow : Form
     {
         if (_web.CoreWebView2 is null) return;
         var items = cloud ? await FeedbackStore.ListAllAsync() : FeedbackStore.List();
-        _web.CoreWebView2.PostWebMessageAsJson(FeedbackStore.InboxListJson(items));
+        if (cloud) _issues = await FetchGithubIssues();
+        using var list = JsonDocument.Parse(FeedbackStore.InboxListJson(items));
+        var bag = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(list.RootElement.GetRawText()) ?? new();
+        bag["issues"] = JsonSerializer.SerializeToElement(_issues, JsonOut);
+        _web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(bag));
         var unread = items.Count(item => !item.Read);
         BeginInvoke(() => Text = unread > 0 ? "Still Sane Inbox (" + unread + ")" : "Still Sane Inbox");
     }
 
     void PushList() => _ = PushListAsync();
+
+    static async Task<List<GithubIssue>> FetchGithubIssues()
+    {
+        try
+        {
+            using var res = await GitHttp.GetAsync("https://api.github.com/repos/" + Repo + "/issues?state=open&per_page=40");
+            if (!res.IsSuccessStatusCode) return new List<GithubIssue>();
+            using var doc = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return new List<GithubIssue>();
+            var rows = new List<GithubIssue>();
+            foreach (var row in doc.RootElement.EnumerateArray())
+            {
+                if (row.TryGetProperty("pull_request", out _)) continue;
+                var number = row.TryGetProperty("number", out var numEl) && numEl.ValueKind == JsonValueKind.Number ? numEl.GetInt32() : 0;
+                var title = row.TryGetProperty("title", out var titleEl) ? titleEl.GetString() ?? "" : "";
+                var body = row.TryGetProperty("body", out var bodyEl) ? bodyEl.GetString() ?? "" : "";
+                var html = row.TryGetProperty("html_url", out var urlEl) ? urlEl.GetString() ?? "" : "";
+                var created = row.TryGetProperty("created_at", out var atEl) ? atEl.GetString() ?? "" : "";
+                if (number <= 0 || title.Length == 0) continue;
+                if (!Uri.TryCreate(html, UriKind.Absolute, out var uri) || !AllowedInboxUrl(uri)) continue;
+                var at = DateTimeOffset.TryParse(created, out var when) ? when.ToUnixTimeMilliseconds() : 0;
+                if (body.Length > 8000) body = body[..8000];
+                rows.Add(new GithubIssue
+                {
+                    Id = "gh-" + number,
+                    Number = number,
+                    Title = title,
+                    Body = body,
+                    Url = uri.AbsoluteUri,
+                    At = at,
+                });
+            }
+            return rows;
+        }
+        catch
+        {
+            return new List<GithubIssue>();
+        }
+    }
 
     void StartWatch()
     {
@@ -196,82 +258,37 @@ sealed class InboxWindow : Form
         _watch.Renamed += Kick;
     }
 
-    void StartListen()
+    static void OpenInboxUrl(string url)
     {
-        try
-        {
-            _listen = new HttpListener();
-            _listen.Prefixes.Add("http://127.0.0.1:" + FeedbackStore.Port + "/");
-            _listen.Start();
-        }
-        catch
-        {
-            _listen = null;
-            return;
-        }
-        _listenStop = new CancellationTokenSource();
-        var token = _listenStop.Token;
-        _ = Task.Run(async () =>
-        {
-            while (!token.IsCancellationRequested && _listen is { IsListening: true })
-            {
-                HttpListenerContext ctx;
-                try
-                {
-                    ctx = await _listen.GetContextAsync();
-                }
-                catch
-                {
-                    break;
-                }
-                _ = Task.Run(() => HandleRequest(ctx));
-            }
-        }, token);
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
+        OpenInboxUrl(uri);
     }
 
-    void HandleRequest(HttpListenerContext ctx)
+    static void OpenInboxUrl(Uri uri)
     {
-        try
-        {
-            var req = ctx.Request;
-            var res = ctx.Response;
-            res.Headers["Access-Control-Allow-Origin"] = "*";
-            if (req.HttpMethod == "OPTIONS")
-            {
-                res.StatusCode = 204;
-                res.Close();
-                return;
-            }
-            if (req.Url?.AbsolutePath == "/health")
-            {
-                Write(res, 200, "ok");
-                return;
-            }
-            if (req.HttpMethod == "POST" && req.Url?.AbsolutePath == "/feedback")
-            {
-                using var reader = new StreamReader(req.InputStream, req.ContentEncoding ?? Encoding.UTF8);
-                var json = reader.ReadToEnd();
-                var item = FeedbackStore.SaveJson(json);
-                Write(res, item is null ? 400 : 200, item is null ? "bad" : "ok");
-                try { BeginInvoke(PushList); } catch { /* closing */ }
-                return;
-            }
-            Write(res, 404, "no");
-        }
-        catch
-        {
-            try { ctx.Response.Abort(); } catch { /* ignore */ }
-        }
+        if (!AllowedInboxUrl(uri)) return;
+        Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
     }
 
-    static void Write(HttpListenerResponse res, int status, string body)
+    static bool AllowedInboxUrl(Uri uri)
     {
-        var bytes = Encoding.UTF8.GetBytes(body);
-        res.StatusCode = status;
-        res.ContentType = "text/plain; charset=utf-8";
-        res.ContentLength64 = bytes.Length;
-        res.OutputStream.Write(bytes);
-        res.Close();
+        if (!uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return false;
+        if (!uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)
+            && !uri.Host.Equals("www.github.com", StringComparison.OrdinalIgnoreCase)
+            && !uri.Host.Equals("api.github.com", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return uri.AbsolutePath.StartsWith("/Shawn25678/SSEv1", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static HttpClient CreateGitHttp()
+    {
+        var http = new HttpClient(new SocketsHttpHandler { AutomaticDecompression = DecompressionMethods.All })
+        {
+            Timeout = TimeSpan.FromSeconds(12),
+        };
+        http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "StillSaneInbox/1.0");
+        http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/vnd.github+json");
+        return http;
     }
 
     static string ExtractInboxFiles()
@@ -294,5 +311,15 @@ sealed class InboxWindow : Form
         if (stream is null) return;
         using var file = File.Create(path);
         stream.CopyTo(file);
+    }
+
+    sealed class GithubIssue
+    {
+        public string Id { get; set; } = "";
+        public int Number { get; set; }
+        public string Title { get; set; } = "";
+        public string Body { get; set; } = "";
+        public string Url { get; set; } = "";
+        public long At { get; set; }
     }
 }
