@@ -48,9 +48,9 @@ static class AppUpdate
             await input.CopyToAsync(output);
         }
         if (new FileInfo(path).Length < 1_000_000) return "{\"error\":\"bad file\"}";
-        var dir = Path.GetDirectoryName(Environment.ProcessPath) ?? "";
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Still Sane Exile");
         var args = "/VERYSILENT /NORESTART /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /FORCECLOSEAPPLICATIONS";
-        if (dir.Length > 0 && Directory.Exists(dir) && !BadDir(dir))
+        if (!BadDir(dir))
             args += " /DIR=\"" + dir.TrimEnd('\\') + "\"";
         Process.Start(new ProcessStartInfo
         {

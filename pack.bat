@@ -16,6 +16,7 @@ if errorlevel 1 (
 )
 copy /Y "%ROOT%desktop\supabase.public.empty.json" "%ROOT%desktop\supabase.public.json" >nul
 echo Building installer...
+if exist "%ROOT%dist\json" rmdir /s /q "%ROOT%dist\json"
 "%ISCC%" /Q "%ROOT%installer.iss"
 if errorlevel 1 exit /b 1
 echo.

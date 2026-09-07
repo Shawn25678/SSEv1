@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.11";
+const APP_VERSION = "1.0.12";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -465,18 +465,58 @@ window.__bossArtFail = function (img) {
 };
 
 let updateCache = { at: 0, newer: false, latest: "" };
+let affixTried = false;
+let affixLoading = null;
+let decksLoading = null;
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const ready = [...document.scripts].some((el) => (el.getAttribute("src") || "").split("?")[0].endsWith(src));
+    if (ready) {
+      resolve();
+      return;
+    }
+    const el = document.createElement("script");
+    el.src = src;
+    el.onload = () => resolve();
+    el.onerror = () => reject(new Error(src));
+    document.head.appendChild(el);
+  });
+}
+
+function ensureAffixLadders() {
+  if (window.AFFIX_LADDERS) return Promise.resolve();
+  if (affixLoading) return affixLoading;
+  affixLoading = loadScript("affix-ladders.js").catch(() => {
+    affixLoading = null;
+  });
+  return affixLoading;
+}
+
+function ensureDecks() {
+  if (window.DeckGame) return Promise.resolve();
+  if (decksLoading) return decksLoading;
+  decksLoading = loadScript("decks.js")
+    .then(() => loadScript("deck-game.js"))
+    .catch(() => {
+      decksLoading = null;
+    });
+  return decksLoading;
+}
 
 function paintUpdatePanel() {
   const status = document.getElementById("update-status");
   const btn = document.getElementById("settings-update-btn");
+  const check = document.getElementById("settings-check-btn");
   if (status) status.textContent = updateCache.newer ? "v" + APP_VERSION + " → v" + updateCache.latest : "v" + APP_VERSION;
   if (btn) btn.hidden = !updateCache.newer;
+  if (check) check.hidden = !window.chrome?.webview;
 }
 
-function checkAppUpdate() {
+function checkAppUpdate(force) {
   if (!window.chrome?.webview) return Promise.resolve(updateCache);
   paintUpdatePanel();
-  if (updateCache.at && Date.now() - updateCache.at < 5 * 60 * 1000) return Promise.resolve(updateCache);
+  if (!force && updateCache.at && Date.now() - updateCache.at < 5 * 60 * 1000) return Promise.resolve(updateCache);
   return webviewJson({ type: "update-check" }, 15000, "update check timed out")
     .then((data) => {
       updateCache = { at: Date.now(), newer: !!data?.newer, latest: String(data?.latest || "") };
@@ -2549,6 +2589,8 @@ function paintLivePrices() {
     if (el.outerHTML !== html) el.outerHTML = html;
   }
   paintPriceClock();
+  const n = Math.round(Number(prices.exaltedPerDivine) || 0);
+  if (ui.inspect && n !== overlayRateShown) paintPriceOverlay();
 }
 
 function valueHtml(divine) {
@@ -2589,6 +2631,25 @@ function leagueId() {
   const fromSelect = document.getElementById("league-input")?.value?.trim();
   if (fromSelect) return fromSelect;
   return "Forbidden Rites";
+}
+
+function leagueName() {
+  const select = document.getElementById("league-input");
+  const text = String(select?.selectedOptions?.[0]?.textContent || "").trim();
+  if (text) return text;
+  return leagueId() || "Forbidden Rites";
+}
+
+let overlayRateShown = 0;
+
+function overlayBarHtml() {
+  const n = Math.round(Number(prices.exaltedPerDivine) || 0);
+  overlayRateShown = n;
+  const rate =
+    n > 0
+      ? `<span class="price-overlay-rate" title="${esc("1 divine → " + n + " exalted")}"><svg class="price-overlay-swap" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 5h9.6L9.8 3.2 11 2l4 4-4 4-1.2-1.2L11.6 7H2V5zm12 6H4.4l1.8 1.8L5 14l-4-4 4-4 1.2 1.2L4.4 9H14v2z"/></svg>${n}</span>`
+      : `<span class="price-overlay-rate is-empty" aria-hidden="true"></span>`;
+  return `<div class="price-overlay-bar">${rate}<span class="price-overlay-league">${esc(leagueName())}</span><button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button></div>`;
 }
 
 function catalogNames() {
@@ -3193,7 +3254,6 @@ async function refreshPrices(force = false) {
   prices.status = "loading";
   prices.error = "";
   paintPriceClock();
-  render();
   try {
     const q = encodeURIComponent(league);
     const currency = await ninjaFetch(`/poe2/api/economy/exchange/current/overview?league=${q}&type=Currency`, true);
@@ -5125,7 +5185,8 @@ function priceOverlayHtml(log, drop) {
   const props = overlayPropsHtml(log, drop);
   return `
     <article class="price-overlay-card item-tip-card ${esc(kindClass)}">
-      <button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button>
+      ${overlayBarHtml()}
+      <div class="price-overlay-body">
       <div class="item-tip-head">
         ${itemIconHtml(drop.name, "lg")}
         <div>
@@ -5142,10 +5203,16 @@ function priceOverlayHtml(log, drop) {
         <div class="price-overlay-row"><span>PoE 2 trade</span><span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span></div>
         ${overlayOffersHtml(drop)}
       </div>
+      </div>
     </article>`;
 }
 
 function paintPriceOverlay(forceInApp = false, fresh = false) {
+  if (inspectTarget() && !window.AFFIX_LADDERS && !affixTried) {
+    affixTried = true;
+    ensureAffixLadders().finally(() => paintPriceOverlay(forceInApp, fresh));
+    return;
+  }
   const root = document.getElementById("price-overlay");
   const target = inspectTarget();
   const html = target ? priceOverlayHtml(target.log, target.drop) : "";
@@ -6509,6 +6576,7 @@ function renderSettings() {
         <h3>App</h3>
         <p class="muted" id="update-status" style="margin-top:8px">v${esc(APP_VERSION)}</p>
         <div class="row-actions">
+          <button class="btn ghost" id="settings-check-btn" type="button"${window.chrome?.webview ? "" : " hidden"}>Check</button>
           <button class="btn gold" id="settings-update-btn" type="button" hidden>Update</button>
         </div>
       </article>
@@ -7019,7 +7087,15 @@ function render() {
     main.innerHTML = renderEcon();
     fillEconChart();
   }
-  if (ui.view === "decks" && window.DeckGame) window.DeckGame.mount(main);
+  if (ui.view === "decks") {
+    if (window.DeckGame) window.DeckGame.mount(main);
+    else {
+      main.innerHTML = "";
+      ensureDecks().then(() => {
+        if (ui.view === "decks" && window.DeckGame) window.DeckGame.mount(main);
+      });
+    }
+  }
   if (ui.view === "settings") {
     main.innerHTML = renderSettings();
     checkAppUpdate();
@@ -7396,6 +7472,10 @@ function onClick(event) {
     }
     return;
   }
+  if (event.target.closest("#settings-check-btn")) {
+    checkAppUpdate(true);
+    return;
+  }
   if (event.target.closest("#settings-update-btn")) {
     startAppUpdate();
     return;
@@ -7724,9 +7804,8 @@ render();
 startPriceClock();
 startRateBar();
 syncHotkeys();
-checkAppUpdate().then((info) => {
-  if (info?.newer) showToast("Update ready", [{ id: "update", label: "Update" }]);
-});
+checkAppUpdate();
+ensureAffixLadders();
 const diskPrices = hydratePriceDisk();
 loadLeagues().then(() => diskPrices).then(() => {
   if (!prices.byName.size) hydratePriceCache();

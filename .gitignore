@@ -5,6 +5,8 @@ desktop-inbox/obj/
 .cursor/
 dist/*.old
 dist/*.old*
+dist/json/
+dist/unins000.*
 dist/StillSaneExile.exe.old*
 dist/StillSaneInbox.exe
 dist/StillSaneInbox.exe*
@@ -13,3 +15,4 @@ desktop/supabase.json
 desktop/feedback-hook.txt
 /dont repo/
 /tools/ModItem.lua
+/_reliquary.xlsx

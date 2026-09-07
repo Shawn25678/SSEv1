@@ -1583,6 +1583,7 @@ sealed class TrackerWindow : Form
 
     async void OnLoad(object? sender, EventArgs e)
     {
+        DropUnusedJsonFolder();
         var index = ExtractWebFiles();
         var userData = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -2283,34 +2284,83 @@ sealed class TrackerWindow : Form
         }
     }
 
+    static void DropUnusedJsonFolder()
+    {
+        foreach (var dir in new[] { Path.Combine(InstallDir(), "json"), Path.Combine(AppDataDir(), "json") })
+        {
+            try
+            {
+                if (!Directory.Exists(dir)) continue;
+                if (Directory.EnumerateFileSystemEntries(dir).Any()) continue;
+                Directory.Delete(dir);
+            }
+            catch
+            {
+                /* leftover json folder is unused */
+            }
+        }
+    }
+
+    static string ExtractStamp()
+    {
+        var exe = Environment.ProcessPath ?? "";
+        var ticks = 0L;
+        try
+        {
+            if (File.Exists(exe)) ticks = File.GetLastWriteTimeUtc(exe).Ticks;
+        }
+        catch
+        {
+            /* stamp without exe time */
+        }
+        return AppUpdate.CurrentLabel() + ":" + ticks;
+    }
+
     static string ExtractWebFiles()
     {
         var dir = Path.Combine(AppDataDir(), "www");
         Directory.CreateDirectory(dir);
+        var index = Path.Combine(dir, "index.html");
+        var leftoverSigil = Path.Combine(dir, "poe2-sigil.png");
+        if (File.Exists(leftoverSigil)) File.Delete(leftoverSigil);
+        var stampPath = Path.Combine(dir, ".stamp");
+        var want = ExtractStamp();
+        if (File.Exists(stampPath)
+            && File.Exists(index)
+            && File.Exists(Path.Combine(dir, "app.js"))
+            && File.Exists(Path.Combine(dir, "overlay.html"))
+            && Directory.Exists(Path.Combine(dir, "art"))
+            && File.ReadAllText(stampPath) == want)
+            return index;
+
         var asm = Assembly.GetExecutingAssembly();
-        WriteResource(asm, "www.index.html", Path.Combine(dir, "index.html"));
+        WriteResource(asm, "www.index.html", index);
         WriteResource(asm, "www.overlay.html", Path.Combine(dir, "overlay.html"));
         WriteResource(asm, "www.styles.css", Path.Combine(dir, "styles.css"));
         WriteResource(asm, "www.app.js", Path.Combine(dir, "app.js"));
         WriteResource(asm, "www.affix-ladders.js", Path.Combine(dir, "affix-ladders.js"));
         WriteResource(asm, "www.decks.js", Path.Combine(dir, "decks.js"));
         WriteResource(asm, "www.deck-game.js", Path.Combine(dir, "deck-game.js"));
-
         WriteResource(asm, "www.bosses.js", Path.Combine(dir, "bosses.js"));
         WriteResource(asm, "www.icons.js", Path.Combine(dir, "icons.js"));
-        var leftoverSigil = Path.Combine(dir, "poe2-sigil.png");
-        if (File.Exists(leftoverSigil)) File.Delete(leftoverSigil);
         WriteResource(asm, "www.still-sane-sigil.png", Path.Combine(dir, "still-sane-sigil.png"));
         var artDir = Path.Combine(dir, "art");
-        if (Directory.Exists(artDir)) Directory.Delete(artDir, true);
         Directory.CreateDirectory(artDir);
+        var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var name in asm.GetManifestResourceNames())
         {
             const string prefix = "www.art.";
             if (!name.StartsWith(prefix, StringComparison.Ordinal)) continue;
-            WriteResource(asm, name, Path.Combine(dir, "art", name[prefix.Length..]));
+            var file = name[prefix.Length..];
+            keep.Add(file);
+            WriteResource(asm, name, Path.Combine(artDir, file));
         }
-        return Path.Combine(dir, "index.html");
+        foreach (var file in Directory.GetFiles(artDir))
+        {
+            if (!keep.Contains(Path.GetFileName(file))) File.Delete(file);
+        }
+        File.WriteAllText(stampPath, want);
+        return index;
     }
 
     static readonly Regex IconWithName = new(

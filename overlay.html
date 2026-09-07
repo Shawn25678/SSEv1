@@ -21,6 +21,9 @@
         box-shadow: none;
         cursor: grab;
       }
+      .price-overlay-bar {
+        cursor: grab;
+      }
       .price-overlay-card.is-drag {
         cursor: grabbing;
       }
@@ -78,9 +81,9 @@
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;");
           root.innerHTML =
-            '<article class="price-overlay-card item-tip-card"><button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button><div class="item-tip-name">Still Sane, Exile?</div><div class="item-tip-descr">' +
+            '<article class="price-overlay-card item-tip-card"><div class="price-overlay-bar"><span class="price-overlay-rate is-empty" aria-hidden="true"></span><span class="price-overlay-league">Still Sane, Exile?</span><button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button></div><div class="price-overlay-body"><div class="item-tip-descr">' +
             text +
-            "</div></article>";
+            "</div></div></article>";
           requestAnimationFrame(() => requestAnimationFrame(fit));
         }
       });
