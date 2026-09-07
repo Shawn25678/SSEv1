@@ -1,6 +1,6 @@
 #define MyAppName "Still Sane, Exile?"
 #define MyAppNameSafe "Still Sane Exile"
-#define MyAppVersion "1.0.12"
+#define MyAppVersion "1.0.13"
 #define MyAppExeName "StillSaneExile.exe"
 #define MyAppId "{{E8A4C2B1-7F3D-4A9E-8C15-2B6D91F04E77}"
 
@@ -12,7 +12,7 @@ AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppName}
 AppMutex=Local\StillSaneExile.SingleInstance
 DefaultDirName={localappdata}\Programs\{#MyAppNameSafe}
-DisableDirPage=yes
+DisableDirPage=no
 AlwaysShowDirOnReadyPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=no
@@ -99,13 +99,14 @@ end;
 
 procedure InitializeWizard;
 begin
-  ForceSafeDir;
+  if IsBadDir(WizardForm.DirEdit.Text) then
+    ForceSafeDir;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
-  if IsBadDir(WizardDirValue) then
+  if (CurPageID = wpSelectDir) and IsBadDir(WizardDirValue) then
     ForceSafeDir;
 end;
 
@@ -129,7 +130,7 @@ begin
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM StillSaneExile.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(400);
   Prev := PreviousInstallDir;
-  if (Prev <> '') and (not IsBadDir(Prev)) and (CompareText(Prev, RemoveBackslash(SafeDir)) <> 0) then
+  if (Prev <> '') and (not IsBadDir(Prev)) and (CompareText(Prev, RemoveBackslash(WizardDirValue)) <> 0) then
   begin
     Uninstall := '';
     if not RegQueryStringValue(HKCU, UninstallKey, 'UninstallString', Uninstall) then
