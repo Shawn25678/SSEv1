@@ -284,7 +284,7 @@
         <header class="poe-deck-head">
           <div>
             <h2>Stacked Deck</h2>
-            <p>PoE 1 · ${esc(patch)} ${esc(league)} · drag a Stacked Deck from your inventory onto the ground. Click a card to pick it up.</p>
+            <p>PoE 1 · ${esc(patch)} ${esc(league)}</p>
           </div>
           <div class="poe-deck-actions">
             <button class="btn ghost" data-deck-fill type="button">Take 20 decks</button>
