@@ -1608,6 +1608,7 @@ sealed class TrackerWindow : Form
         WriteResource(asm, "www.app.js", Path.Combine(dir, "app.js"));
         WriteResource(asm, "www.decks.js", Path.Combine(dir, "decks.js"));
         WriteResource(asm, "www.deck-game.js", Path.Combine(dir, "deck-game.js"));
+
         WriteResource(asm, "www.bosses.js", Path.Combine(dir, "bosses.js"));
         WriteResource(asm, "www.icons.js", Path.Combine(dir, "icons.js"));
         var leftoverSigil = Path.Combine(dir, "poe2-sigil.png");

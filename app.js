@@ -4532,9 +4532,7 @@ function render() {
     main.innerHTML = renderEcon();
     fillEconChart();
   }
-  if (ui.view === "decks") {
-    if (window.DeckGame) window.DeckGame.mount(main);
-  }
+  if (ui.view === "decks" && window.DeckGame) window.DeckGame.mount(main);
   if (ui.view === "settings") main.innerHTML = renderSettings();
 
   if (ui.selectedId && document.getElementById("boss-dialog").open) {
