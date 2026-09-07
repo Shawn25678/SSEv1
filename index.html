@@ -31,9 +31,13 @@
             Economy
             <small>Prices, charts, and trending</small>
           </button>
+          <button class="title-btn" data-title-go="decks" type="button">
+            Stacked Deck
+            <small>Drag a 3.29 pack onto the ground</small>
+          </button>
           <button class="title-btn" data-title-go="settings" type="button">
             Settings
-            <small>Colors, fonts, and backup folder</small>
+            <small>Colors, fonts, backup, and hotkeys</small>
           </button>
           <button class="title-btn is-exit" data-title-quit type="button">
             Exit
@@ -76,9 +80,13 @@
           <span class="menu-link-title">Economy</span>
           <span class="menu-link-note">Prices, charts, and trending</span>
         </button>
+        <button class="menu-link" data-view="decks" type="button">
+          <span class="menu-link-title">Stacked Deck</span>
+          <span class="menu-link-note">PoE 1 · drag a pack onto the ground</span>
+        </button>
         <button class="menu-link" data-view="settings" type="button">
           <span class="menu-link-title">Settings</span>
-          <span class="menu-link-note">Colors, fonts, and backup folder</span>
+          <span class="menu-link-note">Colors, fonts, backup, and hotkeys</span>
         </button>
       </nav>
       <div class="menu-tools">
@@ -117,11 +125,14 @@
           <div class="rate-pop" id="rate-pop">
             <div class="rate-pop-row">
               <button class="rate-pop-btn" id="rate-pop-btn" type="button" aria-describedby="rate-pop-card">Rates</button>
-              <button class="rate-swap-btn" data-convert-swap type="button" title="Flip this rate. Item prices stay in the currency checked under Convert.">⇄</button>
             </div>
             <div class="rate-pop-card" id="rate-pop-card" role="tooltip"></div>
           </div>
-          <button type="button" class="price-clock" id="price-clock" data-check-prices title="Click to check poe.ninja, then auto-check every drop on the dashboard from PoE 2 trade.">
+          <div class="price-clock rate-clock" id="rate-clock" role="status" title="PoE 2 trade site rate limit. Searches wait until a slot opens.">
+            <span id="rate-clock-label">Rate limiting</span>
+            <strong id="rate-clock-time">0/1 / 5s</strong>
+          </div>
+          <button type="button" class="price-clock" id="price-clock" data-check-prices title="Click to check poe.ninja, then fill every boss unique from PoE 2 trade if ninja has no listing.">
             <span>Prices</span>
             <strong id="price-clock-time">Check prices</strong>
           </button>
@@ -165,6 +176,8 @@
     <div id="toast" class="toast" hidden></div>
     <div id="item-tip" class="item-tip" hidden></div>
 
+    <script src="decks.js"></script>
+    <script src="deck-game.js"></script>
     <script src="bosses.js"></script>
     <script src="icons.js"></script>
     <script src="app.js"></script>

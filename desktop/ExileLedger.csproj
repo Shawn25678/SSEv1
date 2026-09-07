@@ -26,6 +26,8 @@
     <EmbeddedResource Include="..\index.html" LogicalName="www.index.html" />
     <EmbeddedResource Include="..\styles.css" LogicalName="www.styles.css" />
     <EmbeddedResource Include="..\app.js" LogicalName="www.app.js" />
+    <EmbeddedResource Include="..\decks.js" LogicalName="www.decks.js" />
+    <EmbeddedResource Include="..\deck-game.js" LogicalName="www.deck-game.js" />
     <EmbeddedResource Include="..\bosses.js" LogicalName="www.bosses.js" />
     <EmbeddedResource Include="..\icons.js" LogicalName="www.icons.js" />
     <EmbeddedResource Include="..\still-sane-sigil.png" LogicalName="www.still-sane-sigil.png" />

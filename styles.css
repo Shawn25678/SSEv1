@@ -56,7 +56,7 @@ body.view-bosses .app {
   max-width: none;
   max-height: 100%;
   min-height: 0;
-  padding: 16px 40px 14px;
+  padding: 16px 40px 44px;
   box-sizing: border-box;
 }
 
@@ -479,20 +479,6 @@ select:focus {
   height: 22px;
 }
 
-.rate-swap-btn {
-  width: 40px;
-  min-height: 40px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--gold-2);
-  font-size: 1.15rem;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0;
-}
-
-.rate-swap-btn:hover,
 .rate-pop-btn:hover {
   border-color: var(--gold);
 }
@@ -540,12 +526,6 @@ select:focus {
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 6px;
-}
-
-.rate-card-head .rate-swap-btn {
-  width: 36px;
-  min-height: 36px;
-  font-size: 1.1rem;
 }
 
 .rate-card-note {
@@ -606,12 +586,6 @@ select:focus {
 
 .rate-pair b {
   color: var(--gold-2);
-}
-
-.rate-pair .rate-swap-btn {
-  margin-left: auto;
-  width: 36px;
-  min-height: 36px;
 }
 
 .rate-lines {
@@ -686,6 +660,25 @@ select:focus {
   background: transparent;
   border: 0;
   padding: 0;
+}
+
+.rate-clock {
+  cursor: default;
+  min-width: 7.5rem;
+}
+
+.rate-clock[hidden] {
+  display: none;
+}
+
+.rate-clock.is-wait strong {
+  border-color: var(--gold);
+  color: var(--gold-2);
+}
+
+.rate-clock.is-limited strong {
+  border-color: var(--danger);
+  color: var(--danger-2);
 }
 
 .price-clock strong {
@@ -1384,6 +1377,16 @@ select:focus {
   font-variant-numeric: tabular-nums;
 }
 
+button.price-chip {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
 .price-chip.is-empty {
   color: var(--muted);
   font-weight: 500;
@@ -1640,7 +1643,7 @@ select:focus {
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 24px;
+  bottom: 52px;
   transform: translateX(-50%);
   display: flex;
   flex-wrap: wrap;
@@ -1697,8 +1700,8 @@ select:focus {
   margin-top: 8px;
 }
 
-.pill-block:has(.roll-lines) {
-  flex: 1 1 100%;
+.pill-block:has(.roll-chips) {
+  flex: 1 1 220px;
 }
 
 .pill {
@@ -1863,18 +1866,56 @@ select:focus {
   padding-left: 4px;
 }
 
+.hotkey-rows {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.hotkey-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hotkey-btn {
+  min-width: 140px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--gold-2);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.hotkey-btn:hover,
+.hotkey-btn.is-listening {
+  border-color: var(--gold);
+}
+
+.hotkey-btn.is-listening {
+  color: var(--ink);
+}
+
+.roll-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .roll-chip {
   display: inline-flex;
-  align-items: flex-start;
-  gap: 6px;
+  align-items: center;
   background: color-mix(in srgb, var(--unique) 12%, transparent);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 4px 8px 4px 10px;
+  border-radius: 999px;
+  padding: 3px 8px;
   color: var(--unique-2);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   line-height: 1.3;
-  max-width: 100%;
 }
 
 .check {
@@ -2523,3 +2564,239 @@ select:focus {
     height: 122px;
   }
 }
+
+body.view-decks .top-actions {
+  display: none;
+}
+
+body.view-decks .app {
+  max-width: none;
+  padding: 16px 18px 18px;
+}
+
+body.view-decks #main {
+  min-height: calc(100vh - 110px);
+}
+
+.poe-deck {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: calc(100vh - 120px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0a0907;
+}
+
+.poe-deck-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+
+.poe-deck-head h2 {
+  margin: 0;
+}
+
+.poe-deck-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.poe-deck-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.poe-play {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 604px;
+  min-height: 0;
+}
+
+.poe-ground {
+  position: relative;
+  min-height: 480px;
+  background:
+    radial-gradient(ellipse at 50% 30%, rgba(80, 60, 30, 0.18), transparent 55%),
+    repeating-linear-gradient(0deg, rgba(255, 220, 140, 0.03) 0 2px, transparent 2px 7px),
+    #16120c;
+}
+
+.poe-deck.is-dragging .poe-ground {
+  outline: 1px dashed color-mix(in srgb, var(--gold) 45%, transparent);
+  outline-offset: -10px;
+}
+
+.poe-drop {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  width: 210px;
+  text-align: left;
+}
+
+.poe-card {
+  display: grid;
+  grid-template-rows: 148px auto;
+  border: 1px solid #3a6a88;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0e1620;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
+  color: #d8f4ff;
+}
+
+.poe-card img {
+  width: 100%;
+  height: 148px;
+  object-fit: contain;
+  object-position: center top;
+  background: #070b10;
+}
+
+.poe-card-copy {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px 10px;
+}
+
+.poe-card-copy strong {
+  color: #7ad7ff;
+  font-size: 0.95rem;
+}
+
+.poe-card-copy span {
+  color: #9aa8b5;
+  font-size: 0.75rem;
+}
+
+.poe-card-copy b {
+  color: #e8943a;
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.poe-card-copy em {
+  color: #8b8070;
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
+.poe-card-lg {
+  grid-template-rows: 220px auto;
+  width: 260px;
+}
+
+.poe-card-lg img {
+  height: 220px;
+}
+
+.poe-inv-panel {
+  border-left: 1px solid var(--line);
+  background: #12100c;
+  padding: 12px 14px 16px;
+}
+
+.poe-inv-label {
+  margin: 0 0 8px;
+  color: var(--gold-2);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.poe-inv-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 46px);
+  grid-template-rows: repeat(5, 46px);
+  gap: 2px;
+  padding: 4px;
+  background: #070605;
+  border: 1px solid #2a241c;
+}
+
+.poe-cell {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border: 1px solid #2c261e;
+  background:
+    linear-gradient(180deg, #1c1813, #14110d);
+  color: inherit;
+}
+
+.poe-cell.has-item {
+  cursor: grab;
+}
+
+.poe-cell.has-item.is-held,
+.poe-cell.has-item:active {
+  cursor: grabbing;
+  opacity: 0.35;
+}
+
+.poe-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.poe-cell.is-card img {
+  object-fit: cover;
+}
+
+.poe-cell em {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  font-style: normal;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #f3ead8;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+}
+
+.poe-ghost {
+  position: fixed;
+  z-index: 80;
+  pointer-events: none;
+  transform: translate(-23px, -23px);
+  filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.6));
+}
+
+.poe-ghost img {
+  width: 47px;
+  height: 47px;
+}
+
+.poe-card-tip {
+  position: absolute;
+  z-index: 90;
+  pointer-events: none;
+}
+
+@media (max-width: 1100px) {
+  .poe-play {
+    grid-template-columns: 1fr;
+  }
+
+  .poe-inv-panel {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}
+

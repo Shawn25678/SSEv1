@@ -1,8 +1,11 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -37,6 +40,14 @@ sealed class TrackerWindow : Form
         DefaultBackgroundColor = Color.FromArgb(12, 10, 8),
     };
 
+    const int HotLogId = 1;
+    const int HotNextId = 2;
+    const uint ModNoRepeat = 0x4000;
+    const int WmHotkey = 0x0312;
+    string _hotLog = "F8";
+    string _hotNext = "F9";
+    bool _capturingItem;
+
     public TrackerWindow()
     {
         Text = "Still Sane, Exile?";
@@ -56,9 +67,238 @@ sealed class TrackerWindow : Form
         BackColor = Color.FromArgb(12, 10, 8);
         Controls.Add(_web);
         Load += OnLoad;
+        FormClosed += (_, _) => ClearHotkeys();
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WmHotkey)
+        {
+            var id = m.WParam.ToInt32();
+            if (id == HotLogId) BeginInvoke(CaptureClipboardItem);
+            else if (id == HotNextId) BeginInvoke(() => PushHotkey("next-kill"));
+        }
+        base.WndProc(ref m);
+    }
+
+    [DllImport("user32.dll")]
+    static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll")]
+    static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    [DllImport("user32.dll")]
+    static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, nuint dwExtraInfo);
+
+    void ClearHotkeys()
+    {
+        try { UnregisterHotKey(Handle, HotLogId); } catch { /* ignore */ }
+        try { UnregisterHotKey(Handle, HotNextId); } catch { /* ignore */ }
+    }
+
+    void ApplyHotkeys(string logSpec, string nextSpec)
+    {
+        ClearHotkeys();
+        _hotLog = string.IsNullOrWhiteSpace(logSpec) ? "F8" : logSpec.Trim();
+        _hotNext = string.IsNullOrWhiteSpace(nextSpec) ? "F9" : nextSpec.Trim();
+        var logOk = TryParseHotkey(_hotLog, out var logMod, out var logVk) && RegisterHotKey(Handle, HotLogId, logMod, logVk);
+        var nextOk = TryParseHotkey(_hotNext, out var nextMod, out var nextVk) && RegisterHotKey(Handle, HotNextId, nextMod, nextVk);
+        if (!logOk || !nextOk)
+        {
+            PushJson(new
+            {
+                type = "hotkey-status",
+                ok = false,
+                error = !logOk ? _hotLog + " is already in use" : _hotNext + " is already in use",
+            });
+        }
+    }
+
+    static bool TryParseHotkey(string spec, out uint modifiers, out uint vk)
+    {
+        modifiers = ModNoRepeat;
+        vk = 0;
+        if (string.IsNullOrWhiteSpace(spec)) return false;
+        foreach (var raw in spec.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var p = raw.Trim();
+            if (p.Equals("Ctrl", StringComparison.OrdinalIgnoreCase) || p.Equals("Control", StringComparison.OrdinalIgnoreCase))
+                modifiers |= 0x0002;
+            else if (p.Equals("Alt", StringComparison.OrdinalIgnoreCase))
+                modifiers |= 0x0001;
+            else if (p.Equals("Shift", StringComparison.OrdinalIgnoreCase))
+                modifiers |= 0x0004;
+            else if (p.Equals("Win", StringComparison.OrdinalIgnoreCase) || p.Equals("Meta", StringComparison.OrdinalIgnoreCase))
+                modifiers |= 0x0008;
+            else if (Regex.IsMatch(p, @"^F([1-9]|1[0-2])$", RegexOptions.IgnoreCase))
+                vk = 0x6Fu + uint.Parse(p[1..]);
+            else if (p.Equals("Space", StringComparison.OrdinalIgnoreCase))
+                vk = 0x20;
+            else if (p.Length == 1)
+            {
+                var c = char.ToUpperInvariant(p[0]);
+                if (c is >= 'A' and <= 'Z' or >= '0' and <= '9') vk = c;
+                else return false;
+            }
+            else return false;
+        }
+        return vk != 0;
+    }
+
+    static bool LooksLikePoeItem(string text) =>
+        !string.IsNullOrWhiteSpace(text) &&
+        (text.Contains("Item Class:", StringComparison.OrdinalIgnoreCase) ||
+         text.Contains("Rarity:", StringComparison.OrdinalIgnoreCase));
+
+    static string ReadClipboardText()
+    {
+        try
+        {
+            return Clipboard.ContainsText() ? Clipboard.GetText() ?? "" : "";
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    static void SendCtrlC()
+    {
+        const byte vkControl = 0x11;
+        const byte vkC = 0x43;
+        const uint keyUp = 0x0002;
+        keybd_event(vkControl, 0, 0, 0);
+        keybd_event(vkC, 0, 0, 0);
+        keybd_event(vkC, 0, keyUp, 0);
+        keybd_event(vkControl, 0, keyUp, 0);
+    }
+
+    async void CaptureClipboardItem()
+    {
+        if (_capturingItem) return;
+        _capturingItem = true;
+        try
+        {
+            var before = ReadClipboardText();
+            SendCtrlC();
+            var text = before;
+            for (var i = 0; i < 12; i++)
+            {
+                await Task.Delay(45);
+                var now = ReadClipboardText();
+                if (string.IsNullOrWhiteSpace(now)) continue;
+                if (LooksLikePoeItem(now))
+                {
+                    text = now;
+                    if (now != before || i >= 3) break;
+                }
+            }
+            PushJson(new { type = "hotkey", action = "log-item", text });
+            if (LooksLikePoeItem(text))
+            {
+                try { Clipboard.Clear(); }
+                catch { /* next copy still works */ }
+            }
+        }
+        finally
+        {
+            _capturingItem = false;
+        }
+    }
+
+    void PushHotkey(string action) => PushJson(new { type = "hotkey", action });
+
+    void PushJson(object payload)
+    {
+        if (_web.CoreWebView2 is null) return;
+        _web.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(payload, JsonOut));
     }
 
     static readonly HttpClient TradeHttp = CreateTradeHttp();
+    static readonly TradeLimiter SearchLimit = TradeLimiter.Default();
+    static readonly TradeLimiter FetchLimit = TradeLimiter.Default();
+    static readonly SemaphoreSlim SlotLock = new(1, 1);
+    const double RateDesyncSec = 0.8;
+
+    sealed class SlidingLimit
+    {
+        public int Max;
+        public double WindowSec;
+        readonly Queue<DateTime> _hits = new();
+
+        public SlidingLimit(int max, double windowSec)
+        {
+            Max = Math.Max(1, max);
+            WindowSec = Math.Max(0.5, windowSec);
+        }
+
+        public void Prune()
+        {
+            var cutoff = DateTime.UtcNow.AddSeconds(-WindowSec);
+            while (_hits.Count > 0 && _hits.Peek() <= cutoff) _hits.Dequeue();
+        }
+
+        public int Used { get { Prune(); return _hits.Count; } }
+        public int WaitMs()
+        {
+            Prune();
+            if (_hits.Count < Max) return 0;
+            return Math.Max(0, (int)(_hits.Peek().AddSeconds(WindowSec) - DateTime.UtcNow).TotalMilliseconds);
+        }
+
+        public void Borrow()
+        {
+            Prune();
+            _hits.Enqueue(DateTime.UtcNow);
+        }
+
+        public void SyncUsed(int serverUsed)
+        {
+            Prune();
+            while (_hits.Count < serverUsed) _hits.Enqueue(DateTime.UtcNow);
+        }
+
+        public bool Same(int max, double windowSec) => Max == max && Math.Abs(WindowSec - windowSec) < 0.05;
+    }
+
+    sealed class TradeLimiter
+    {
+        public readonly List<SlidingLimit> Limits = new();
+        public DateTime PenaltyUntil = DateTime.MinValue;
+        public bool Limited => PenaltyUntil > DateTime.UtcNow;
+
+        public static TradeLimiter Default()
+        {
+            var limiter = new TradeLimiter();
+            limiter.Limits.Add(new SlidingLimit(1, 5));
+            return limiter;
+        }
+
+        public int WaitMs()
+        {
+            var penalty = PenaltyUntil > DateTime.UtcNow ? (int)(PenaltyUntil - DateTime.UtcNow).TotalMilliseconds : 0;
+            var slot = 0;
+            foreach (var limit in Limits) slot = Math.Max(slot, limit.WaitMs());
+            return Math.Max(penalty, slot);
+        }
+
+        public void Borrow()
+        {
+            foreach (var limit in Limits) limit.Borrow();
+        }
+
+        public (int hits, int max, int window) Snapshot()
+        {
+            SlidingLimit? tight = null;
+            foreach (var limit in Limits)
+            {
+                limit.Prune();
+                if (tight is null || limit.WindowSec < tight.WindowSec) tight = limit;
+            }
+            if (tight is null) return (0, 1, 5);
+            return (tight.Used, tight.Max, Math.Max(1, (int)Math.Round(tight.WindowSec)));
+        }
+    }
 
     static HttpClient CreateHttp()
     {
@@ -141,15 +381,86 @@ sealed class TrackerWindow : Form
         }
     }
 
-    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false)
+    sealed record RollFilter(string Id, double? Min);
+    static Dictionary<string, List<(string id, string type)>>? FoldedStats;
+    static readonly SemaphoreSlim StatBuild = new(1, 1);
+
+    async Task FetchTradeStats(string id)
+    {
+        var body = await GetTradeStatsBody();
+        Reply(id, body is not null, body is null ? 0 : 200, body ?? "{\"error\":\"trade stats failed\"}");
+    }
+
+    async Task<string?> GetTradeStatsBody()
+    {
+        const string cacheKey = "trade-stats-v1";
+        if (Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < TimeSpan.FromHours(12) && hit.status is >= 200 and < 300)
+            return hit.body;
+        var disk = Path.Combine(AppDataDir(), "trade-stats.json");
+        try
+        {
+            if (File.Exists(disk) && DateTime.UtcNow - File.GetLastWriteTimeUtc(disk) < TimeSpan.FromHours(12))
+            {
+                var stored = await File.ReadAllTextAsync(disk);
+                if (stored.TrimStart().StartsWith('{'))
+                {
+                    Cache[cacheKey] = (DateTime.UtcNow, 200, stored);
+                    return stored;
+                }
+            }
+        }
+        catch
+        {
+            /* fetch below */
+        }
+        if (CombinedWaitMs() >= 1500 && SearchLimit.Limited) return null;
+        await Gate.WaitAsync();
+        try
+        {
+            if (Cache.TryGetValue(cacheKey, out hit) && DateTime.UtcNow - hit.at < TimeSpan.FromHours(12) && hit.status is >= 200 and < 300)
+                return hit.body;
+            if (!await WaitForSlot(SearchLimit)) return null;
+            using var res = await TradeHttp.GetAsync("https://www.pathofexile.com/api/trade2/data/stats");
+            NoteRate(res, search: true);
+            var body = await res.Content.ReadAsStringAsync();
+            var status = (int)res.StatusCode;
+            var looksJson = body.TrimStart().StartsWith('{');
+            if (res.IsSuccessStatusCode && looksJson)
+            {
+                Cache[cacheKey] = (DateTime.UtcNow, status, body);
+                try { await File.WriteAllTextAsync(disk, body); } catch { /* keep memory cache */ }
+                return body;
+            }
+            return null;
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null)
     {
         name = (name ?? "").Trim();
+        league = (league ?? "").Trim();
         if (!ValidLeague(league) || name.Length is < 2 or > 80)
         {
             Reply(id, false, 400, "{\"error\":\"bad trade query\"}");
             return;
         }
-        var cacheKey = "trade:" + league + ":" + name.ToLowerInvariant();
+        var rollList = (rolls ?? Array.Empty<string>()).Where(r => !string.IsNullOrWhiteSpace(r)).Take(8).ToArray();
+        if (SearchLimit.Limited && CombinedWaitMs() >= 1500)
+        {
+            Reply(id, false, 429, "{\"error\":\"rate limited\"}");
+            return;
+        }
+        IReadOnlyList<RollFilter> mapped = preMapped is { Count: > 0 } ? preMapped : Array.Empty<RollFilter>();
+        if (mapped.Count == 0 && rollList.Length > 0)
+            mapped = await MapRollsToFilters(rollList);
+        var extra = mapped.Count > 0
+            ? ":roll:" + string.Join("|", mapped.Select(f => f.Id + (f.Min is double m ? ">" + m.ToString("G", System.Globalization.CultureInfo.InvariantCulture) : "")))
+            : rollList.Length > 0 ? ":roll:none" : "";
+        var cacheKey = "trade:" + league + ":" + name.ToLowerInvariant() + extra;
         if (!bust && Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < CacheFor)
         {
             Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
@@ -163,7 +474,9 @@ sealed class TrackerWindow : Form
                 Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
                 return;
             }
-            var payload = await LookupTradeListing(league, name, thorough);
+            var payload = (rollList.Length > 0 || mapped.Count > 0)
+                ? await LookupRolledListing(league, name, typeLine, mapped)
+                : await LookupTradeListing(league, name, thorough);
             if (payload is { RateLimited: true })
             {
                 Reply(id, false, 429, "{\"error\":\"rate limited\"}");
@@ -189,6 +502,335 @@ sealed class TrackerWindow : Form
     }
 
     sealed record TradeLookup(string? Json = null, bool RateLimited = false, bool Forbidden = false);
+
+    static List<RollFilter> ReadPreMappedFilters(JsonElement root)
+    {
+        var list = new List<RollFilter>();
+        void AddArray(JsonElement arr)
+        {
+            if (arr.ValueKind != JsonValueKind.Array) return;
+            foreach (var row in arr.EnumerateArray())
+            {
+                if (row.ValueKind != JsonValueKind.Object) continue;
+                var fid = row.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
+                if (fid.Length is < 8 or > 80) continue;
+                double? min = null;
+                if (row.TryGetProperty("min", out var minEl) && minEl.TryGetDouble(out var n) && double.IsFinite(n))
+                    min = n;
+                list.Add(new RollFilter(fid, min));
+                if (list.Count >= 6) break;
+            }
+        }
+        if (root.TryGetProperty("filtersJson", out var jsonEl) && jsonEl.ValueKind == JsonValueKind.String)
+        {
+            try
+            {
+                using var parsed = JsonDocument.Parse(jsonEl.GetString() ?? "[]");
+                AddArray(parsed.RootElement);
+            }
+            catch (JsonException)
+            {
+                /* fall back to filters array */
+            }
+        }
+        if (list.Count == 0 && root.TryGetProperty("filters", out var filtersEl))
+            AddArray(filtersEl);
+        return list;
+    }
+
+    static string TradeSearchUrl(string league, string queryId) =>
+        "https://www.pathofexile.com/trade2/search/poe2/" + Uri.EscapeDataString(league) + (string.IsNullOrWhiteSpace(queryId) ? "" : "/" + Uri.EscapeDataString(queryId));
+
+    async Task<IReadOnlyList<RollFilter>> MapRollsToFilters(IReadOnlyList<string> rolls)
+    {
+        var index = await GetFoldedStats();
+        var filters = new List<RollFilter>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var ordered = rolls
+            .Select(UnwrapTags)
+            .Select(StripAdvancedRanges)
+            .Where(roll => !string.IsNullOrWhiteSpace(roll) && !IsJunkTradeRoll(roll))
+            .OrderByDescending(TradeRollWeight)
+            .ToArray();
+        if (ordered.Any(roll => TradeRollWeight(roll) >= 5))
+            ordered = ordered.Where(roll => TradeRollWeight(roll) >= 5).ToArray();
+        foreach (var roll in ordered)
+        {
+            var hit = MatchFoldedStat(FoldStat(roll), index);
+            if (hit is null || !seen.Add(hit.Value.id)) continue;
+            filters.Add(new RollFilter(hit.Value.id, FirstRollNumber(roll, reduced: Regex.IsMatch(roll, @"\breduced\b", RegexOptions.IgnoreCase))));
+            if (filters.Count >= 6) break;
+        }
+        return filters;
+    }
+
+    static bool IsJunkTradeRoll(string roll)
+    {
+        return Regex.IsMatch(roll, @"^has\b.*\b(charm slot|socketable)", RegexOptions.IgnoreCase) ||
+               Regex.IsMatch(roll, @"flask recovery applied instantly", RegexOptions.IgnoreCase) ||
+               Regex.IsMatch(roll, @"^\{", RegexOptions.IgnoreCase) ||
+               Regex.IsMatch(roll, @"^grants skill", RegexOptions.IgnoreCase);
+    }
+
+    static int TradeRollWeight(string roll)
+    {
+        if (Regex.IsMatch(roll, @"bonuses gained from (?:equipped )?(?:left|right) (?:equipped )?ring", RegexOptions.IgnoreCase)) return 5;
+        if (Regex.IsMatch(roll, @"per socket filled|per socketed", RegexOptions.IgnoreCase)) return 4;
+        if (Regex.IsMatch(roll, @"increased effect of socketed", RegexOptions.IgnoreCase)) return 4;
+        if (Regex.IsMatch(roll, @"charm charges", RegexOptions.IgnoreCase)) return 1;
+        return 3;
+    }
+
+    static string UnwrapTags(string text) =>
+        Regex.Replace(text ?? "", @"\[([^\]|]+)\|?([^\]]*)\]", m =>
+            string.IsNullOrEmpty(m.Groups[2].Value) ? m.Groups[1].Value : m.Groups[2].Value);
+
+    static string StripAdvancedRanges(string text)
+    {
+        var t = Regex.Replace(text ?? "", @"(-?\d+(?:\.\d+)?)\((?:[^)]*)\)", "$1");
+        t = Regex.Replace(t, @"\(([-+]?\d[\d.\s,|/~—–-]*[-+]?\d)\)", "");
+        return Regex.Replace(t, @"\s+", " ").Trim();
+    }
+
+    async Task<Dictionary<string, List<(string id, string type)>>> GetFoldedStats()
+    {
+        if (FoldedStats is not null) return FoldedStats;
+        await StatBuild.WaitAsync();
+        try
+        {
+            if (FoldedStats is not null) return FoldedStats;
+            var json = await GetTradeStatsBody();
+            var map = new Dictionary<string, List<(string id, string type)>>(StringComparer.Ordinal);
+            if (json is null) return map;
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("result", out var groups) || groups.ValueKind != JsonValueKind.Array)
+                return map;
+            foreach (var group in groups.EnumerateArray())
+            {
+                var kind = group.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
+                if (kind is "pseudo" or "skill") continue;
+                if (!group.TryGetProperty("entries", out var entries) || entries.ValueKind != JsonValueKind.Array) continue;
+                foreach (var entry in entries.EnumerateArray())
+                {
+                    var id = entry.TryGetProperty("id", out var statId) ? statId.GetString() ?? "" : "";
+                    var text = entry.TryGetProperty("text", out var textEl) ? textEl.GetString() ?? "" : "";
+                    var type = entry.TryGetProperty("type", out var typeEl) ? typeEl.GetString() ?? kind : kind;
+                    var key = FoldStat(text);
+                    if (id.Length == 0 || key.Length == 0) continue;
+                    if (!map.TryGetValue(key, out var list))
+                    {
+                        list = new List<(string id, string type)>();
+                        map[key] = list;
+                    }
+                    list.Add((id, type));
+                }
+            }
+            return FoldedStats = map;
+        }
+        finally
+        {
+            StatBuild.Release();
+        }
+    }
+
+    static (string id, string type)? MatchFoldedStat(string fold, Dictionary<string, List<(string id, string type)>> index)
+    {
+        if (string.IsNullOrWhiteSpace(fold)) return null;
+        if (index.TryGetValue(fold, out var exact))
+            return PickStat(exact);
+        (string id, string type)? best = null;
+        var bestLen = 0;
+        foreach (var (key, list) in index)
+        {
+            if (key.Length < 10 || key.Length <= bestLen) continue;
+            if (fold == key || fold.StartsWith(key + " ", StringComparison.Ordinal) || key.StartsWith(fold + " ", StringComparison.Ordinal))
+            {
+                var pick = PickStat(list);
+                if (pick is null) continue;
+                best = pick;
+                bestLen = key.Length;
+            }
+        }
+        if (best is not null) return best;
+        var needle = DistinctiveStatPhrase(fold);
+        if (needle.Length < 12) return null;
+        foreach (var (key, list) in index)
+        {
+            if (key.Length <= bestLen || !key.Contains(needle, StringComparison.Ordinal)) continue;
+            var pick = PickStat(list);
+            if (pick is null) continue;
+            best = pick;
+            bestLen = key.Length;
+        }
+        return best;
+    }
+
+    static (string id, string type)? PickStat(List<(string id, string type)> list)
+    {
+        foreach (var row in list)
+        {
+            if (row.type.Equals("explicit", StringComparison.OrdinalIgnoreCase) || row.id.StartsWith("explicit.", StringComparison.OrdinalIgnoreCase))
+                return row;
+        }
+        return list.Count > 0 ? list[0] : null;
+    }
+
+    static string DistinctiveStatPhrase(string fold)
+    {
+        var ring = Regex.Match(fold ?? "", @"bonuses gained from (?:equipped )?(left|right) (?:equipped )?ring");
+        if (ring.Success) return "bonuses gained from equipped " + ring.Groups[1].Value + " ring";
+        return "";
+    }
+
+    static string FoldStat(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        var t = StripAdvancedRanges(UnwrapTags(text)).ToLowerInvariant();
+        t = Regex.Replace(t, @"\([^)]*\)", " ");
+        t = Regex.Replace(t, @"\{[^}]+\}", " ");
+        t = Regex.Replace(t, @"\breduced\b", "increased");
+        t = Regex.Replace(t, @"\bleft equipped ring\b", "equipped left ring");
+        t = Regex.Replace(t, @"\bright equipped ring\b", "equipped right ring");
+        t = Regex.Replace(t, @"[+-]?\d+(?:\.\d+)?", "#");
+        t = t.Replace("#to ", "# to ", StringComparison.Ordinal);
+        t = Regex.Replace(t, @"#%", "# %");
+        t = Regex.Replace(t, @"%\s*", "% ");
+        t = Regex.Replace(t, @"\s+", " ").Trim();
+        if (t.StartsWith('+')) t = t[1..].TrimStart();
+        return t;
+    }
+
+    static double? FirstRollNumber(string text, bool reduced = false)
+    {
+        var raw = StripAdvancedRanges(UnwrapTags(text ?? ""));
+        var fused = Regex.Match(raw, @"([+-]?\d+(?:\.\d+)?)\s*%");
+        if (!fused.Success) fused = Regex.Match(raw, @"([+-]?\d+(?:\.\d+)?)");
+        if (!fused.Success || !double.TryParse(fused.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var n))
+            return null;
+        if (reduced && n > 0) n = -n;
+        return n;
+    }
+
+    static IEnumerable<string> RolledQueries(string name, string typeLine, IReadOnlyList<RollFilter> filters, bool relax = false)
+    {
+        JsonArray FilterArray()
+        {
+            var arr = new JsonArray();
+            foreach (var filter in filters)
+            {
+                var obj = new JsonObject { ["id"] = filter.Id, ["disabled"] = false };
+                if (filter.Min is double min)
+                {
+                    if (relax && min > 0) min = Math.Floor(min * 0.9);
+                    obj["value"] = new JsonObject { ["min"] = min };
+                }
+                arr.Add(obj);
+            }
+            return arr;
+        }
+
+        JsonObject Body(bool includeType)
+        {
+            // Match Exiled Exchange 2: unique name + type, stats in one AND group.
+            // Do not send rarity "unique" — the trade API rejects it.
+            var query = new JsonObject
+            {
+                ["status"] = new JsonObject { ["option"] = "any" },
+                ["name"] = name,
+                ["stats"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["type"] = "and",
+                        ["filters"] = FilterArray(),
+                    },
+                },
+                ["filters"] = new JsonObject(),
+            };
+            if (includeType && !string.IsNullOrWhiteSpace(typeLine))
+                query["type"] = typeLine;
+            return new JsonObject
+            {
+                ["query"] = query,
+                ["sort"] = new JsonObject { ["price"] = "asc" },
+            };
+        }
+
+        if (!string.IsNullOrWhiteSpace(typeLine))
+            yield return Body(true).ToJsonString();
+        yield return Body(false).ToJsonString();
+    }
+
+    async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters)
+    {
+        var searchUri = "https://www.pathofexile.com/api/trade2/search/poe2/" + Uri.EscapeDataString(league);
+        string? lastId = null;
+        var lastTotal = 0;
+
+        async Task<TradeLookup?> Run(string body)
+        {
+            if (SearchLimit.Limited && CombinedWaitMs() >= 1500) return new TradeLookup(RateLimited: true);
+            var (searchJson, searchStatus) = await PostTradeSearch(searchUri, body);
+            if (searchStatus == 429) return new TradeLookup(RateLimited: true);
+            if (searchStatus is 401 or 403) return new TradeLookup(Forbidden: true);
+            if (searchJson is null) return null;
+            JsonDocument search;
+            try
+            {
+                search = JsonDocument.Parse(searchJson);
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+            using (search)
+            {
+                var root = search.RootElement;
+                lastId = root.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
+                lastTotal = root.TryGetProperty("total", out var totalEl) && totalEl.TryGetInt32(out var listed) ? listed : 0;
+                if (!root.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array)
+                    return null;
+                var hashes = result.EnumerateArray().Select(el => el.GetString()).Where(h => !string.IsNullOrWhiteSpace(h)).Take(10).ToArray();
+                if (hashes.Length == 0) return null;
+                var fetchUrl = "https://www.pathofexile.com/api/trade2/fetch/" + string.Join(",", hashes) + "?query=" + Uri.EscapeDataString(lastId);
+                if (!await WaitForSlot(FetchLimit)) return new TradeLookup(RateLimited: true);
+                using var fetchRes = await TradeHttp.GetAsync(fetchUrl);
+                NoteRate(fetchRes, search: false);
+                string? fetchJson = null;
+                if ((int)fetchRes.StatusCode == 429) return new TradeLookup(RateLimited: true);
+                if ((int)fetchRes.StatusCode is 401 or 403) return new TradeLookup(Forbidden: true);
+                if (fetchRes.IsSuccessStatusCode) fetchJson = await fetchRes.Content.ReadAsStringAsync();
+                if (fetchJson is null) return null;
+                var payload = ReadCheapestListing(fetchJson, name, root, league, lastId, filters.Count);
+                return payload is not null ? new TradeLookup(payload) : null;
+            }
+        }
+
+        foreach (var body in RolledQueries(name, typeLine, filters))
+        {
+            var got = await Run(body);
+            if (got is { RateLimited: true } or { Forbidden: true }) return got;
+            if (got?.Json is not null) return got;
+            if (lastTotal > 0) break;
+        }
+        if (filters.Count > 0 && lastTotal == 0)
+        {
+            foreach (var body in RolledQueries(name, typeLine, filters, true).Take(1))
+            {
+                var got = await Run(body);
+                if (got is { RateLimited: true } or { Forbidden: true }) return got;
+                if (got?.Json is not null) return got;
+            }
+        }
+        return new TradeLookup(JsonSerializer.Serialize(new
+        {
+            name,
+            listings = lastTotal,
+            mapped = filters.Count,
+            league,
+            url = string.IsNullOrWhiteSpace(lastId) ? "" : TradeSearchUrl(league, lastId),
+        }, JsonOut));
+    }
 
     async Task<TradeLookup> LookupTradeListing(string league, string name, bool thorough = false)
     {
@@ -217,13 +859,16 @@ sealed class TrackerWindow : Form
             var hashes = result.EnumerateArray().Select(el => el.GetString()).Where(h => !string.IsNullOrWhiteSpace(h)).Take(10).ToArray();
             if (hashes.Length == 0) continue;
             var fetchUrl = "https://www.pathofexile.com/api/trade2/fetch/" + string.Join(",", hashes) + "?query=" + Uri.EscapeDataString(queryId);
+            if (!await WaitForSlot(FetchLimit)) return new TradeLookup(RateLimited: true);
             using var fetchRes = await TradeHttp.GetAsync(fetchUrl);
+            NoteRate(fetchRes, search: false);
             string? fetchJson = null;
             if ((int)fetchRes.StatusCode == 429)
             {
                 var wait = RetryAfterMs(fetchRes) ?? 4000;
                 await Task.Delay(wait);
                 using var retryFetch = await TradeHttp.GetAsync(fetchUrl);
+                NoteRate(retryFetch, search: false);
                 if ((int)retryFetch.StatusCode == 429) return new TradeLookup(RateLimited: true);
                 if (!retryFetch.IsSuccessStatusCode) continue;
                 fetchJson = await retryFetch.Content.ReadAsStringAsync();
@@ -237,7 +882,7 @@ sealed class TrackerWindow : Form
                 fetchJson = await fetchRes.Content.ReadAsStringAsync();
             }
             if (fetchJson is null) continue;
-            var payload = ReadCheapestListing(fetchJson, name, root);
+            var payload = ReadCheapestListing(fetchJson, name, root, league, queryId, 0);
             if (payload is not null) return new TradeLookup(payload);
             }
         }
@@ -255,28 +900,18 @@ sealed class TrackerWindow : Form
 
     async Task<(string? json, int status)> PostTradeSearch(string uri, string body)
     {
-        for (var attempt = 0; attempt < 2; attempt++)
-        {
-            using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
-            using var searchRes = await TradeHttp.PostAsync(uri, content);
-            var status = (int)searchRes.StatusCode;
-            var searchJson = await searchRes.Content.ReadAsStringAsync();
-            if (status == 429)
-            {
-                if (attempt == 0)
-                {
-                    await Task.Delay(RetryAfterMs(searchRes) ?? 4000);
-                    continue;
-                }
-                return (null, 429);
-            }
-            if (status is 401 or 403) return (null, status);
-            return (searchRes.IsSuccessStatusCode ? searchJson : null, status);
-        }
-        return (null, 0);
+        if (!await WaitForSlot(SearchLimit)) return (null, 429);
+        using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+        using var searchRes = await TradeHttp.PostAsync(uri, content);
+        NoteRate(searchRes, search: true);
+        var status = (int)searchRes.StatusCode;
+        var searchJson = await searchRes.Content.ReadAsStringAsync();
+        if (status == 429) return (null, 429);
+        if (status is 401 or 403) return (null, status);
+        return (searchRes.IsSuccessStatusCode ? searchJson : null, status);
     }
 
-    string? ReadCheapestListing(string fetchJson, string fallbackName, JsonElement searchRoot)
+    string? ReadCheapestListing(string fetchJson, string fallbackName, JsonElement searchRoot, string league = "", string queryId = "", int mapped = 0)
     {
         using var fetched = JsonDocument.Parse(fetchJson);
         if (!fetched.RootElement.TryGetProperty("result", out var listings) || listings.ValueKind != JsonValueKind.Array)
@@ -310,6 +945,9 @@ sealed class TrackerWindow : Form
             amount = bestAmount,
             currency = bestCurrency,
             listings = total,
+            mapped,
+            league,
+            url = string.IsNullOrWhiteSpace(queryId) ? "" : TradeSearchUrl(league, queryId),
         }, JsonOut);
     }
 
@@ -394,7 +1032,13 @@ sealed class TrackerWindow : Form
         _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _web.CoreWebView2.Settings.IsWebMessageEnabled = true;
         _web.CoreWebView2.WebMessageReceived += OnWebMessage;
+        _web.CoreWebView2.NewWindowRequested += (_, ev) =>
+        {
+            ev.Handled = true;
+            OpenTradeUrl(ev.Uri);
+        };
         _web.CoreWebView2.Navigate(new Uri(index).AbsoluteUri);
+        ApplyHotkeys(_hotLog, _hotNext);
     }
 
     async void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -411,6 +1055,52 @@ sealed class TrackerWindow : Form
                 BeginInvoke(Close);
                 return;
             }
+            if (type == "hotkeys")
+            {
+                var log = root.TryGetProperty("log", out var logEl) ? logEl.GetString() ?? "F8" : "F8";
+                var next = root.TryGetProperty("next", out var nextEl) ? nextEl.GetString() ?? "F9" : "F9";
+                BeginInvoke(() => ApplyHotkeys(log, next));
+                return;
+            }
+            if (type == "rate-status")
+            {
+                PushRate();
+                return;
+            }
+            if (type == "price-cache-get")
+            {
+                var disk = Path.Combine(AppDataDir(), "prices.json");
+                try
+                {
+                    var body = File.Exists(disk) ? File.ReadAllText(disk) : "{\"version\":3,\"leagues\":{}}";
+                    if (!body.TrimStart().StartsWith('{')) body = "{\"version\":3,\"leagues\":{}}";
+                    Reply(id ?? "", true, 200, body);
+                }
+                catch (Exception ex)
+                {
+                    Reply(id ?? "", false, 0, JsonSerializer.Serialize(new { error = ex.Message }));
+                }
+                return;
+            }
+            if (type == "price-cache-set")
+            {
+                var json = root.TryGetProperty("json", out var jsonEl) ? jsonEl.GetString() ?? "" : "";
+                try
+                {
+                    if (json.Length is < 2 or > 2_000_000 || !json.TrimStart().StartsWith('{'))
+                    {
+                        Reply(id ?? "", false, 400, "{\"error\":\"bad price cache\"}");
+                        return;
+                    }
+                    File.WriteAllText(Path.Combine(AppDataDir(), "prices.json"), json);
+                    Reply(id ?? "", true, 200, "{\"ok\":true}");
+                }
+                catch (Exception ex)
+                {
+                    Reply(id ?? "", false, 0, JsonSerializer.Serialize(new { error = ex.Message }));
+                }
+                return;
+            }
             if (type == "icon")
             {
                 var itemName = root.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
@@ -423,13 +1113,54 @@ sealed class TrackerWindow : Form
                 await FetchScoutItems(id ?? "", league);
                 return;
             }
+            if (type == "open-url")
+            {
+                var url = root.TryGetProperty("url", out var urlEl) ? urlEl.GetString() ?? "" : "";
+                BeginInvoke(() => OpenTradeUrl(url));
+                return;
+            }
+            if (type == "trade-stats")
+            {
+                await FetchTradeStats(id ?? "");
+                return;
+            }
             if (type == "trade")
             {
                 var league = root.TryGetProperty("league", out var leagueEl) ? leagueEl.GetString() ?? "" : "";
                 var itemName = root.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
                 var skipCache = root.TryGetProperty("bust", out var skipEl) && skipEl.ValueKind == JsonValueKind.True;
                 var thorough = root.TryGetProperty("thorough", out var thoroughEl) && thoroughEl.ValueKind == JsonValueKind.True;
-                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough);
+                var typeLine = root.TryGetProperty("typeLine", out var typeEl) ? typeEl.GetString() ?? "" : "";
+                var rolls = new List<string>();
+                if (root.TryGetProperty("rollsJson", out var rollsJsonEl) && rollsJsonEl.ValueKind == JsonValueKind.String)
+                {
+                    try
+                    {
+                        using var parsedRolls = JsonDocument.Parse(rollsJsonEl.GetString() ?? "[]");
+                        if (parsedRolls.RootElement.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var roll in parsedRolls.RootElement.EnumerateArray())
+                            {
+                                var text = roll.ValueKind == JsonValueKind.String ? roll.GetString() : roll.ToString();
+                                if (!string.IsNullOrWhiteSpace(text)) rolls.Add(text);
+                            }
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        /* fall back to rolls array */
+                    }
+                }
+                if (rolls.Count == 0 && root.TryGetProperty("rolls", out var rollsEl) && rollsEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var roll in rollsEl.EnumerateArray())
+                    {
+                        var text = roll.ValueKind == JsonValueKind.String ? roll.GetString() : roll.ToString();
+                        if (!string.IsNullOrWhiteSpace(text)) rolls.Add(text);
+                    }
+                }
+                var mapped = ReadPreMappedFilters(root);
+                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped);
                 return;
             }
             if (type == "backup-info")
@@ -510,8 +1241,150 @@ sealed class TrackerWindow : Form
     void Reply(string id, bool ok, int status, string body)
     {
         if (_web.CoreWebView2 is null) return;
-        var payload = JsonSerializer.Serialize(new { id, ok, status, body });
+        var wait = CombinedWaitMs();
+        var ready = DateTime.UtcNow.AddMilliseconds(wait);
+        var snap = SearchLimit.Snapshot();
+        var payload = JsonSerializer.Serialize(new
+        {
+            id,
+            ok,
+            status,
+            body,
+            rate = RatePayload(wait, ready, SearchLimit.Limited || FetchLimit.Limited, snap),
+        });
         _web.CoreWebView2.PostWebMessageAsJson(payload);
+    }
+
+    void PushRate()
+    {
+        if (_web.CoreWebView2 is null) return;
+        var wait = CombinedWaitMs();
+        var ready = DateTime.UtcNow.AddMilliseconds(wait);
+        var snap = SearchLimit.Snapshot();
+        var payload = JsonSerializer.Serialize(new
+        {
+            type = "rate-limit",
+            rate = RatePayload(wait, ready, SearchLimit.Limited || FetchLimit.Limited, snap),
+        });
+        _web.CoreWebView2.PostWebMessageAsJson(payload);
+    }
+
+    object RatePayload(int waitMs, DateTime readyAt, bool limited, (int hits, int max, int window) snap)
+    {
+        var readyMs = new DateTimeOffset(DateTime.SpecifyKind(readyAt, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+        return new
+        {
+            waitMs,
+            readyAt = readyMs,
+            hits = snap.hits,
+            max = snap.max,
+            window = snap.window,
+            limited,
+        };
+    }
+
+    static int CombinedWaitMs() => Math.Max(SearchLimit.WaitMs(), FetchLimit.WaitMs());
+
+    async Task<bool> WaitForSlot(TradeLimiter limiter)
+    {
+        await SlotLock.WaitAsync();
+        try
+        {
+            while (true)
+            {
+                var wait = limiter.WaitMs();
+                if (limiter.Limited && wait >= 1500) return false;
+                if (wait <= 0)
+                {
+                    limiter.Borrow();
+                    PushRate();
+                    return true;
+                }
+                if (wait >= 20000) return false;
+                PushRate();
+                SlotLock.Release();
+                try { await Task.Delay(Math.Min(wait, 250)); }
+                finally { await SlotLock.WaitAsync(); }
+            }
+        }
+        finally
+        {
+            SlotLock.Release();
+        }
+    }
+
+    void NoteRate(HttpResponseMessage res, bool search)
+    {
+        var limiter = search ? SearchLimit : FetchLimit;
+        AdjustLimiter(limiter, res);
+        if ((int)res.StatusCode == 429 && limiter.WaitMs() == 0)
+            limiter.PenaltyUntil = DateTime.UtcNow.AddSeconds(5);
+        PushRate();
+    }
+
+    static void AdjustLimiter(TradeLimiter limiter, HttpResponseMessage res)
+    {
+        string Header(string name) =>
+            res.Headers.TryGetValues(name, out var values) ? string.Join(",", values) : "";
+
+        var retry = RetryAfterMs(res) ?? 0;
+        var rules = Header("x-rate-limit-rules").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (rules.Length == 0)
+        {
+            if (retry > 0) limiter.PenaltyUntil = DateTime.UtcNow.AddMilliseconds(retry);
+            return;
+        }
+
+        var incoming = new List<(int max, double window, int used, int penalty)>();
+        foreach (var rule in rules)
+        {
+            var limits = Header("x-rate-limit-" + rule).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var states = Header("x-rate-limit-" + rule + "-state").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            for (var i = 0; i < limits.Length; i++)
+            {
+                var capParts = limits[i].Split(':');
+                var stateParts = i < states.Length ? states[i].Split(':') : Array.Empty<string>();
+                if (capParts.Length < 2) continue;
+                if (!int.TryParse(capParts[0], out var cap) || !int.TryParse(capParts[1], out var period)) continue;
+                int.TryParse(stateParts.Length > 0 ? stateParts[0] : "0", out var used);
+                int.TryParse(stateParts.Length > 2 ? stateParts[2] : "0", out var penalty);
+                incoming.Add((cap, period + RateDesyncSec, used, penalty));
+            }
+        }
+
+        if (incoming.Count == 0)
+        {
+            if (retry > 0) limiter.PenaltyUntil = DateTime.UtcNow.AddMilliseconds(retry);
+            return;
+        }
+
+        limiter.Limits.RemoveAll(limit => !incoming.Any(row => limit.Same(row.max, row.window)));
+        if (limiter.Limits.Count == 0)
+            limiter.Limits.Add(new SlidingLimit(incoming[0].max, incoming[0].window));
+
+        foreach (var row in incoming)
+        {
+            var limit = limiter.Limits.Find(item => item.Same(row.max, row.window));
+            if (limit is null)
+            {
+                limit = new SlidingLimit(row.max, row.window);
+                limiter.Limits.Add(limit);
+            }
+            limit.SyncUsed(row.used);
+            if (row.penalty > 0)
+                limiter.PenaltyUntil = DateTime.UtcNow.AddSeconds(row.penalty);
+        }
+        if (retry > 0)
+            limiter.PenaltyUntil = DateTime.UtcNow.AddMilliseconds(Math.Max(retry, limiter.Limited ? (limiter.PenaltyUntil - DateTime.UtcNow).TotalMilliseconds : 0));
+    }
+
+    static void OpenTradeUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
+        if (!uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return;
+        if (!uri.Host.Equals("www.pathofexile.com", StringComparison.OrdinalIgnoreCase)) return;
+        if (!uri.AbsolutePath.StartsWith("/trade2/", StringComparison.OrdinalIgnoreCase)) return;
+        Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
     }
 
     static string AppDataDir()
@@ -733,6 +1606,8 @@ sealed class TrackerWindow : Form
         WriteResource(asm, "www.index.html", Path.Combine(dir, "index.html"));
         WriteResource(asm, "www.styles.css", Path.Combine(dir, "styles.css"));
         WriteResource(asm, "www.app.js", Path.Combine(dir, "app.js"));
+        WriteResource(asm, "www.decks.js", Path.Combine(dir, "decks.js"));
+        WriteResource(asm, "www.deck-game.js", Path.Combine(dir, "deck-game.js"));
         WriteResource(asm, "www.bosses.js", Path.Combine(dir, "bosses.js"));
         WriteResource(asm, "www.icons.js", Path.Combine(dir, "icons.js"));
         var leftoverSigil = Path.Combine(dir, "poe2-sigil.png");

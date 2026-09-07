@@ -15,6 +15,7 @@ const ui = {
   logBossId: null,
   editLogId: null,
   dashRollId: null,
+  hotkeyCapture: "",
   econType: "Currency",
   econTypes: ["Currency"],
   econAll: false,
@@ -25,12 +26,15 @@ const ui = {
 };
 
 let liveKill = { logId: null, bossId: null };
+const dropUndo = [];
 
 const backupInfo = { folder: "", downloads: "" };
 
 const sessionStarted = Date.now();
 let toastTimer = 0;
 const ninjaWait = new Map();
+const tradeRate = { readyAt: 0, waitMs: 0, hits: 0, max: 1, window: 5, limited: false };
+let rateBarTimer = 0;
 const prices = {
   status: "idle",
   error: "",
@@ -119,6 +123,8 @@ function loadState() {
       quickLog: parsed.quickLog !== false,
       convertMain: parsed.convertMain || "divine",
       convertView: parsed.convertView || parsed.convertMain || "divine",
+      hotkeyLog: parsed.hotkeyLog || "F8",
+      hotkeyNext: parsed.hotkeyNext || "F9",
       theme: { ...themeDefaults(), ...(parsed.theme || {}) },
     };
   } catch {
@@ -139,6 +145,8 @@ function defaultState() {
     quickLog: true,
     convertMain: "divine",
     convertView: "divine",
+    hotkeyLog: "F8",
+    hotkeyNext: "F9",
     theme: themeDefaults(),
   };
 }
@@ -641,9 +649,131 @@ function scoutFetch(league) {
   return webviewJson({ type: "scout", league }, 35000, "poe2scout timed out");
 }
 
-function tradeFetch(name, league, bust = false, thorough = false) {
+function tradeFetch(name, league, bust = false, thorough = false, extra = {}) {
   if (!window.chrome?.webview) return Promise.reject(new Error("trade needs the desktop app"));
-  return webviewJson({ type: "trade", name, league, bust: !!bust, thorough: !!thorough }, 45000, "PoE 2 trade timed out");
+  const filters = Array.isArray(extra.filters) ? extra.filters : [];
+  return webviewJson(
+    {
+      type: "trade",
+      name,
+      league,
+      bust: !!bust,
+      thorough: !!thorough,
+      typeLine: extra.typeLine || "",
+      rolls: extra.rolls || [],
+      rollsJson: JSON.stringify(extra.rolls || []),
+      filters,
+      filtersJson: JSON.stringify(filters),
+    },
+    extra.rolls?.length || filters.length ? 60000 : 45000,
+    "PoE 2 trade timed out"
+  );
+}
+
+// Matcher fold follows Exiled Exchange 2 (MIT): unwrap tags, # placeholders, map to trade ids.
+function foldTradeMatcher(text) {
+  return stripAdvancedRanges(parseAffixStrings(String(text || "")))
+    .toLowerCase()
+    .replace(/\((?:augmented|unmet|implicit)\)/gi, " ")
+    .replace(/\breduced\b/g, "increased")
+    .replace(/\bleft equipped ring\b/g, "equipped left ring")
+    .replace(/\bright equipped ring\b/g, "equipped right ring")
+    .replace(/[+-]?\d+(?:\.\d+)?/g, "#")
+    .replace(/#to /g, "# to ")
+    .replace(/#%/g, "#%")
+    .replace(/%(\S)/g, "% $1")
+    .replace(/\s+/g, " ")
+    .replace(/^\+/, "")
+    .trim();
+}
+
+function distinctiveTradePhrase(fold) {
+  const ring = String(fold || "").match(/bonuses gained from (?:equipped )?(left|right) (?:equipped )?ring/);
+  if (ring) return "bonuses gained from equipped " + ring[1] + " ring";
+  return "";
+}
+
+function pickTradeStat(list) {
+  if (!list?.length) return null;
+  return list.find((row) => row.type === "explicit" || String(row.id).startsWith("explicit.")) || list[0];
+}
+
+function firstClipboardRoll(text, reduced) {
+  const raw = stripAdvancedRanges(parseAffixStrings(String(text || "")));
+  const pct = raw.match(/([+-]?\d+(?:\.\d+)?)\s*%/);
+  const any = pct || raw.match(/([+-]?\d+(?:\.\d+)?)/);
+  if (!any) return null;
+  let n = Number(any[1]);
+  if (!Number.isFinite(n)) return null;
+  if (reduced && n > 0) n = -n;
+  return n;
+}
+
+let tradeStatIndex = null;
+let tradeStatsWait = null;
+
+function buildTradeStatIndex(data) {
+  const map = new Map();
+  for (const group of data?.result || []) {
+    const kind = group?.id || "";
+    if (kind === "pseudo" || kind === "skill") continue;
+    for (const entry of group.entries || []) {
+      const id = entry?.id || "";
+      const key = foldTradeMatcher(entry?.text || "");
+      if (!id || !key) continue;
+      const list = map.get(key) || [];
+      list.push({ id, type: entry.type || kind });
+      map.set(key, list);
+    }
+  }
+  return map;
+}
+
+async function ensureTradeStats() {
+  if (tradeStatIndex) return tradeStatIndex;
+  if (tradeStatsWait) return tradeStatsWait;
+  tradeStatsWait = (async () => {
+    try {
+      const data = await webviewJson({ type: "trade-stats" }, 25000, "trade stats timed out");
+      tradeStatIndex = buildTradeStatIndex(data);
+    } catch {
+      tradeStatIndex = new Map();
+    }
+    return tradeStatIndex;
+  })();
+  return tradeStatsWait;
+}
+
+function mapRollsToTradeFilters(rolls, index) {
+  const out = [];
+  const seen = new Set();
+  for (const roll of rolls || []) {
+    const raw = rollLineText(roll);
+    const text = stripAdvancedRanges(parseAffixStrings(raw));
+    if (!isUsefulRoll(text)) continue;
+    const key = foldTradeMatcher(text);
+    let hit = pickTradeStat(index?.get(key));
+    if (!hit && index?.size) {
+      const needle = distinctiveTradePhrase(key);
+      if (needle) {
+        for (const [fold, list] of index) {
+          if (!fold.includes(needle)) continue;
+          hit = pickTradeStat(list);
+          if (hit) break;
+        }
+      }
+    }
+    if (!hit?.id || seen.has(hit.id)) continue;
+    seen.add(hit.id);
+    out.push({
+      id: hit.id,
+      min: firstClipboardRoll(raw, /\breduced\b/i.test(raw)),
+      text,
+    });
+    if (out.length >= 6) break;
+  }
+  const rings = out.filter((row) => /bonuses gained from .*ring/i.test(row.text || ""));
+  return (rings.length ? rings : out).map((row) => ({ id: row.id, min: row.min }));
 }
 
 const iconPending = new Map();
@@ -725,6 +855,15 @@ if (window.chrome?.webview) {
         return;
       }
     }
+    if (msg?.type === "hotkey") {
+      handleAppHotkey(msg);
+      return;
+    }
+    if (msg?.type === "hotkey-status" && msg.error) {
+      showToast(msg.error);
+      return;
+    }
+    if (msg?.type === "rate-limit" || msg?.rate) applyTradeRate(msg.rate || msg);
     if (!msg?.id || !ninjaWait.has(msg.id)) return;
     const wait = ninjaWait.get(msg.id);
     ninjaWait.delete(msg.id);
@@ -746,6 +885,76 @@ if (window.chrome?.webview) {
       wait.reject(err);
     }
   });
+}
+
+function applyTradeRate(rate) {
+  if (!rate || typeof rate !== "object") return;
+  if (Number.isFinite(rate.readyAt) && rate.readyAt > 0) tradeRate.readyAt = rate.readyAt;
+  else if (Number.isFinite(rate.waitMs) && rate.waitMs > 0) tradeRate.readyAt = Date.now() + rate.waitMs;
+  else if (rate.waitMs === 0 && tradeRate.readyAt <= Date.now()) tradeRate.readyAt = Date.now();
+  tradeRate.waitMs = Math.max(0, rate.waitMs || 0);
+  tradeRate.hits = Number(rate.hits) || 0;
+  tradeRate.max = Number(rate.max) > 0 ? Number(rate.max) : tradeRate.max || 1;
+  tradeRate.window = Number(rate.window) > 0 ? Number(rate.window) : tradeRate.window || 5;
+  tradeRate.limited = !!rate.limited;
+  paintRateBar();
+}
+
+function formatRateWait(ms) {
+  const sec = Math.max(1, Math.ceil(ms / 1000));
+  if (sec < 60) return sec + "s";
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s ? m + "m " + s + "s" : m + "m";
+}
+
+function rateStatus() {
+  const left = Math.max(0, tradeRate.readyAt - Date.now());
+  const max = tradeRate.max || 1;
+  const hits = tradeRate.hits || 0;
+  const window = tradeRate.window || 5;
+  const counts = hits + "/" + max + " / " + window + "s";
+  if (left > 0) {
+    const wait = formatRateWait(left);
+    return {
+      wait: true,
+      limited: !!tradeRate.limited,
+      label: tradeRate.limited ? "Rate limited" : "Rate limiting",
+      chip: wait,
+      line: (tradeRate.limited ? "Rate limited · " : "Rate limiting · ") + wait,
+    };
+  }
+  return {
+    wait: false,
+    limited: false,
+    label: "Rate limiting",
+    chip: counts,
+    line: "Rate limiting · " + counts,
+  };
+}
+
+function paintRateBar() {
+  const clock = document.getElementById("rate-clock");
+  const clockText = document.getElementById("rate-clock-time");
+  const clockLabel = document.getElementById("rate-clock-label");
+  const desktop = !!window.chrome?.webview;
+  const status = rateStatus();
+  if (clock) {
+    clock.hidden = !desktop;
+    clock.classList.toggle("is-wait", status.wait);
+    clock.classList.toggle("is-limited", status.wait && status.limited);
+  }
+  if (clockLabel) clockLabel.textContent = status.label;
+  if (clockText) clockText.textContent = status.chip;
+}
+
+function startRateBar() {
+  paintRateBar();
+  if (window.chrome?.webview) {
+    try { window.chrome.webview.postMessage({ type: "rate-status" }); } catch { /* native host not ready */ }
+  }
+  if (rateBarTimer) return;
+  rateBarTimer = setInterval(paintRateBar, 250);
 }
 
 function priceKey(name) {
@@ -1038,33 +1247,51 @@ function lookupIcon(name) {
   return "";
 }
 
-function rememberPrice(name, divine, listings, icon, amount, unit, source) {
+function rememberPrice(name, divine, listings, icon, amount, unit, source, replace = false) {
   if (!name) return;
   bustPriceLookup();
   const valid = Number.isFinite(divine) && divine >= 0;
   const resolvedIcon = ninjaIcon(icon);
   if (!valid && !resolvedIcon && !Number.isFinite(amount)) return;
-  if (resolvedIcon) rememberIcon(name, resolvedIcon);
-  const keys = new Set(lookupKeys(name));
-  for (const key of keys) {
-    if (!key) continue;
-    const prev = prices.byName.get(key);
-    if (!prev) {
-      prices.byName.set(key, {
-        name,
-        divine: valid ? divine : undefined,
-        maxDivine: valid ? divine : undefined,
-        amount: Number.isFinite(amount) ? amount : undefined,
-        maxAmount: Number.isFinite(amount) ? amount : undefined,
-        unit: unit || undefined,
-        listings: listings || 0,
-        icon: resolvedIcon || "",
-        source: source || "ninja",
-        at: Date.now(),
-        cached: false,
-      });
-      continue;
-    }
+    if (resolvedIcon) rememberIcon(name, resolvedIcon);
+    const keys = new Set(lookupKeys(name));
+    for (const key of keys) {
+      if (!key) continue;
+      const prev = prices.byName.get(key);
+      if (!prev) {
+        prices.byName.set(key, {
+          name,
+          divine: valid ? divine : undefined,
+          maxDivine: valid ? divine : undefined,
+          amount: Number.isFinite(amount) ? amount : undefined,
+          maxAmount: Number.isFinite(amount) ? amount : undefined,
+          unit: unit || undefined,
+          listings: listings || 0,
+          icon: resolvedIcon || "",
+          source: source || "ninja",
+          at: Date.now(),
+          cached: false,
+        });
+        continue;
+      }
+      if (replace && valid) {
+        prev.divine = divine;
+        prev.maxDivine = divine;
+        prev.amount = Number.isFinite(amount) ? amount : undefined;
+        prev.maxAmount = Number.isFinite(amount) ? amount : undefined;
+        prev.unit = unit || prev.unit;
+        prev.listings = listings || 0;
+        prev.name = name;
+        prev.source = source || prev.source;
+        prev.cached = false;
+        prev.at = Date.now();
+        if (resolvedIcon) prev.icon = resolvedIcon;
+        continue;
+      }
+      if (prev.source === "trade" && (source || "ninja") !== "trade") {
+        if (resolvedIcon && !prev.icon) prev.icon = resolvedIcon;
+        continue;
+      }
     if (prev.cached && valid) {
       prev.divine = divine;
       prev.maxDivine = divine;
@@ -1370,28 +1597,15 @@ function convertMain() {
   return units.includes(unit) ? unit : "divine";
 }
 
-function convertView() {
-  const units = allConvertUnits();
-  const unit = state.convertView || convertMain();
-  return units.includes(unit) ? unit : convertMain();
-}
-
 function convertQuote() {
-  return nextConvertUnit(convertView(), 1);
+  return nextConvertUnit(convertMain(), 1);
 }
 
 function setConvertMain(unit) {
   if (!allConvertUnits().includes(unit)) return;
   state.convertMain = unit;
-  state.convertView = unit;
   save();
   render();
-}
-
-function swapConvert() {
-  state.convertView = nextConvertUnit(convertView(), 1);
-  save();
-  renderDivineTape();
 }
 
 function amountInDivine(amount, unit) {
@@ -1530,6 +1744,11 @@ function srcLabel(hit) {
 }
 
 function dropValue(drop) {
+  if (drop?.quote && (drop.quote.url || drop.quote.mapped)) {
+    const rolled = hitDivine(drop.quote);
+    if (Number.isFinite(rolled) && rolled > 0) return rolled * (drop.qty || 1);
+    return 0;
+  }
   const divine = hitDivine(lookupPrice(drop.name));
   if (!Number.isFinite(divine)) return 0;
   return divine * (drop.qty || 1);
@@ -1544,7 +1763,10 @@ function totalLootValue(logs = state.logs) {
 }
 
 function leagueId() {
-  return (state.league || "Forbidden Rites").trim();
+  if (state.league) return String(state.league).trim();
+  const fromSelect = document.getElementById("league-input")?.value?.trim();
+  if (fromSelect) return fromSelect;
+  return "Forbidden Rites";
 }
 
 function catalogNames() {
@@ -1579,7 +1801,9 @@ function linkCatalogPrices() {
 const PRICE_REFRESH_MS = 20 * 60 * 1000;
 const PRICE_RETRY_MS = 3 * 60 * 1000;
 const PRICE_CACHE_KEY = "poe2-exile-ledger-prices-v1";
+const BOSS_PRICE_CACHE_KEY = "poe2-exile-ledger-boss-prices-v1";
 const PRICE_CACHE_FRESH_MS = 5 * 60 * 1000;
+let catalogDiskStore = { version: 3, leagues: {} };
 
 function clonePriceMap(map) {
   const next = new Map();
@@ -1611,26 +1835,198 @@ function uniquePricedHits(map = prices.byName) {
   return rows;
 }
 
-function compactPriceTables(tables = prices.tables) {
+function compactSpark(spark, mode = "short") {
+  const change = Number(spark?.change);
+  const compactChange = Number.isFinite(change) ? Number(change.toFixed(4)) : 0;
+  if (mode === "bare" || mode === "change") return { change: compactChange, data: [] };
+  const data = Array.isArray(spark?.data) ? spark.data.slice(-8) : [];
+  return {
+    change: compactChange,
+    data: data.map((v) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(Number(v).toFixed(3)))),
+  };
+}
+
+function compactPriceTables(tables = prices.tables, sparkMode = "short") {
   const out = {};
   for (const [type, rows] of Object.entries(tables || {})) {
     if (!Array.isArray(rows) || !rows.length) continue;
-    out[type] = rows.map((row) => ({
-      name: row.name,
-      divine: row.divine,
-      amount: row.amount,
-      unit: row.unit,
-      listings: row.listings || 0,
-      icon: row.icon || "",
-      baseType: row.baseType || "",
-      ninjaId: row.ninjaId,
-      kind: row.kind,
-      type: row.type || type,
-      spark: row.spark,
-      corrupted: row.corrupted,
-    }));
+    out[type] = rows.map((row) => {
+      const next = {
+        name: row.name,
+        divine: row.divine,
+        amount: row.amount,
+        unit: row.unit,
+        listings: row.listings || 0,
+        baseType: row.baseType || "",
+        ninjaId: row.ninjaId,
+        kind: row.kind,
+        type: row.type || type,
+        spark: compactSpark(row.spark, sparkMode),
+        corrupted: row.corrupted,
+      };
+      if (sparkMode !== "bare") next.icon = row.icon || "";
+      return next;
+    });
   }
   return out;
+}
+
+function priceStoreHasData(entry) {
+  if (!entry) return false;
+  if (Array.isArray(entry.items) && entry.items.length) return true;
+  return Object.values(entry.tables || {}).some((rows) => Array.isArray(rows) && rows.length);
+}
+
+function prunePriceLeagues(leagues, keep = 6) {
+  const entries = Object.entries(leagues || {});
+  if (entries.length <= keep) return Object.fromEntries(entries);
+  const weight = (entry) => {
+    const items = entry[1]?.items?.length || 0;
+    const tables = Object.values(entry[1]?.tables || {}).reduce((n, rows) => n + (rows?.length || 0), 0);
+    return items + tables;
+  };
+  entries.sort((a, b) => weight(b) - weight(a) || (b[1]?.fetchedAt || 0) - (a[1]?.fetchedAt || 0));
+  return Object.fromEntries(entries.slice(0, keep));
+}
+
+function compactPriceHit(hit) {
+  return {
+    name: hit.name,
+    divine: hit.divine,
+    maxDivine: hit.maxDivine,
+    amount: hit.amount,
+    maxAmount: hit.maxAmount,
+    unit: hit.unit,
+    listings: hit.listings || 0,
+    icon: hit.icon || "",
+    source: hit.source || "ninja",
+    at: hit.at || 0,
+    cached: true,
+  };
+}
+
+function catalogNameSet() {
+  const names = new Set();
+  for (const name of catalogNames()) names.add(priceKey(name));
+  for (const name of dashboardPriceNames()) names.add(priceKey(name));
+  return names;
+}
+
+function catalogPriceRows() {
+  const names = new Set([...catalogNames(), ...dashboardPriceNames()]);
+  const rows = [];
+  const seen = new Set();
+  for (const name of names) {
+    const hit = lookupPrice(name);
+    if (!pricedHit(hit) || !hit.name || seen.has(hit.name)) continue;
+    seen.add(hit.name);
+    rows.push(compactPriceHit(hit));
+  }
+  return rows;
+}
+
+function catalogCacheEntry() {
+  const league = prices.league || leagueId();
+  return {
+    league,
+    fetchedAt: prices.fetchedAt || 0,
+    nextAt: prices.nextAt || 0,
+    primary: prices.primary,
+    exaltedPerDivine: prices.exaltedPerDivine,
+    chaosPerDivine: prices.chaosPerDivine,
+    items: catalogPriceRows(),
+    empty: [...prices.checkedEmpty],
+  };
+}
+
+function bestLeagueDump(leagues) {
+  return Object.values(leagues || {})
+    .filter(priceStoreHasData)
+    .sort((a, b) => (b.fetchedAt || 0) - (a.fetchedAt || 0))[0];
+}
+
+function applyCatalogRows(rows, extra = {}) {
+  for (const row of rows || []) {
+    if (!row?.name || !pricedHit(row)) continue;
+    const prev = lookupPrice(row.name);
+    if (pricedHit(prev) && prev.source === "trade" && row.source !== "trade") continue;
+    const replace = !pricedHit(prev) || row.source === "trade";
+    rememberPrice(row.name, row.divine, row.listings, row.icon, row.amount, row.unit, row.source, replace);
+    stampPriceHit(row.name, {
+      at: row.at || extra.at || 0,
+      cached: extra.cached != null ? extra.cached : true,
+      maxDivine: row.maxDivine,
+      maxAmount: row.maxAmount,
+      source: row.source,
+    });
+  }
+}
+
+function restoreCatalogPrices(oldMap) {
+  if (!oldMap?.size) return;
+  const catalog = catalogNameSet();
+  const seen = new Set();
+  for (const hit of oldMap.values()) {
+    if (!hit?.name || !pricedHit(hit) || seen.has(hit.name)) continue;
+    seen.add(hit.name);
+    const inCatalog = lookupKeys(hit.name).some((key) => catalog.has(key) || catalog.has(priceKey(key)));
+    if (!inCatalog && hit.source !== "trade") continue;
+    applyCatalogRows([hit], { cached: true, at: hit.at });
+  }
+}
+
+function readBossPriceStore() {
+  try {
+    const dump = JSON.parse(localStorage.getItem(BOSS_PRICE_CACHE_KEY) || "null");
+    if (dump?.leagues && typeof dump.leagues === "object") return { version: 3, leagues: dump.leagues };
+  } catch {
+    /* ignore */
+  }
+  return { version: 3, leagues: {} };
+}
+
+function persistCatalogCache() {
+  const entry = catalogCacheEntry();
+  if (!entry.items.length && !entry.exaltedPerDivine && !prices.fetchedAt) return;
+  const local = readBossPriceStore();
+  const diskLeagues = catalogDiskStore?.leagues && typeof catalogDiskStore.leagues === "object" ? catalogDiskStore.leagues : {};
+  const leagues = prunePriceLeagues({ ...local.leagues, ...diskLeagues, [entry.league]: entry });
+  const store = { version: 3, leagues };
+  catalogDiskStore = store;
+  try {
+    localStorage.setItem(BOSS_PRICE_CACHE_KEY, JSON.stringify(store));
+  } catch {
+    /* quota — disk still gets a copy */
+  }
+  if (window.chrome?.webview) {
+    try {
+      chrome.webview.postMessage({ type: "price-cache-set", id: uid(), json: JSON.stringify(store) });
+    } catch {
+      /* native host not ready */
+    }
+  }
+}
+
+function hydrateFromDump(dump, cached = true) {
+  if (!dump) return false;
+  const items = Array.isArray(dump.items) ? dump.items : [];
+  const tables = dump.tables && typeof dump.tables === "object" ? dump.tables : {};
+  const tableRows = Object.values(tables).flatMap((rows) => (Array.isArray(rows) ? rows : []));
+  const hasItems = items.length > 0 || tableRows.some((row) => pricedHit(row));
+  if (!hasItems && !(Number(dump.exaltedPerDivine) > 0) && !Object.keys(tables).length) return false;
+  if (Object.keys(tables).length) prices.tables = { ...prices.tables, ...tables };
+  if (dump.primary) prices.primary = dump.primary;
+  if (Number(dump.exaltedPerDivine) > 0) prices.exaltedPerDivine = Number(dump.exaltedPerDivine);
+  if (Number(dump.chaosPerDivine) > 0) prices.chaosPerDivine = Number(dump.chaosPerDivine);
+  if (dump.league) prices.league = dump.league;
+  if (Number(dump.fetchedAt) > (prices.fetchedAt || 0)) prices.fetchedAt = Number(dump.fetchedAt);
+  if (Number(dump.nextAt) > 0) prices.nextAt = Number(dump.nextAt);
+  prices.cached = true;
+  prices.status = "ready";
+  prices.error = "";
+  if (Array.isArray(dump.empty)) dump.empty.forEach((name) => prices.checkedEmpty.add(name));
+  applyCatalogRows(items.length ? items : tableRows, { cached });
+  return true;
 }
 
 function stampPriceHit(name, extra) {
@@ -1674,31 +2070,46 @@ function readPriceStore() {
 
 function persistPrices() {
   const league = prices.league || leagueId();
-  const entry = {
+  const items = uniquePricedHits();
+  const catalogItems = catalogPriceRows();
+  const store = readPriceStore();
+  const liveHasTables = Object.values(prices.tables || {}).some((rows) => Array.isArray(rows) && rows.length);
+  if (!items.length && !catalogItems.length && !liveHasTables && priceStoreHasData(store.leagues[league])) {
+    persistCatalogCache();
+    return;
+  }
+  const base = {
     league,
     fetchedAt: prices.fetchedAt || 0,
     nextAt: prices.nextAt || 0,
     primary: prices.primary,
     exaltedPerDivine: prices.exaltedPerDivine,
     chaosPerDivine: prices.chaosPerDivine,
-    items: uniquePricedHits(),
-    tables: compactPriceTables(),
+    empty: [...prices.checkedEmpty],
   };
-  const store = readPriceStore();
-  store.leagues[league] = entry;
-  const ranked = Object.entries(store.leagues).sort((a, b) => (b[1]?.fetchedAt || 0) - (a[1]?.fetchedAt || 0));
-  store.leagues = Object.fromEntries(ranked.slice(0, 3));
-  try {
-    localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify({ version: 2, leagues: store.leagues }));
-  } catch {
+  const attempts = [
+    { items, sparkMode: "short" },
+    { items, sparkMode: "change" },
+    { items, sparkMode: "bare" },
+    { items, sparkMode: "none" },
+    { items: catalogItems, sparkMode: "none" },
+  ];
+  for (const attempt of attempts) {
+    const entry = {
+      ...base,
+      items: attempt.items,
+      tables: attempt.sparkMode === "none" ? {} : compactPriceTables(prices.tables, attempt.sparkMode),
+    };
+    const leagues = prunePriceLeagues({ ...store.leagues, [league]: entry });
     try {
-      entry.tables = {};
-      store.leagues[league] = entry;
-      localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify({ version: 2, leagues: store.leagues }));
+      localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify({ version: 2, leagues }));
+      persistCatalogCache();
+      return;
     } catch {
-      /* quota */
+      /* quota — try a smaller payload */
     }
   }
+  persistCatalogCache();
 }
 
 function persistPricesSoon() {
@@ -1706,28 +2117,63 @@ function persistPricesSoon() {
   persistPricesSoon.timer = setTimeout(persistPrices, 400);
 }
 
+function hydrateBossPriceCache() {
+  const store = readBossPriceStore();
+  const dump = store.leagues[leagueId()] || bestLeagueDump(store.leagues);
+  return hydrateFromDump(dump, true);
+}
+
 function hydratePriceCache() {
   try {
-    const dump = readPriceStore().leagues[leagueId()];
-    if (!dump || !Array.isArray(dump.items) || !dump.items.length) return false;
-    prices.byName = new Map();
-    prices.tables = dump.tables && typeof dump.tables === "object" ? dump.tables : {};
-    prices.history = {};
-    bustPriceLookup();
-    prices.primary = dump.primary || "divine";
-    prices.exaltedPerDivine = Number(dump.exaltedPerDivine) || 0;
-    prices.chaosPerDivine = Number(dump.chaosPerDivine) || 0;
-    prices.league = dump.league || leagueId();
-    prices.fetchedAt = Number(dump.fetchedAt) || 0;
-    prices.nextAt = Number(dump.nextAt) || 0;
-    prices.cached = true;
-    prices.status = "ready";
-    prices.error = "";
-    for (const row of dump.items) applyPriceRow(row, { cached: true });
-    return true;
+    const store = readPriceStore();
+    const dump = store.leagues[leagueId()] || bestLeagueDump(store.leagues);
+    if (priceStoreHasData(dump)) {
+      const items = Array.isArray(dump.items) ? dump.items : [];
+      const tables = dump.tables && typeof dump.tables === "object" ? dump.tables : {};
+      const tableRows = Object.values(tables).flatMap((rows) => (Array.isArray(rows) ? rows : []));
+      if (!prices.byName.size) {
+        prices.tables = tables;
+        prices.history = {};
+        bustPriceLookup();
+        prices.primary = dump.primary || "divine";
+        prices.exaltedPerDivine = Number(dump.exaltedPerDivine) || 0;
+        prices.chaosPerDivine = Number(dump.chaosPerDivine) || 0;
+        prices.league = dump.league || leagueId();
+        prices.fetchedAt = Number(dump.fetchedAt) || 0;
+        prices.nextAt = Number(dump.nextAt) || 0;
+        prices.cached = true;
+        prices.status = "ready";
+        prices.error = "";
+        prices.checkedEmpty = new Set(Array.isArray(dump.empty) ? dump.empty : []);
+        for (const row of items.length ? items : tableRows) applyPriceRow(row, { cached: true });
+      } else {
+        hydrateFromDump(dump, true);
+      }
+    }
+    hydrateBossPriceCache();
+    linkCatalogPrices();
+    return prices.byName.size > 0;
   } catch {
-    return false;
+    return hydrateBossPriceCache() || prices.byName.size > 0;
   }
+}
+
+async function hydratePriceDisk() {
+  if (!window.chrome?.webview) return prices.byName.size > 0;
+  try {
+    const dump = await webviewJson({ type: "price-cache-get" }, 8000, "price cache timed out");
+    if (dump?.leagues && typeof dump.leagues === "object") catalogDiskStore = { version: 3, leagues: dump.leagues };
+    const entry = dump?.leagues?.[leagueId()] || bestLeagueDump(dump?.leagues);
+    if (hydrateFromDump(entry, true)) {
+      linkCatalogPrices();
+      persistCatalogCache();
+      paintLivePrices();
+      return true;
+    }
+  } catch {
+    /* local cache still stands */
+  }
+  return prices.byName.size > 0;
 }
 
 function restoreCachedMisses(oldMap) {
@@ -1763,7 +2209,7 @@ function paintPriceClock() {
   const el = document.getElementById("price-clock-time");
   const clock = document.getElementById("price-clock");
   if (clock) {
-    clock.title = "Click to check poe.ninja, then auto-check every drop on the dashboard from PoE 2 trade.";
+    clock.title = "Click to check poe.ninja, then price every boss unique on PoE 2 trade and save the latest listing.";
   }
   if (!el) return;
   let text = "Check prices";
@@ -1800,14 +2246,6 @@ async function refreshPrices(force = false) {
   try {
     const q = encodeURIComponent(league);
     const currency = await ninjaFetch(`/poe2/api/economy/exchange/current/overview?league=${q}&type=Currency`, true);
-    prices.byName = new Map();
-    prices.tables = {};
-    prices.history = {};
-    bustPriceLookup();
-    prices.primary = "divine";
-    prices.exaltedPerDivine = 0;
-    prices.chaosPerDivine = 0;
-    ingestExchange(currency, "Currency");
     const exchangeTypes = NINJA_EXCHANGE.filter((type) => type !== "Currency");
     const rest = await Promise.all([
       ...exchangeTypes.map((type) =>
@@ -1821,6 +2259,14 @@ async function refreshPrices(force = false) {
           .catch(() => null)
       ),
     ]);
+    prices.byName = new Map();
+    prices.tables = {};
+    prices.history = {};
+    bustPriceLookup();
+    prices.primary = "divine";
+    prices.exaltedPerDivine = 0;
+    prices.chaosPerDivine = 0;
+    ingestExchange(currency, "Currency");
     rest.filter(Boolean).forEach((pack) => {
       if (!pack.data) return;
       if (pack.items) ingestItems(pack.data, pack.type);
@@ -1829,6 +2275,7 @@ async function refreshPrices(force = false) {
     if (!prices.byName.size) throw new Error("No poe.ninja prices returned");
     restoreCachedMisses(snapshotMap);
     restoreCachedTables(snapshotTables);
+    restoreCatalogPrices(snapshotMap);
     linkCatalogPrices();
     prices.league = league;
     prices.fetchedAt = Date.now();
@@ -1874,6 +2321,7 @@ async function fillGapPrices() {
   if (!window.chrome?.webview) return;
   try {
     await fillScoutPrices();
+    linkCatalogPrices();
   } catch {
     /* ninja still stands */
   }
@@ -1886,7 +2334,27 @@ async function fillGapPrices() {
 }
 
 function wantsGapPrice(name) {
-  return !pricedHit(lookupPrice(name));
+  if (!name || pricedHit(lookupPrice(name))) return false;
+  return !prices.checkedEmpty.has(name);
+}
+
+function pricesHaveBeenSeeded() {
+  if (prices.fetchedAt || prices.byName.size) return true;
+  try {
+    if (Object.values(readPriceStore().leagues || {}).some(priceStoreHasData)) return true;
+    if (Object.values(readBossPriceStore().leagues || {}).some(priceStoreHasData)) return true;
+    if (Object.values(catalogDiskStore.leagues || {}).some(priceStoreHasData)) return true;
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function kickFirstPriceCheck() {
+  if (!window.chrome?.webview) return;
+  if (prices.status === "loading" || prices.filling) return;
+  if (pricesHaveBeenSeeded()) return;
+  refreshPrices(true);
 }
 
 function dashboardPriceNames() {
@@ -1976,29 +2444,32 @@ async function applyTradeRow(name, row) {
   const amount = Number(row?.amount);
   if (!Number.isFinite(amount) || amount <= 0) return false;
   const divine = toDivine(amount, unit);
-  rememberPrice(name, divine, row.listings || 0, "", amount, unit, "trade");
-  if (row.name && row.name !== name) rememberPrice(row.name, divine, row.listings || 0, "", amount, unit, "trade");
+  rememberPrice(name, divine, row.listings || 0, "", amount, unit, "trade", true);
+  if (row.name && row.name !== name) rememberPrice(row.name, divine, row.listings || 0, "", amount, unit, "trade", true);
   prices.checkedEmpty.delete(name);
   return true;
 }
 
-async function probeTradePrice(name) {
+async function probeTradePrice(name, force = false) {
   linkCatalogPrices();
-  if (pricedHit(lookupPrice(name))) {
+  if (!force && pricedHit(lookupPrice(name))) {
     prices.checkedEmpty.delete(name);
     return true;
   }
-  const tableHit = hitFromTables(name);
-  if (tableHit) {
-    rememberPrice(name, tableHit.divine, tableHit.listings, tableHit.icon, tableHit.amount, tableHit.unit, tableHit.source || "ninja");
-    prices.checkedEmpty.delete(name);
-    persistPrices();
-    return true;
+  if (!force) {
+    const tableHit = hitFromTables(name);
+    if (tableHit) {
+      rememberPrice(name, tableHit.divine, tableHit.listings, tableHit.icon, tableHit.amount, tableHit.unit, tableHit.source || "ninja");
+      prices.checkedEmpty.delete(name);
+      persistPrices();
+      return true;
+    }
   }
   if (!window.chrome?.webview) return false;
-  for (const alias of tradeAliases(name)) {
+  const aliases = force ? [name, canonicalName(name)].filter((alias, i, all) => alias && all.indexOf(alias) === i) : tradeAliases(name);
+  for (const alias of aliases) {
     try {
-      const row = await tradeFetch(alias, leagueId(), true, true);
+      const row = await tradeFetch(alias, leagueId(), true, !force);
       if (await applyTradeRow(name, row)) {
         persistPrices();
         return true;
@@ -2012,9 +2483,29 @@ async function probeTradePrice(name) {
   return false;
 }
 
+function allBossUniqueNames() {
+  const farmId = farmBossId();
+  const dash = new Set(dashboardPriceNames());
+  const ranked = [];
+  const seen = new Set();
+  allBosses().forEach((boss) => {
+    (boss.uniques || []).forEach((item) => {
+      if (!item?.name || seen.has(item.name)) return;
+      seen.add(item.name);
+      let rank = 3;
+      if (dash.has(item.name)) rank = -1;
+      else if (boss.id === farmId) rank = 0;
+      else if (item.rarity === "extremely-rare") rank = 1;
+      else if (item.rarity === "very-rare") rank = 2;
+      ranked.push({ name: item.name, rank });
+    });
+  });
+  return ranked.sort((a, b) => a.rank - b.rank).map((row) => row.name);
+}
+
 async function fillTradePrices() {
   if (!window.chrome?.webview) return;
-  const queue = dashboardPriceNames().filter((name) => wantsGapPrice(name));
+  const queue = allBossUniqueNames();
   if (!queue.length) return;
   prices.filling = true;
   queue.forEach((name) => prices.looking.add(name));
@@ -2022,14 +2513,21 @@ async function fillTradePrices() {
   render();
   try {
     for (const name of queue) {
+      if (tradeWaiting() && tradeRate.limited) {
+        persistPrices();
+        showToast("PoE 2 trade hit a rate limit. Wait, then Check prices again for the rest.");
+        break;
+      }
       try {
-        await probeTradePrice(name);
+        await probeTradePrice(name, true);
       } catch (err) {
         if (tradeRateError(err)) {
+          persistPrices();
           showToast("PoE 2 trade hit a rate limit. Wait a minute, then Check prices again for the rest.");
           break;
         }
         if (tradeBlockedError(err)) {
+          persistPrices();
           showToast("PoE 2 trade blocked the request. Wait and try Check prices again.");
           break;
         }
@@ -2038,11 +2536,13 @@ async function fillTradePrices() {
         prices.looking.delete(name);
         paintLivePrices();
       }
-      await sleep(1600);
+      await sleep(80);
     }
   } finally {
     queue.forEach((name) => prices.looking.delete(name));
     prices.filling = false;
+    prices.fetchedAt = Date.now();
+    prices.cached = false;
     persistPrices();
     paintPriceClock();
     render();
@@ -2147,18 +2647,89 @@ function liveLog() {
 
 function mergeDrop(log, drop) {
   log.drops = log.drops || [];
-  const existing = log.drops.find((item) => (item.uniqueId || item.name) === (drop.uniqueId || drop.name));
+  if (drop.rolls?.length) {
+    log.drops.push(drop);
+    return drop;
+  }
+  const existing = log.drops.find((item) => (item.uniqueId || item.name) === (drop.uniqueId || drop.name) && !item.rolls?.length);
   if (existing) {
     existing.qty = (existing.qty || 1) + (drop.qty || 1);
-    if (drop.rolls?.length) existing.rolls = (existing.rolls || []).concat(drop.rolls);
-    return;
+    return existing;
   }
   log.drops.push(drop);
+  return drop;
+}
+
+function pushDropUndo(log, drop) {
+  if (!log?.id || !drop) return;
+  dropUndo.push({
+    logId: log.id,
+    key: drop.uniqueId || drop.name,
+    qty: drop.qty || 1,
+    rolls: (drop.rolls || []).length,
+    name: drop.name,
+  });
+  if (dropUndo.length > 40) dropUndo.shift();
+}
+
+function takeDropUndo(bossId) {
+  if (!dropUndo.length) return null;
+  if (!bossId) return dropUndo.pop();
+  for (let i = dropUndo.length - 1; i >= 0; i--) {
+    const log = state.logs.find((item) => item.id === dropUndo[i].logId);
+    if (log?.bossId === bossId) return dropUndo.splice(i, 1)[0];
+  }
+  return null;
+}
+
+function inferDropUndo(bossId) {
+  const live = liveLog();
+  const log =
+    (live && (!bossId || live.bossId === bossId) && live.drops?.length && live) ||
+    state.logs.find((item) => (!bossId || item.bossId === bossId) && item.drops?.length);
+  if (!log?.drops?.length) return null;
+  const last = log.drops[log.drops.length - 1];
+  return { logId: log.id, key: last.uniqueId || last.name, qty: 1, rolls: 0, name: last.name };
+}
+
+function undoLastDrop(bossId) {
+  const step = takeDropUndo(bossId) || inferDropUndo(bossId);
+  if (!step) {
+    showToast("Nothing to undo.");
+    return;
+  }
+  const log = state.logs.find((item) => item.id === step.logId);
+  if (!log) {
+    showToast("Nothing to undo.");
+    return;
+  }
+  const drop = [...(log.drops || [])].reverse().find((item) => (item.uniqueId || item.name) === step.key);
+  if (!drop) {
+    if (!(log.drops || []).length) deleteLog(log.id);
+    else {
+      save();
+      render();
+    }
+    showToast("Nothing to undo.");
+    return;
+  }
+  const name = drop.name || "last drop";
+  drop.qty = (drop.qty || 1) - (step.qty || 1);
+  if (step.rolls && drop.rolls?.length) drop.rolls = drop.rolls.slice(0, Math.max(0, drop.rolls.length - step.rolls));
+  if (drop.qty <= 0) log.drops = log.drops.filter((item) => item !== drop);
+  if (!(log.drops || []).length) {
+    deleteLog(log.id);
+    showToast("Removed " + name + ".");
+    return;
+  }
+  save();
+  render();
+  showToast("Removed " + name + ".");
 }
 
 function toastKill(boss, log) {
   const names = (log.drops || []).map((drop) => drop.name + (drop.qty > 1 ? " ×" + drop.qty : "")).join(", ") || "nothing dropped";
-  showToast(boss.name + " · " + names + " · tap more drops from this kill, or Next kill", [
+  showToast(boss.name + " · " + names + " · " + hotkeys().next + " for Next kill", [
     { id: "undo", label: "Undo", logId: log.id },
   ]);
 }
@@ -2166,14 +2737,17 @@ function toastKill(boss, log) {
 function farmLogDrop(bossId, drop) {
   const boss = getBoss(bossId);
   if (!boss || !drop) return;
+  if (!drop.id) drop.id = uid();
   ui.dashRollId = null;
+  state.farmBossId = bossId;
   const open = liveLog();
   if (open && open.bossId === bossId) {
     mergeDrop(open, drop);
+    pushDropUndo(open, drop);
     save();
     render();
     toastKill(boss, open);
-    return;
+    return open;
   }
   const log = {
     id: uid(),
@@ -2182,27 +2756,347 @@ function farmLogDrop(bossId, drop) {
     drops: [drop],
   };
   state.logs.unshift(log);
-  state.farmBossId = bossId;
   liveKill = { logId: log.id, bossId };
+  pushDropUndo(log, drop);
   save();
   render();
   toastKill(boss, log);
+  return log;
 }
 
-function finishFarmKill() {
-  if (!liveLog()) return;
+function finishFarmKill(fromHotkey) {
+  if (!liveLog()) {
+    if (fromHotkey) showToast("No open kill. Log a drop first.");
+    return;
+  }
   clearLiveKill();
   render();
+  if (fromHotkey) showToast("Next kill.");
 }
 
 function farmPickItem(bossId, item) {
   if (!item?.name) return;
-  if (item.rolls) {
-    ui.dashRollId = item.id;
+  farmLogDrop(bossId, { uniqueId: item.id || slug(item.name), name: item.name, qty: 1 });
+}
+
+function hotkeys() {
+  return {
+    log: state.hotkeyLog || "F8",
+    next: state.hotkeyNext || "F9",
+  };
+}
+
+function syncHotkeys() {
+  if (!window.chrome?.webview) return;
+  chrome.webview.postMessage({ type: "hotkeys", log: hotkeys().log, next: hotkeys().next });
+}
+
+function formatHotkey(event) {
+  if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) return "";
+  const parts = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  let name = event.key;
+  if (/^F\d{1,2}$/i.test(name)) name = name.toUpperCase();
+  else if (name === " ") name = "Space";
+  else if (name.length === 1) name = name.toUpperCase();
+  parts.push(name);
+  return parts.join("+");
+}
+
+function namesMatch(a, b) {
+  if (!a || !b) return false;
+  return foldKey(a) === foldKey(b) || priceKey(a) === priceKey(b) || slug(a) === slug(b);
+}
+
+function parsePoeItem(text) {
+  const raw = String(text || "")
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n")
+    .trim();
+  if (!raw || (!/^Item Class:/im.test(raw) && !/^Rarity:/im.test(raw))) return null;
+  const blocks = raw.split(/\n-{3,}\n/);
+  const head = (blocks[0] || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  let rarity = "";
+  let className = "";
+  const rest = [];
+  for (const line of head) {
+    const itemClass = line.match(/^Item Class:\s*(.+)$/i);
+    if (itemClass) {
+      className = itemClass[1].trim();
+      continue;
+    }
+    const rarityLine = line.match(/^Rarity:\s*(.+)$/i);
+    if (rarityLine) {
+      rarity = rarityLine[1].trim();
+      continue;
+    }
+    rest.push(line);
+  }
+  if (!rest.length) return null;
+  let name = rest[0];
+  let baseType = rest[1] || rest[0];
+  if (/^(normal|magic|currency|gem|divination card)$/i.test(rarity)) baseType = name;
+  if (/unidentified/i.test(raw)) name = baseType || name;
+  let qty = 1;
+  const stack = raw.match(/Stack Size:\s*([\d,]+)/i);
+  if (stack) qty = Math.max(1, Number(stack[1].replace(/,/g, "")) || 1);
+    const mods = [];
+  if (!/^(currency|gem|divination card)$/i.test(rarity)) {
+    for (const block of blocks.slice(1)) {
+      for (const line of block.split("\n")) {
+        const rawLine = line.trim();
+        if (!rawLine) continue;
+        if (/^(requirements|sockets|item level|quality|armour|evasion rating|energy shield|ward|stack size|level:|str:|dex:|int:|note:)/i.test(rawLine)) continue;
+        if (/^(unidentified|corrupted|mirrored|split|fractured item|synthesised item)$/i.test(rawLine)) continue;
+        if (/^\{/.test(rawLine)) continue;
+        if (/:\s/.test(rawLine) && !/^[+\-\d({]/.test(rawLine)) continue;
+        if (rawLine.length > 140) continue;
+        if (/\(implicit\)/i.test(rawLine)) continue;
+        mods.push(parseAffixStrings(rawLine));
+      }
+    }
+  }
+  return { name, baseType, rarity, className, qty, mods: cleanClipboardRolls(mods) };
+}
+
+function parseAffixStrings(text) {
+  return String(text || "").replace(/\[([^\]|]+)\|?([^\]]*)\]/g, (_, a, b) => b || a);
+}
+
+function stripAdvancedRanges(text) {
+  return String(text || "")
+    .replace(/(-?\d+(?:\.\d+)?)\((?:[^)]*)\)/g, "$1")
+    .replace(/\(([-+]?\d[\d.\s,|/~—–-]*[-+]?\d)\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isUsefulRoll(text) {
+  const t = stripAdvancedRanges(parseAffixStrings(String(text || ""))).trim();
+  if (!t || t.length > 140) return false;
+  if (/^has\b.*\b(charm slot|socketable)/i.test(t)) return false;
+  if (/socketable/i.test(t) && !/per socket/i.test(t)) return false;
+  if (/flask recovery applied instantly/i.test(t)) return false;
+  if (/^grants skill/i.test(t)) return false;
+  if (/^place into an item socket/i.test(t)) return false;
+  if (/^used when you/i.test(t)) return false;
+  if (/^right click/i.test(t)) return false;
+  if (/^this item can be anointed/i.test(t)) return false;
+  if (/^can have up to/i.test(t)) return false;
+  if (/^\{/.test(t)) return false;
+  if (!/[\d%+]/.test(t) && !/^allocates /i.test(t)) return false;
+  return true;
+}
+
+function cleanClipboardRolls(mods) {
+  const out = [];
+  const seen = new Set();
+  for (const mod of mods || []) {
+    const text = stripAdvancedRanges(
+      parseAffixStrings(String(mod || ""))
+        .replace(/\s*\((?:augmented|unmet|implicit)\)/gi, "")
+        .replace(/\s+/g, " ")
+        .trim()
+    );
+    if (!isUsefulRoll(text)) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
+function shortRoll(text) {
+  return stripAdvancedRanges(String(text || ""))
+    .replace(/\s*\((?:augmented|unmet|implicit)\)/gi, "")
+    .replace(/\bmaximum /gi, "")
+    .replace(/\bto Fire Resistance/gi, " Fire Res")
+    .replace(/\bto Cold Resistance/gi, " Cold Res")
+    .replace(/\bto Lightning Resistance/gi, " Lightning Res")
+    .replace(/\bto Chaos Resistance/gi, " Chaos Res")
+    .replace(/\bto all Elemental Resistances/gi, " all Res")
+    .replace(/\ball Elemental Resistances/gi, " all Res")
+    .replace(/\bto Spirit/gi, " Spirit")
+    .replace(/\bto Strength/gi, " Str")
+    .replace(/\bto Dexterity/gi, " Dex")
+    .replace(/\bto Intelligence/gi, " Int")
+    .replace(/\bto all Attributes/gi, " all Attr")
+    .replace(/\bto Accuracy Rating/gi, " Acc")
+    .replace(/\bto Life/gi, " Life")
+    .replace(/\bto Mana/gi, " Mana")
+    .replace(/\bincreased /gi, "")
+    .replace(/\badditional /gi, "")
+    .replace(/\bGlobal Armour, Evasion and Energy Shield/gi, " defences")
+    .replace(/\bEnergy Shield/gi, " ES")
+    .replace(/\bEvasion Rating/gi, " Evasion")
+    .replace(/\bStun Threshold/gi, " Stun")
+    .replace(/\bLife Regeneration per second/gi, " Life regen")
+    .replace(/\sper Socket filled/gi, "/sock")
+    .replace(/\sper Socketed Item/gi, "/sock")
+    .replace(/\sper Socket/gi, "/sock")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function rollLineText(roll) {
+  return typeof roll === "string" ? roll : roll?.text || "";
+}
+
+function rollChipsHtml(rolls) {
+  const chips = (rolls || []).map(rollLineText).filter(isUsefulRoll).map(shortRoll).filter(Boolean);
+  if (!chips.length) return "";
+  return `<div class="roll-chips">${chips.map((text) => `<span class="roll-chip" title="${esc(text)}">${esc(text)}</span>`).join("")}</div>`;
+}
+
+function findLoggedDrop(logId, dropId) {
+  if (!logId || !dropId) return null;
+  const log = state.logs.find((item) => item.id === logId);
+  return (log?.drops || []).find((item) => item.id === dropId) || null;
+}
+
+function tradeWaiting() {
+  return Number.isFinite(tradeRate.readyAt) && tradeRate.readyAt > Date.now();
+}
+
+async function quoteRolledDrop(log, drop, force = false) {
+  if (!drop?.rolls?.length || !window.chrome?.webview) return;
+  if (!drop.id) drop.id = uid();
+  if (drop.quoting) return;
+  if (!force && drop.quoteTried) return;
+  if (tradeWaiting() && tradeRate.limited) {
+    drop.quote = Object.assign({}, drop.quote, {
+      listings: drop.quote?.listings || 0,
+      league: drop.quote?.league || leagueId(),
+      at: Date.now(),
+      error: "rate limited",
+    });
     render();
     return;
   }
-  farmLogDrop(bossId, { uniqueId: item.id, name: item.name, qty: 1 });
+  drop.quoting = true;
+  drop.quoteTried = true;
+  render();
+  const league = leagueId();
+  try {
+    const typeLine = drop.baseType && drop.baseType !== drop.name ? drop.baseType : "";
+    const rolls = drop.rolls.map(rollLineText).map(stripAdvancedRanges).filter(Boolean);
+    const index = await ensureTradeStats();
+    const filters = mapRollsToTradeFilters(rolls, index);
+    const row = await tradeFetch(drop.name, league, !!force, false, {
+      typeLine,
+      rolls,
+      filters,
+    });
+    const target = findLoggedDrop(log?.id, drop.id) || drop;
+    const unit = tradeUnit(row?.currency);
+    const amount = Number(row?.amount);
+    const priced = Number.isFinite(amount) && amount > 0;
+    target.quote = {
+      amount: priced ? amount : null,
+      unit,
+      listings: row.listings || 0,
+      divine: priced ? toDivine(amount, unit) : null,
+      url: row.url || "",
+      league: row.league || league,
+      mapped: row.mapped || 0,
+      at: Date.now(),
+    };
+  } catch (err) {
+    const target = findLoggedDrop(log?.id, drop.id) || drop;
+    target.quote = target.quote || { listings: 0, league, at: Date.now(), error: String(err?.message || err || "") };
+    if (/rate limited/i.test(String(err?.message || ""))) target.quoteTried = false;
+  } finally {
+    const target = findLoggedDrop(log?.id, drop.id) || drop;
+    delete target.quoting;
+    save();
+    render();
+  }
+}
+
+function catalogOwners(name) {
+  if (!name) return [];
+  const id = slug(name);
+  const canon = canonicalName(name);
+  const canonId = slug(canon);
+  const hits = [];
+  for (const boss of allBosses()) {
+    const item = (boss.uniques || []).find(
+      (row) =>
+        row.id === id ||
+        row.id === canonId ||
+        namesMatch(row.name, name) ||
+        namesMatch(row.name, canon)
+    );
+    if (item) hits.push({ boss, item });
+  }
+  return hits;
+}
+
+function isClipboardCurrency(parsed) {
+  return /currency/i.test(parsed?.rarity || "") || /currency/i.test(parsed?.className || "");
+}
+
+function matchClipboardDrop(parsed) {
+  const candidates = [parsed.name, parsed.baseType, canonicalName(parsed.name), canonicalName(parsed.baseType)].filter(Boolean);
+  const owners = [];
+  const seen = new Set();
+  for (const n of candidates) {
+    for (const hit of catalogOwners(n)) {
+      const key = hit.boss.id + ":" + hit.item.id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      owners.push(hit);
+    }
+  }
+  if (owners.length) {
+    const live = liveLog();
+    return (live && owners.find((hit) => hit.boss.id === live.bossId)) || owners[0];
+  }
+  if (isClipboardCurrency(parsed)) {
+    return { boss: getBoss(farmBossId()), item: { id: slug(parsed.name), name: parsed.name } };
+  }
+  return null;
+}
+
+function ingestClipboardItem(text) {
+  const parsed = parsePoeItem(text);
+  if (!parsed?.name) {
+    showToast("No PoE item on the clipboard. Hover it in-game and press " + hotkeys().log + ".");
+    return;
+  }
+  if (/^Unidentified$/im.test(text)) {
+    showToast("Identify it first, then press " + hotkeys().log + ".");
+    return;
+  }
+  const matched = matchClipboardDrop(parsed);
+  if (!matched) {
+    showToast("Skipped " + parsed.name + " — boss uniques and currency only.");
+    return;
+  }
+  const entry = {
+    uniqueId: matched.item?.id || slug(parsed.name),
+    name: matched.item?.name || parsed.name,
+    qty: parsed.qty || 1,
+    baseType: parsed.baseType || "",
+  };
+  if (!isClipboardCurrency(parsed) && parsed.mods?.length) entry.rolls = parsed.mods.slice(0, 8);
+  const log = farmLogDrop(matched.boss?.id || farmBossId(), entry);
+  if (log && entry.rolls?.length) quoteRolledDrop(log, entry, true);
+}
+
+function handleAppHotkey(msg) {
+  if (msg?.action === "next-kill") {
+    finishFarmKill(true);
+    return;
+  }
+  if (msg?.action === "log-item") ingestClipboardItem(msg.text || "");
 }
 
 function farmBossId() {
@@ -2267,24 +3161,11 @@ function renderDash() {
   const dropTiles = (farm?.uniques || [])
     .map((item) => {
       const qty = counts[item.id] || 0;
-      if (ui.dashRollId === item.id) {
-        return `<div class="drop-tile is-open" ${itemHoverAttr(item.name)}>
-          ${itemIconHtml(item.name, "lg")}
-          <div class="drop-copy">
-            <div class="unique-name">${esc(item.name)} ${priceChip(item.name)}</div>
-            ${rollCaptureHtml(item, false)}
-            <div class="farm-actions">
-              <button class="btn ghost" data-farm-roll-cancel type="button">Cancel</button>
-              <button class="btn gold" data-farm-roll-save="${esc(item.id)}" type="button">Log it</button>
-            </div>
-          </div>
-        </div>`;
-      }
       return `<button class="drop-tile${onKill.has(item.id) ? " is-on-kill" : ""}" data-farm-drop="${esc(item.id)}" ${itemHoverAttr(item.name)} type="button">
         ${itemIconHtml(item.name, "lg")}
         <span class="drop-copy">
           <span class="unique-name">${esc(item.name)}</span>
-          <span class="drop-meta">${qty} · ${esc(formatPct(hits[item.id] || 0, kills))}${item.rolls ? " · needs rolls" : ""} ${priceChip(item.name)}</span>
+          <span class="drop-meta">${qty} · ${esc(formatPct(hits[item.id] || 0, kills))} ${priceChip(item.name)}</span>
         </span>
       </button>`;
     })
@@ -2296,7 +3177,7 @@ function renderDash() {
         <div class="farm-head">
           ${bossArtHtml(farm, "farm-portrait")}
           <div>
-            <div class="muted">Tap every drop from this fight. It stays one kill until you hit Next kill.</div>
+            <div class="muted">Hover a drop in Path of Exile and press ${esc(hotkeys().log)} to log it. ${esc(hotkeys().next)} is Next kill.</div>
             <h2>${esc(farm?.name || "Pick a boss")}</h2>
             <p class="muted">${esc(farm?.area || "")} · ${kills} kills · loot ${esc(formatPct(lootHit(farmId), kills))}</p>
           </div>
@@ -2312,40 +3193,21 @@ function renderDash() {
             ? `<div class="live-kill">
                 <div>
                   <div class="muted">This kill</div>
-                  ${dropPills(liveForFarm.drops)}
+                  ${dropPills(liveForFarm.drops, liveForFarm.id)}
                 </div>
                 <button class="btn gold" data-farm-next type="button">Next kill</button>
               </div>`
             : ""
         }
         <div class="drop-grid">
-          ${dropTiles || `<p class="muted" style="grid-column:1/-1">No catalog drops for this boss. Use Something else.</p>`}
-          ${
-            ui.dashRollId && !(farm?.uniques || []).some((item) => item.id === ui.dashRollId)
-              ? (() => {
-                  const item = uniqueById(ui.dashRollId);
-                  if (!item) return "";
-                  return `<div class="drop-tile is-open" ${itemHoverAttr(item.name)}>
-                    ${itemIconHtml(item.name, "lg")}
-                    <div class="drop-copy">
-                      <div class="unique-name">${esc(item.name)} ${priceChip(item.name)}</div>
-                      ${rollCaptureHtml(item, false)}
-                      <div class="farm-actions">
-                        <button class="btn ghost" data-farm-roll-cancel type="button">Cancel</button>
-                        <button class="btn gold" data-farm-roll-save="${esc(item.id)}" type="button">Log it</button>
-                      </div>
-                    </div>
-                  </div>`;
-                })()
-              : ""
-          }
+          ${dropTiles || `<p class="muted" style="grid-column:1/-1">No catalog drops for this boss. Use Something else, or ${esc(hotkeys().log)} in-game.</p>`}
         </div>
         <div class="farm-foot">
           <div class="suggest-wrap farm-extra">
             <input id="farm-extra" type="text" autocomplete="off" spellcheck="false" placeholder="Something else — divine, mirror, unique…" />
             <div class="suggest-list" id="farm-extra-suggest" hidden></div>
           </div>
-          <button class="btn ghost" data-minus="${esc(farmId)}" ${kills ? "" : "disabled"} type="button">Undo</button>
+          <button class="btn ghost" data-minus="${esc(farmId)}" ${dropUndo.length || (liveForFarm?.drops || []).length || kills ? "" : "disabled"} type="button">Undo</button>
         </div>
       </article>
       <div class="dash-stats">
@@ -2398,7 +3260,7 @@ function renderDash() {
                   const value = logValue(log);
                   return `<div class="log-item">
                     <div class="when">${esc(boss?.name || "Unknown")} · ${esc(formatWhen(log.at))}${value ? " · " + valueHtml(value) : ""}</div>
-                    ${dropPills(log.drops)}
+                    ${dropPills(log.drops, log.id)}
                   </div>`;
                 })
                 .join("")}</div>`
@@ -2576,23 +3438,20 @@ function trendChange(row) {
 }
 
 function trendingLists() {
-  const types = selectedEconTypes();
   const rows = gatherEconRows();
-  const single = !ui.econAll && types.length === 1;
+  const multi = ui.econAll || selectedEconTypes().length !== 1;
   const byAbs = (a, b) => Math.abs(trendChange(b)) - Math.abs(trendChange(a)) || a.name.localeCompare(b.name);
   const up = rows.filter((row) => trendChange(row) >= 0.05).sort(byAbs);
   const down = rows.filter((row) => trendChange(row) <= -0.05).sort(byAbs);
-  const flat = single
-    ? rows
-        .filter((row) => Math.abs(trendChange(row)) < 0.05)
-        .sort(
-          (a, b) =>
-            (Number.isFinite(b.divine) ? b.divine : -1) - (Number.isFinite(a.divine) ? a.divine : -1) ||
-            a.name.localeCompare(b.name)
-        )
-    : [];
-  if (!single) return { up: up.slice(0, 16), down: down.slice(0, 16), flat: [] };
-  return { up, down, flat };
+  const flat = rows
+    .filter((row) => Math.abs(trendChange(row)) < 0.05)
+    .sort(
+      (a, b) =>
+        (Number.isFinite(b.divine) ? b.divine : -1) - (Number.isFinite(a.divine) ? a.divine : -1) ||
+        a.name.localeCompare(b.name)
+    );
+  if (!multi) return { up, down, flat };
+  return { up: up.slice(0, 24), down: down.slice(0, 24), flat: flat.slice(0, 80) };
 }
 
 function trendCol(title, rows, empty) {
@@ -2631,7 +3490,9 @@ function renderEcon() {
       body = `<p class="muted">${ui.econSearch ? "No matches moving right now." : "No listings in this category yet. Use Check prices in the header."}</p>`;
     } else {
       const movers = up.length || down.length;
-      const scopeLabel = ui.econAll ? "all items" : NINJA_LABELS[ui.econType] || "this category";
+      const scopeLabel = ui.econAll
+        ? "all items"
+        : types.map((type) => NINJA_LABELS[type] || type).join(", ") || "this category";
       body = `${
         movers
           ? `<div class="econ-trend">${trendCol("Rising", up, "Nothing rising.")}${trendCol("Falling", down, "Nothing falling.")}</div>`
@@ -2857,9 +3718,9 @@ function renderDivineTape() {
   const btn = document.getElementById("rate-pop-btn");
   const card = document.getElementById("rate-pop-card");
   if (!btn || !card) return;
-  const view = convertView();
+  const main = convertMain();
   const quote = convertQuote();
-  const checks = `<p class="muted rate-card-note">Item prices use this currency. The ⇄ button only flips the rate next to Convert.</p>
+  const checks = `<p class="muted rate-card-note">Item prices use this currency.</p>
     <div class="rate-checks">${convertMainChecks()}</div>`;
   if (prices.status !== "ready" || !prices.exaltedPerDivine) {
     btn.textContent = prices.status === "loading" ? "Rates…" : "Rates";
@@ -2873,8 +3734,8 @@ function renderDivineTape() {
       }</p>`;
     return;
   }
-  const oneView = amountFromDivine(amountInDivine(1, view), quote);
-  btn.innerHTML = `${itemIconHtml(currencyNameForUnit(view), "xs")}1${unitShort(view)} = ${itemIconHtml(
+  const oneView = amountFromDivine(amountInDivine(1, main), quote);
+  btn.innerHTML = `${itemIconHtml(currencyNameForUnit(main), "xs")}1${unitShort(main)} = ${itemIconHtml(
     currencyNameForUnit(quote),
     "xs"
   )}${esc(formatAmount(oneView, quote))}`;
@@ -3023,7 +3884,7 @@ function renderLogView() {
             </div>
             <button class="btn danger" data-delete-log="${esc(log.id)}" type="button">Delete</button>
           </div>
-          ${dropPills(log.drops)}
+          ${dropPills(log.drops, log.id)}
         </article>`;
     })
     .join("");
@@ -3092,6 +3953,32 @@ function renderSettings() {
         <h2 class="section-title">Settings</h2>
         <p class="muted">Tweaks save on this PC. JSON backups go to Downloads unless you pick another folder.</p>
       </div>
+      ${
+        window.chrome?.webview
+          ? `<article class="panel">
+        <h3>Hotkeys</h3>
+        <p class="muted" style="margin-top:8px">These work while Path of Exile is focused. Hover an item and press the log key — the app copies it and marks it on the current farm boss.</p>
+        <div class="hotkey-rows">
+          <div class="hotkey-row">
+            <span>Log copied item</span>
+            <button class="hotkey-btn${ui.hotkeyCapture === "log" ? " is-listening" : ""}" data-hotkey-bind="log" type="button">${
+              ui.hotkeyCapture === "log" ? "Press a key…" : esc(hotkeys().log)
+            }</button>
+          </div>
+          <div class="hotkey-row">
+            <span>Next kill</span>
+            <button class="hotkey-btn${ui.hotkeyCapture === "next" ? " is-listening" : ""}" data-hotkey-bind="next" type="button">${
+              ui.hotkeyCapture === "next" ? "Press a key…" : esc(hotkeys().next)
+            }</button>
+          </div>
+        </div>
+        <p class="muted">Escape cancels a rebind. Keep this window open on a second screen while you farm.</p>
+      </article>`
+          : `<article class="panel">
+        <h3>Hotkeys</h3>
+        <p class="muted" style="margin-top:8px">In-game copy hotkeys need the desktop app.</p>
+      </article>`
+      }
       <article class="panel">
         <h3>Default save folder</h3>
         ${
@@ -3191,9 +4078,7 @@ function renderBossDialog(boss) {
         <p class="muted">Each copy you logged, with the mods that actually matter for price.</p>
         <div class="log-list" style="margin-top:10px">${group.copies
           .map(
-            (copy) => `<div class="log-item"><div class="when">${esc(formatWhen(copy.at))}</div><div class="roll-lines">${copy.rolls
-              .map((roll) => `<div>${esc(roll)}</div>`)
-              .join("")}</div></div>`
+            (copy) => `<div class="log-item"><div class="when">${esc(formatWhen(copy.at))}</div>${rollChipsHtml(copy.rolls)}</div>`
           )
           .join("")}</div>
       </div>`
@@ -3259,7 +4144,7 @@ function renderBossDialog(boss) {
           recent.length
             ? `<div class="log-list" style="margin-top:10px">${recent
                 .map((log) => {
-                  return `<div class="log-item"><div class="when">${esc(formatWhen(log.at))}</div>${dropPills(log.drops)}</div>`;
+                  return `<div class="log-item"><div class="when">${esc(formatWhen(log.at))}</div>${dropPills(log.drops, log.id)}</div>`;
                 })
                 .join("")}</div>`
             : `<p class="muted">No kills yet.</p>`
@@ -3279,45 +4164,6 @@ function uniqueById(id) {
   return null;
 }
 
-function rollCaptureHtml(item, hidden = true) {
-  if (!item?.rolls) return "";
-  const pool = ROLL_POOLS[item.rolls.pool] || [];
-  const slots = item.rolls.slots || (pool.length ? 4 : 1);
-  const hint = item.rolls.hint || "Log the rolls. That's what the price hangs on.";
-  const picker = pool.length
-    ? `<div class="chips" data-roll-chips></div>
-        <div class="suggest-wrap">
-          <input data-roll-input autocomplete="off" spellcheck="false" placeholder="Type a mod, e.g. wasting, spirit, armour…" data-roll-pool="${esc(item.rolls.pool)}" data-roll-slots="${slots}" />
-          <div class="suggest-list" data-roll-suggest hidden></div>
-        </div>`
-    : "";
-  return `
-    <div class="roll-capture" data-rolls-for="${esc(item.id)}" ${hidden ? "hidden" : ""}>
-      <p class="muted">${esc(hint)}</p>
-      ${picker}
-      <textarea data-roll-paste rows="3" placeholder="Or paste the mods from the tooltip, one per line"></textarea>
-    </div>`;
-}
-
-function collectRolls(panel) {
-  if (!panel) return [];
-  const chips = [...panel.querySelectorAll("[data-roll-chip]")].map((el) => el.dataset.rollText).filter(Boolean);
-  const paste = panel.querySelector("[data-roll-paste]")?.value || "";
-  const lines = paste
-    .split(/\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const merged = [];
-  const seen = new Set();
-  for (const text of chips.concat(lines)) {
-    const key = text.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(text);
-  }
-  return merged;
-}
-
 function matchFrom(list, query) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
@@ -3331,91 +4177,33 @@ function matchFrom(list, query) {
   return starts.concat(contains).slice(0, 10);
 }
 
-function wireRollCapture(panel) {
-  if (!panel || panel.dataset.wired) return;
-  panel.dataset.wired = "1";
-  const input = panel.querySelector("[data-roll-input]");
-  const list = panel.querySelector("[data-roll-suggest]");
-  const chips = panel.querySelector("[data-roll-chips]");
-  if (!input || !list || !chips) return;
-  const pool = ROLL_POOLS[input.dataset.rollPool] || [];
-  const slots = Number(input.dataset.rollSlots || 4);
-  let active = -1;
-
-  function hide() {
-    list.hidden = true;
-    list.innerHTML = "";
-    active = -1;
-  }
-
-  function show(matches) {
-    if (!matches.length) return hide();
-    list.hidden = false;
-    list.innerHTML = matches
-      .map(
-        (name, i) =>
-          `<button type="button" class="suggest-item ${i === active ? "is-active" : ""}" data-roll-pick="${esc(name)}">${esc(name)}</button>`
-      )
-      .join("");
-  }
-
-  function addMod(name) {
-    if (!name) return;
-    if (chips.querySelectorAll("[data-roll-chip]").length >= slots) return;
-    const exists = [...chips.querySelectorAll("[data-roll-chip]")].some(
-      (el) => el.dataset.rollText.toLowerCase() === name.toLowerCase()
-    );
-    if (exists) return;
-      chips.insertAdjacentHTML(
-        "beforeend",
-        `<span class="roll-chip" data-roll-chip data-roll-text="${esc(name)}">
-        ${esc(name)}
-        <button type="button" class="chip-x" data-remove-roll aria-label="Remove">×</button>
-      </span>`
-      );
-    input.value = "";
-    input.focus();
-    hide();
-  }
-
-  input.addEventListener("input", () => {
-    const matches = matchFrom(pool, input.value);
-    active = matches.length ? 0 : -1;
-    show(matches);
-  });
-  input.addEventListener("keydown", (event) => {
-    const matches = matchFrom(pool, input.value);
-    if (event.key === "ArrowDown" && matches.length) {
-      event.preventDefault();
-      active = (active + 1) % matches.length;
-      show(matches);
-    } else if (event.key === "ArrowUp" && matches.length) {
-      event.preventDefault();
-      active = (active - 1 + matches.length) % matches.length;
-      show(matches);
-    } else if (event.key === "Escape") hide();
-    else if (event.key === "Enter") {
-      event.preventDefault();
-      if (matches[active] || matches[0]) addMod(matches[active] ?? matches[0]);
-      else if (input.value.trim()) addMod(input.value.trim());
+function dropPriceChip(drop, logId) {
+  if (drop?.quoting) return `<span class="price-chip is-empty">this roll…</span>`;
+  const quote = drop?.quote;
+  const league = quote?.league || leagueId();
+  const listed = quote?.listings ? quote.listings.toLocaleString() + " with these rolls" : "these rolls";
+  const title = `PoE 2 trade · ${league} · ${listed}`;
+  const mapped = Number(quote?.mapped) || 0;
+  if (quote?.url && mapped > 0) {
+    if (pricedHit(quote) && Number(quote.amount) > 0) {
+      const label = quote.unit && Number.isFinite(quote.amount) ? formatAmount(quote.amount, quote.unit) : formatDivine(quote.divine);
+      const currency = currencyForAmount(quote.divine);
+      return `<button type="button" class="price-chip" data-open-trade="${esc(quote.url)}" title="${esc(title)}" ${itemHoverAttr(currency)}>${itemIconHtml(currency)}${esc(label)}</button>`;
     }
-  });
-  input.addEventListener("blur", () => setTimeout(hide, 120));
-  panel.addEventListener("click", (event) => {
-    const pick = event.target.closest("[data-roll-pick]");
-    if (pick) addMod(pick.dataset.rollPick);
-    if (event.target.closest("[data-remove-roll]")) event.target.closest("[data-roll-chip]")?.remove();
-  });
+    return `<button type="button" class="price-chip is-empty is-lookup" data-open-trade="${esc(quote.url)}" title="${esc(title)}">no listing</button>`;
+  }
+  if (drop?.rolls?.length) {
+    const err = quote?.error ? ` · ${quote.error}` : "";
+    return `<button type="button" class="price-chip is-empty is-lookup" data-quote-drop="${esc(drop.id || "")}" data-quote-log="${esc(logId || "")}" title="${esc("Search PoE 2 trade for these rolls" + err)}">this roll</button>`;
+  }
+  return priceChip(drop?.name);
 }
 
-function dropPills(drops) {
+function dropPills(drops, logId) {
   if (!drops?.length) return `<div class="muted" style="margin-top:8px">Nothing dropped</div>`;
   return `<div class="drop-pills">${drops
     .map((drop) => {
-      const rolls = (drop.rolls || []).map((roll) => `<div>${esc(roll)}</div>`).join("");
-      return `<div class="pill-block"><span class="pill">${itemNameHtml(drop.name, "xs")}${drop.qty > 1 ? " ×" + drop.qty : ""}</span>${priceChip(drop.name)}${
-        rolls ? `<div class="roll-lines">${rolls}</div>` : ""
-      }</div>`;
+      return `<div class="pill-block"><span class="pill">${itemNameHtml(drop.name, "xs")}${drop.qty > 1 ? " ×" + drop.qty : ""}</span>${dropPriceChip(drop, logId)}${rollChipsHtml(drop.rolls)}</div>`;
     })
     .join("")}</div>`;
 }
@@ -3430,7 +4218,6 @@ function dropCheckHtml(item, counts, hits, kills, nameClass) {
         <span class="pct">${esc(formatPct(hits[item.id] || 0, kills))}</span>
         <input type="number" min="1" value="1" data-qty="${esc(item.id)}" />
       </label>
-      ${rollCaptureHtml(item)}
     </div>`;
 }
 
@@ -3489,7 +4276,6 @@ function renderLogDialog(boss) {
           <input id="extra-input" type="text" autocomplete="off" spellcheck="false" placeholder="Type divine, mirror, unique name…" />
           <div class="suggest-list" id="extra-suggest" hidden></div>
         </div>
-        <div id="extra-roll-mounts"></div>
       </div>
       <p class="loot-error" id="loot-error" hidden>Pick what dropped.</p>
       <div class="row-actions">
@@ -3557,11 +4343,6 @@ function wireLootForm(form) {
     if (catalogBox) {
       catalogBox.checked = true;
       if (error) error.hidden = true;
-      const panel = form.querySelector(`[data-rolls-for="${CSS.escape(id)}"]`);
-      if (panel) {
-        panel.hidden = false;
-        wireRollCapture(panel);
-      }
       if (input) {
         input.value = "";
         input.focus();
@@ -3589,29 +4370,9 @@ function wireLootForm(form) {
       input.focus();
     }
     hideSuggest();
-    const rolled = uniqueById(id);
-    if (rolled?.rolls) {
-      let panel = form.querySelector(`[data-rolls-for="${CSS.escape(id)}"]`);
-      if (!panel) {
-        const mount = form.querySelector("#extra-roll-mounts");
-        mount?.insertAdjacentHTML("beforeend", rollCaptureHtml(rolled, false));
-        panel = form.querySelector(`[data-rolls-for="${CSS.escape(id)}"]`);
-      }
-      if (panel) {
-        panel.hidden = false;
-        wireRollCapture(panel);
-      }
-    }
   }
 
-  form.addEventListener("change", (event) => {
-    if (event.target.matches("[data-drop-id]")) {
-      const panel = form.querySelector(`[data-rolls-for="${CSS.escape(event.target.dataset.dropId)}"]`);
-      if (panel) {
-        panel.hidden = !event.target.checked;
-        if (event.target.checked) wireRollCapture(panel);
-      }
-    }
+  form.addEventListener("change", () => {
     if (error) error.hidden = true;
   });
 
@@ -3625,9 +4386,6 @@ function wireLootForm(form) {
       const chip = event.target.closest("[data-extra-id]");
       const id = chip?.dataset.extraId;
       chip?.remove();
-      if (id && !form.querySelector(`[data-drop-id="${CSS.escape(id)}"]`)) {
-        form.querySelector(`#extra-roll-mounts [data-rolls-for="${CSS.escape(id)}"]`)?.remove();
-      }
     }
   });
 
@@ -3669,8 +4427,6 @@ function wireLootForm(form) {
 }
 
 function wireFarmPad() {
-  const panel = document.querySelector(".farm-pad [data-rolls-for]");
-  if (panel) wireRollCapture(panel);
   const input = document.getElementById("farm-extra");
   const list = document.getElementById("farm-extra-suggest");
   if (!input || !list) return;
@@ -3697,10 +4453,10 @@ function wireFarmPad() {
   function pickTyped() {
     const matches = matchSuggest(input.value);
     const item = matches[active] || matches[0];
-    if (item) farmPickItem(farmBossId(), { ...item, rolls: uniqueById(item.id)?.rolls });
+    if (item) farmPickItem(farmBossId(), item);
     else if (input.value.trim()) {
       const name = input.value.trim();
-      farmPickItem(farmBossId(), { id: slug(name), name, rolls: uniqueById(slug(name))?.rolls });
+      farmPickItem(farmBossId(), { id: slug(name), name });
     }
   }
 
@@ -3734,6 +4490,7 @@ function render() {
   const onTitle = ui.view === "title";
   document.body.classList.toggle("on-title", onTitle);
   document.body.classList.toggle("view-bosses", ui.view === "bosses");
+  document.body.classList.toggle("view-decks", ui.view === "decks");
   const title = document.getElementById("title-screen");
   if (title) {
     title.hidden = !onTitle;
@@ -3753,7 +4510,7 @@ function render() {
   syncBackupUi();
   document.getElementById("boss-toolbar").style.display = ui.view === "bosses" ? "flex" : "none";
   document.getElementById("stats").style.display =
-    ui.view === "dash" || ui.view === "settings" || ui.view === "econ" || ui.view === "bosses" || onTitle ? "none" : "grid";
+    ui.view === "dash" || ui.view === "settings" || ui.view === "econ" || ui.view === "bosses" || ui.view === "decks" || onTitle ? "none" : "grid";
 
   if (onTitle) {
     if (shown) hideItemTip();
@@ -3774,6 +4531,9 @@ function render() {
   if (ui.view === "econ") {
     main.innerHTML = renderEcon();
     fillEconChart();
+  }
+  if (ui.view === "decks") {
+    if (window.DeckGame) window.DeckGame.mount(main);
   }
   if (ui.view === "settings") main.innerHTML = renderSettings();
 
@@ -3833,7 +4593,7 @@ function onClick(event) {
   if (toastAct) {
     const toast = document.getElementById("toast");
     if (toast) toast.hidden = true;
-    if (toastAct.dataset.toast === "undo") deleteLog(toastAct.dataset.log);
+    if (toastAct.dataset.toast === "undo") undoLastDrop();
     if (toastAct.dataset.toast === "loot") openLoot(toastAct.dataset.boss, toastAct.dataset.log);
     return;
   }
@@ -3844,10 +4604,26 @@ function onClick(event) {
     lookupOnePrice(priceLookup.dataset.priceLookup);
     return;
   }
-  if (event.target.closest("[data-convert-swap]")) {
+  const quoteDrop = event.target.closest("[data-quote-drop]");
+  if (quoteDrop) {
     event.preventDefault();
     event.stopPropagation();
-    swapConvert();
+    const log = state.logs.find((item) => item.id === quoteDrop.dataset.quoteLog) || liveLog();
+    const drop = (log?.drops || []).find((item) => item.id === quoteDrop.dataset.quoteDrop);
+    if (drop?.rolls?.length) {
+      delete drop.quoting;
+      drop.quoteTried = false;
+      quoteRolledDrop(log, drop, true);
+    }
+    return;
+  }
+  const openTrade = event.target.closest("[data-open-trade]");
+  if (openTrade) {
+    event.preventDefault();
+    event.stopPropagation();
+    const url = openTrade.dataset.openTrade;
+    if (window.chrome?.webview) chrome.webview.postMessage({ type: "open-url", url });
+    else window.open(url, "_blank", "noopener");
     return;
   }
   const convertMainBtn = event.target.closest("[data-convert-main]");
@@ -3873,27 +4649,9 @@ function onClick(event) {
     if (item) farmPickItem(boss.id, item);
     return;
   }
-  if (event.target.closest("[data-farm-roll-cancel]")) {
-    ui.dashRollId = null;
-    render();
-    return;
-  }
-  const rollSave = event.target.closest("[data-farm-roll-save]");
-  if (rollSave) {
-    const boss = getBoss(farmBossId());
-    const item = (boss?.uniques || []).find((unique) => unique.id === rollSave.dataset.farmRollSave) || uniqueById(rollSave.dataset.farmRollSave);
-    const panel = document.querySelector(`[data-rolls-for="${CSS.escape(rollSave.dataset.farmRollSave)}"]`);
-    if (item) {
-      const entry = { uniqueId: item.id, name: item.name, qty: 1 };
-      const rolls = collectRolls(panel);
-      if (rolls.length) entry.rolls = rolls;
-      farmLogDrop(boss?.id || farmBossId(), entry);
-    }
-    return;
-  }
   const farmSuggest = event.target.closest("[data-farm-suggest-id]");
   if (farmSuggest) {
-    farmPickItem(farmBossId(), { id: farmSuggest.dataset.farmSuggestId, name: farmSuggest.dataset.farmSuggestName, rolls: uniqueById(farmSuggest.dataset.farmSuggestId)?.rolls });
+    farmPickItem(farmBossId(), { id: farmSuggest.dataset.farmSuggestId, name: farmSuggest.dataset.farmSuggestName });
     return;
   }
   const farm = event.target.closest("[data-farm]");
@@ -3916,7 +4674,7 @@ function onClick(event) {
   const minus = event.target.closest("[data-minus]");
   if (minus) {
     event.stopPropagation();
-    removeLastKill(minus.dataset.minus);
+    undoLastDrop(minus.dataset.minus);
     return;
   }
   const loot = event.target.closest("[data-loot]");
@@ -4006,6 +4764,12 @@ function onClick(event) {
     render();
     return;
   }
+  const bind = event.target.closest("[data-hotkey-bind]");
+  if (bind) {
+    ui.hotkeyCapture = bind.dataset.hotkeyBind === "next" ? "next" : "log";
+    render();
+    return;
+  }
   if (event.target.closest("[data-theme-reset]")) {
     state.theme = themeDefaults();
     save();
@@ -4055,18 +4819,22 @@ function onChange(event) {
   }
   if (event.target.id === "league-input") {
     persistPrices();
-    state.league = event.target.value;
+    clearTimeout(persistPricesSoon.timer);
+    const next = event.target.value;
+    state.league = next;
     save();
-    if (!hydratePriceCache()) {
-      prices.byName = new Map();
-      prices.tables = {};
-      bustPriceLookup();
-      prices.cached = false;
-      prices.status = "idle";
-      prices.fetchedAt = 0;
-      prices.nextAt = 0;
+    hydratePriceCache();
+    prices.league = next;
+    if (prices.byName.size) {
+      prices.cached = true;
+      prices.status = "ready";
     }
     render();
+    hydratePriceDisk().then(() => {
+      paintLivePrices();
+      render();
+      kickFirstPriceCheck();
+    });
     return;
   }
   if (event.target.id === "farm-boss") {
@@ -4110,7 +4878,7 @@ document.addEventListener("input", (event) => {
     setTheme({ [theme.dataset.theme]: theme.value });
     return;
   }
-  if (event.target.id === "search" || event.target.id === "league-input" || event.target.id === "econ-search") {
+  if (event.target.id === "search" || event.target.id === "econ-search") {
     onChange(event);
   }
 });
@@ -4124,27 +4892,19 @@ document.addEventListener("submit", (event) => {
     form.querySelectorAll("[data-drop-id]").forEach((box) => {
       if (!box.checked) return;
       const qtyInput = form.querySelector(`[data-qty="${box.dataset.dropId}"]`);
-      const panel = form.querySelector(`[data-rolls-for="${CSS.escape(box.dataset.dropId)}"]`);
-      const entry = {
+      drops.push({
         uniqueId: box.dataset.dropId,
         name: box.dataset.dropName,
         qty: Math.max(1, Number(qtyInput?.value || 1)),
-      };
-      const rolls = collectRolls(panel);
-      if (rolls.length) entry.rolls = rolls;
-      drops.push(entry);
+      });
     });
     form.querySelectorAll("[data-extra-id]").forEach((chip) => {
       const qty = Math.max(1, Number(chip.querySelector("[data-extra-qty]")?.value || 1));
-      const panel = form.querySelector(`[data-rolls-for="${CSS.escape(chip.dataset.extraId)}"]`);
-      const entry = {
+      drops.push({
         uniqueId: chip.dataset.extraId,
         name: chip.dataset.extraName,
         qty,
-      };
-      const rolls = collectRolls(panel);
-      if (rolls.length) entry.rolls = rolls;
-      drops.push(entry);
+      });
     });
     const typed = form.querySelector("#extra-input")?.value?.trim();
     if (typed) drops.push({ uniqueId: slug(typed), name: typed, qty: 1 });
@@ -4204,6 +4964,23 @@ document.getElementById("import-file").addEventListener("change", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (ui.hotkeyCapture) {
+    event.preventDefault();
+    if (event.key === "Escape") {
+      ui.hotkeyCapture = "";
+      render();
+      return;
+    }
+    const spec = formatHotkey(event);
+    if (!spec) return;
+    if (ui.hotkeyCapture === "next") state.hotkeyNext = spec;
+    else state.hotkeyLog = spec;
+    ui.hotkeyCapture = "";
+    save();
+    syncHotkeys();
+    render();
+    return;
+  }
   if (event.key === "Escape" && document.getElementById("app-menu") && !document.getElementById("app-menu").hidden) {
     event.preventDefault();
     setMenuOpen(false);
@@ -4225,7 +5002,6 @@ document.addEventListener("keydown", (event) => {
 
 function itemTipHtml(name, lore, loading) {
   const note = catalogNoteFor(name);
-  const rolls = hoverVariants(name, lore);
   const seen = new Set();
   function renderLines(list, cls) {
     return (list || [])
@@ -4242,16 +5018,11 @@ function itemTipHtml(name, lore, loading) {
   }
   const props = renderLines((lore?.properties || []).slice(0, 4), "item-tip-prop");
   const implicits = renderLines(lore?.implicits, "item-tip-mod implicit");
-  const rollFamilies = new Set((rolls.lines || []).map(modFamily));
-  const explicits = renderLines(
-    (lore?.explicits || []).filter((text) => !isRollMod(text) && !rollFamilies.has(modFamily(text))),
-    "item-tip-mod"
-  );
-  const variants = renderLines(rolls.lines, "item-tip-mod variant");
+  const explicits = renderLines(lore?.explicits, "item-tip-mod");
   const kind = (lore?.rarity || "Unique").toLowerCase();
   const flavour = lore?.flavour || "";
   const descr = lore?.descr && flavour && lore.descr.toLowerCase() === flavour.toLowerCase() ? "" : lore?.descr || "";
-  const empty = !implicits && !explicits && !variants && !descr && !flavour && !props;
+  const empty = !implicits && !explicits && !descr && !flavour && !props;
   return `<div class="item-tip-card ${esc(kind)}">
     <div class="item-tip-head">
       ${itemIconHtml(name, "lg")}
@@ -4263,7 +5034,6 @@ function itemTipHtml(name, lore, loading) {
     ${props}
     ${implicits}
     ${explicits}
-    ${rolls.note || variants ? `<div class="item-tip-variant-head">${esc(rolls.note || "Possible rolls")}</div>${variants}` : ""}
     ${flavour ? `<div class="item-tip-flavour">${esc(flavour)}</div>` : ""}
     ${descr ? `<div class="item-tip-descr">${esc(descr)}</div>` : ""}
     ${empty && loading ? `<div class="item-tip-descr">Looking up what this does…</div>` : ""}
@@ -4298,13 +5068,12 @@ function showItemTip(anchor, name) {
   const tip = document.getElementById("item-tip");
   if (!tip || !name) return;
   const lore = lookupLore(name);
-  const rolls = hoverVariants(name, lore);
   tip.hidden = false;
   tip.dataset.for = name;
-  tip.innerHTML = itemTipHtml(name, lore, !loreIsRich(lore) && !rolls.lines.length && !rolls.note);
+  tip.innerHTML = itemTipHtml(name, lore, !loreIsRich(lore));
   placeItemTip(anchor, tip);
   const needDb = !lore?.flavour && !lore?.descr;
-  if (loreIsRich(lore) && !needDb && (lore.variants?.length || !catalogUnique(name)?.rolls?.pool)) return;
+  if (loreIsRich(lore) && !needDb) return;
   fetchDbIcon(name).then(() => {
     if (tip.dataset.for !== name || tip.hidden) return;
     tip.innerHTML = itemTipHtml(name, lookupLore(name), false);
@@ -4349,11 +5118,18 @@ function seedReliquaryLore() {
 
 seedReliquaryLore();
 hydratePriceCache();
+persistCatalogCache();
 refreshBackupInfo();
 render();
 startPriceClock();
-loadLeagues().then(() => {
+startRateBar();
+syncHotkeys();
+const diskPrices = hydratePriceDisk();
+loadLeagues().then(() => diskPrices).then(() => {
   if (!prices.byName.size) hydratePriceCache();
+  linkCatalogPrices();
   paintPriceClock();
+  paintLivePrices();
   render();
+  kickFirstPriceCheck();
 });
