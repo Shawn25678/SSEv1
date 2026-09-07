@@ -16,7 +16,7 @@ AlwaysShowDirOnReadyPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=no
 DisableWelcomePage=yes
-UsePreviousAppDir=yes
+UsePreviousAppDir=no
 UsePreviousTasks=yes
 OutputDir=dist
 OutputBaseFilename=StillSaneExile-Setup
@@ -27,7 +27,6 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
@@ -42,13 +41,47 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"; Comment: "{#MyAppName}"
-Name: "{autodesktop}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"; Comment: "{#MyAppName}"
+Name: "{userprograms}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{userdesktop}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Open {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+function SafeDir: String;
+begin
+  Result := ExpandConstant('{localappdata}\Programs\{#MyAppNameSafe}');
+end;
+
+function IsBadDir(const Dir: String): Boolean;
+var
+  U: String;
+begin
+  U := UpperCase(Dir);
+  Result :=
+    (Pos('\USERS\DEFAULT\', U) > 0) or
+    (Pos('\WINDOWS\SYSTEM32\CONFIG\SYSTEMPROFILE\', U) > 0);
+end;
+
+procedure InitializeWizard;
+begin
+  if IsBadDir(WizardForm.DirEdit.Text) then
+    WizardForm.DirEdit.Text := SafeDir;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = wpSelectDir) and IsBadDir(WizardDirValue) then
+    WizardForm.DirEdit.Text := SafeDir;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if IsBadDir(WizardForm.DirEdit.Text) then
+    WizardForm.DirEdit.Text := SafeDir;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   ResultCode: Integer;
