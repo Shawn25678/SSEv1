@@ -1306,6 +1306,33 @@ sealed class TrackerWindow : Form
                 Reply(id ?? "", true, 200, "{\"ok\":true}");
                 return;
             }
+            if (type == "update-check")
+            {
+                try
+                {
+                    Reply(id ?? "", true, 200, await AppUpdate.CheckJsonAsync());
+                }
+                catch
+                {
+                    Reply(id ?? "", false, 0, "{\"error\":\"update check failed\"}");
+                }
+                return;
+            }
+            if (type == "update-install")
+            {
+                try
+                {
+                    var json = await AppUpdate.InstallJsonAsync();
+                    var ok = json.Contains("\"ok\":true", StringComparison.Ordinal);
+                    Reply(id ?? "", ok, ok ? 200 : 400, json);
+                    if (ok) BeginInvoke(Close);
+                }
+                catch
+                {
+                    Reply(id ?? "", false, 0, "{\"error\":\"update failed\"}");
+                }
+                return;
+            }
             if (type == "overlay-show")
             {
                 var html = root.TryGetProperty("html", out var htmlEl) ? htmlEl.GetString() ?? "" : "";

@@ -465,6 +465,27 @@ window.__bossArtFail = function (img) {
   img.classList.add("is-fallback");
 };
 
+function checkAppUpdate() {
+  if (!window.chrome?.webview) return Promise.resolve({ newer: false, latest: "" });
+  return webviewJson({ type: "update-check" }, 15000, "update check timed out")
+    .then((data) => {
+      const newer = !!data?.newer;
+      const latest = String(data?.latest || "");
+      const status = document.getElementById("update-status");
+      const btn = document.getElementById("settings-update-btn");
+      if (status) status.textContent = newer ? "v" + APP_VERSION + " → v" + latest : "v" + APP_VERSION;
+      if (btn) btn.hidden = !newer;
+      return { newer, latest };
+    })
+    .catch(() => ({ newer: false, latest: "" }));
+}
+
+function startAppUpdate() {
+  if (!window.chrome?.webview) return;
+  showToast("Updating…");
+  webviewJson({ type: "update-install" }, 5 * 60 * 1000, "update timed out").catch(() => showToast("Update failed."));
+}
+
 function quitApp() {
   if (window.chrome?.webview) chrome.webview.postMessage({ type: "quit" });
   else window.close();
@@ -2726,7 +2747,7 @@ function showToast(text, actions = []) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     el.hidden = true;
-  }, 6000);
+  }, actions.some((action) => action.id === "update") ? 15000 : 6000);
 }
 
 function clearLiveKill() {
@@ -4753,6 +4774,13 @@ function renderSettings() {
           <button class="btn gold" id="settings-export-btn" type="button">Export</button>
         </div>
       </article>
+      <article class="panel">
+        <h3>App</h3>
+        <p class="muted" id="update-status" style="margin-top:8px">v${esc(APP_VERSION)}</p>
+        <div class="row-actions">
+          <button class="btn gold" id="settings-update-btn" type="button" hidden>Update</button>
+        </div>
+      </article>
       <article class="panel" id="feedback">
         <h3>Feedback</h3>
         <form id="feedback-form" class="feedback-form">
@@ -5303,7 +5331,10 @@ function render() {
     fillEconChart();
   }
   if (ui.view === "decks" && window.DeckGame) window.DeckGame.mount(main);
-  if (ui.view === "settings") main.innerHTML = renderSettings();
+  if (ui.view === "settings") {
+    main.innerHTML = renderSettings();
+    checkAppUpdate();
+  }
 
   if (ui.selectedId && document.getElementById("boss-dialog").open) {
     const boss = getBoss(ui.selectedId);
@@ -5372,6 +5403,7 @@ function onClick(event) {
     if (toast) toast.hidden = true;
     if (toastAct.dataset.toast === "undo") undoLastDrop();
     if (toastAct.dataset.toast === "loot") openLoot(toastAct.dataset.boss, toastAct.dataset.log);
+    if (toastAct.dataset.toast === "update") startAppUpdate();
     return;
   }
   const priceLookup = event.target.closest("[data-price-lookup]");
@@ -5645,6 +5677,10 @@ function onClick(event) {
   }
   if (event.target.id === "custom-cancel") {
     document.getElementById("custom-dialog").close();
+    return;
+  }
+  if (event.target.closest("#settings-update-btn")) {
+    startAppUpdate();
     return;
   }
   if (event.target.closest("#export-btn, #settings-export-btn")) {
@@ -5981,6 +6017,9 @@ render();
 startPriceClock();
 startRateBar();
 syncHotkeys();
+checkAppUpdate().then((info) => {
+  if (info?.newer) showToast("Update ready", [{ id: "update", label: "Update" }]);
+});
 const diskPrices = hydratePriceDisk();
 loadLeagues().then(() => diskPrices).then(() => {
   if (!prices.byName.size) hydratePriceCache();

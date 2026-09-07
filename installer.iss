@@ -45,7 +45,7 @@ Name: "{userprograms}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{userdesktop}\{#MyAppNameSafe}"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Open {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Open {#MyAppName}"; Flags: nowait postinstall
 
 [Code]
 function SafeDir: String;
@@ -80,6 +80,11 @@ procedure CurPageChanged(CurPageID: Integer);
 begin
   if IsBadDir(WizardForm.DirEdit.Text) then
     WizardForm.DirEdit.Text := SafeDir;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then Sleep(1500);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
