@@ -27,7 +27,6 @@
       let openId = "";
       let cloud = false;
       let needSetup = true;
-      let cfg = { url: "", anonKey: "", serviceKey: "" };
 
       function esc(text) {
         return String(text || "")
@@ -50,16 +49,16 @@
       function setupHtml() {
         return `
           <h2>Supabase</h2>
-          <p class="muted">Create a project, run desktop/supabase-feedback.sql in the SQL editor, then paste the keys from Project Settings → API. The service_role key stays on this PC. Pack again after Save so other installs can Send.</p>
+          <p class="muted">Keys stay on this PC.</p>
           <form id="inbox-config" class="feedback-form">
             <label>Project URL
-              <input name="url" value="${esc(cfg.url)}" />
+              <input name="url" value="" autocomplete="off" />
             </label>
             <label>anon public
-              <input name="anonKey" value="${esc(cfg.anonKey)}" />
+              <input name="anonKey" value="" autocomplete="off" />
             </label>
             <label>service_role
-              <input name="serviceKey" value="${esc(cfg.serviceKey)}" />
+              <input name="serviceKey" value="" autocomplete="off" />
             </label>
             <div class="row-actions">
               <button class="btn gold" type="submit">Save</button>
@@ -134,7 +133,6 @@
           items = Array.isArray(msg.items) ? msg.items : [];
           cloud = !!msg.cloud;
           needSetup = !!msg.needSetup;
-          cfg = { url: msg.url || "", anonKey: msg.anonKey || "", serviceKey: msg.serviceKey || "" };
           paint();
         }
       });

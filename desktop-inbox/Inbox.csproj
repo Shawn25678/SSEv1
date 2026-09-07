@@ -30,6 +30,5 @@
     <EmbeddedResource Include="..\inbox.html" LogicalName="www.inbox.html" />
     <EmbeddedResource Include="..\styles.css" LogicalName="www.styles.css" />
     <EmbeddedResource Include="..\still-sane-sigil.png" LogicalName="www.still-sane-sigil.png" />
-    <EmbeddedResource Include="..\desktop\supabase.public.json" LogicalName="www.supabase.public.json" />
   </ItemGroup>
 </Project>

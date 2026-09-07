@@ -1,0 +1,8 @@
+desktop/bin/
+desktop/obj/
+desktop-inbox/bin/
+desktop-inbox/obj/
+dist/*.old
+dist/StillSaneInbox.exe
+dist/supabase.public.json
+desktop/supabase.json

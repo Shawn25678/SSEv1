@@ -143,9 +143,6 @@ static class FeedbackStore
             items,
             cloud = cfg.ServiceKey.Length > 0,
             needSetup = cfg.Url.Length == 0 || cfg.ServiceKey.Length == 0,
-            url = cfg.Url,
-            anonKey = cfg.AnonKey,
-            serviceKey = cfg.ServiceKey,
         }, Json);
     }
 
@@ -189,9 +186,6 @@ static class FeedbackStore
         File.WriteAllText(app, JsonSerializer.Serialize(cfg, Json));
         var pub = JsonSerializer.Serialize(new SupabaseConfig { Url = url, AnonKey = anonKey }, Json);
         File.WriteAllText(Path.Combine(AppData(), "supabase.public.json"), pub);
-        var exeDir = Path.GetDirectoryName(Environment.ProcessPath);
-        if (!string.IsNullOrWhiteSpace(exeDir))
-            File.WriteAllText(Path.Combine(exeDir, "supabase.public.json"), pub);
         return "";
     }
 
@@ -353,23 +347,30 @@ static class FeedbackStore
             || host.EndsWith(".supabase.net", StringComparison.OrdinalIgnoreCase);
     }
 
+    static bool IsInbox() =>
+        string.Equals(Assembly.GetExecutingAssembly().GetName().Name, "StillSaneInbox", StringComparison.Ordinal);
+
     static SupabaseConfig LoadConfig()
     {
         var merged = new SupabaseConfig();
-        Apply(merged, ReadEmbedded());
-        Apply(merged, ReadFile(Beside("supabase.public.json")));
-        Apply(merged, ReadFile(Path.Combine(AppData(), "supabase.public.json")));
-        Apply(merged, ReadFile(Beside("supabase.json")));
-        Apply(merged, ReadFile(Path.Combine(AppData(), "supabase.json")));
+        var inbox = IsInbox();
+        Apply(merged, ReadEmbedded(), inbox);
+        Apply(merged, ReadFile(Beside("supabase.public.json")), inbox);
+        Apply(merged, ReadFile(Path.Combine(AppData(), "supabase.public.json")), inbox);
+        if (inbox)
+        {
+            Apply(merged, ReadFile(Beside("supabase.json")), true);
+            Apply(merged, ReadFile(Path.Combine(AppData(), "supabase.json")), true);
+        }
         return merged;
     }
 
-    static void Apply(SupabaseConfig into, SupabaseConfig? extra)
+    static void Apply(SupabaseConfig into, SupabaseConfig? extra, bool service)
     {
         if (extra is null) return;
         if (!string.IsNullOrWhiteSpace(extra.Url)) into.Url = extra.Url.Trim().TrimEnd('/');
         if (!string.IsNullOrWhiteSpace(extra.AnonKey)) into.AnonKey = extra.AnonKey.Trim();
-        if (!string.IsNullOrWhiteSpace(extra.ServiceKey)) into.ServiceKey = extra.ServiceKey.Trim();
+        if (service && !string.IsNullOrWhiteSpace(extra.ServiceKey)) into.ServiceKey = extra.ServiceKey.Trim();
     }
 
     static SupabaseConfig? ReadFile(string path)
