@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.13";
+const APP_VERSION = "1.0.14";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -109,6 +109,67 @@ const NINJA_ITEMS = [
   "UniqueTablets",
   "PrecursorTablets",
 ];
+const UNIQUE_BY_BASE = {
+  "amber amulet": ["Carnage Heart", "Revered Resin", "Xoph's Blood"],
+  "amethyst ring": ["Blackflame", "Ming's Heart", "Original Sin", "Veilpiercer"],
+  "azure amulet": ["The Everlasting Gaze", "Ungil's Harmony"],
+  "bloodstone amulet": ["The Anvil", "Yoke of Suffering"],
+  "chain tiara": ["Forbidden Gaze", "Sandstorm Visage"],
+  "chiming staff": ["Sire of Shards", "The Burden of Shadows"],
+  "crimson amulet": ["Idol of Uldurn", "Igniferis"],
+  diamond: ["Controlled Metamorphosis", "Flesh Crucible", "From Nothing", "Heart of the Well", "Megalomaniac", "Prism of Belief", "The Adorned"],
+  "emerald ring": ["Death Rush", "Thief's Torment", "Vigilant View"],
+  "explorer armour": ["Belly of the Beast", "Pragmatism"],
+  "fine belt": ["Darkness Enthroned", "Shavronne's Satchel"],
+  "furtive wraps": ["Essentia Sanguis", "Hand of Wisdom and Action"],
+  garment: ["Skin of the Loyal", "Tabula Rasa"],
+  "gold amulet": ["Eye of Chayula", "Serpent's Egg"],
+  "gold ring": ["Andvarius", "Perandus Seal", "Ventor's Gamble"],
+  "heavy belt": ["Headhunter", "Waistgate", "Zerphi's Genesis"],
+  "iron ring": ["Blackheart", "Icefang Orbit", "Prized Pain", "Venopuncture"],
+  "irradiated tablet": ["Mastered Domain", "The Grand Project", "Visions of Paradise"],
+  "jade amulet": ["Choir of the Storm", "Defiance of Destiny", "Surefooted Sigil"],
+  "knight armour": ["Perfidy", "The Sunken Vessel", "Widow's Reign"],
+  "lapis amulet": ["Ligurium Talisman", "Stone of Lazhwar", "The Pandemonius"],
+  "lazuli ring": ["Doedre's Damning", "Glowswarm", "Seed of Cataclysm"],
+  "linen belt": ["Keelhaul", "Umbilicus Immortalis"],
+  "linen wraps": ["Blessed Bonds", "Killjoy"],
+  "moulded mitts": ["Atziri's Acuity", "Hateforge"],
+  "omen crest shield": ["Mahuxotl's Machination", "Rise of the Phoenix"],
+  "overseer tablet": ["Cruel Hegemony", "Season of the Hunt"],
+  "pearl ring": ["Evergrasping Ring", "Heartbound Loop", "Snakepit"],
+  "plate belt": ["Goregirdle", "Infernoclasp"],
+  "prismatic ring": ["Gifts from Above", "The Taming"],
+  "rawhide belt": ["Meginord's Girdle", "Midnight Braid"],
+  "revered vestments": ["Geofri's Sanctuary", "The Unleashed"],
+  ruby: ["Grand Spectrum", "Split Personality"],
+  "ruby ring": ["Blistering Bond", "Cracklecreep"],
+  "runeforged garment": ["Skin of the Loyal", "Tabula Rasa"],
+  "runemastered explorer armour": ["Belly of the Beast", "Pragmatism"],
+  "runemastered knight armour": ["Perfidy", "The Sunken Vessel", "Widow's Reign"],
+  "runemastered moulded mitts": ["Atziri's Acuity", "Hateforge"],
+  "runemastered rusted greathelm": ["Horns of Bynden", "Wings of Caelyn"],
+  "runemastered silk robe": ["Cloak of Flame", "Temporalis"],
+  "runemastered torment club": ["Mjölner", "Olrovasara"],
+  "runemastered tribal mask": ["Glimpse of Chaos", "The Vertex"],
+  "rusted greathelm": ["Horns of Bynden", "Wings of Caelyn"],
+  sapphire: ["Grand Spectrum", "Voices"],
+  "sapphire ring": ["Dream Fragments", "Polcirkeln", "Whisper of the Brotherhood"],
+  shortsword: ["Bluetongue", "Redbeak"],
+  "shrine sceptre": ["Guiding Palm", "Guiding Palm of the Eye", "Guiding Palm of the Heart", "Guiding Palm of the Mind", "Palm of the Dreamer", "Sacred Flame"],
+  "silk robe": ["Cloak of Flame", "Temporalis"],
+  "solar amulet": ["Beacon of Azis", "Fireflower", "Immaculate Adherence"],
+  "spiritbone crown": ["Keeper of the Arc", "The Deepest Tower"],
+  "stellar amulet": ["Astramentis", "Fixation of Yix", "Hinekora's Sight", "Strugglescream"],
+  "timeless jewel": ["Heroic Tragedy", "Undying Hate"],
+  "topaz ring": ["Call of the Brotherhood", "Levinstone", "The Burrower"],
+  "torment club": ["Mjölner", "Olrovasara"],
+  "tribal mask": ["Glimpse of Chaos", "The Vertex"],
+  "two-stone ring": ["Berek's Grip", "Berek's Pass", "Berek's Respite"],
+  "ultimate life flask": ["Olroth's Resolve", "Opportunity"],
+  "utility belt": ["Cat O' Nine Tails", "Ingenuity", "Mageblood"],
+  "wide belt": ["Birthright Buckle", "Brynabas", "The Gnashing Sash"],
+};
 
 function loadState() {
   try {
@@ -832,6 +893,8 @@ function tradeFetch(name, league, bust = false, thorough = false, extra = {}) {
       filters,
       filtersJson: JSON.stringify(filters),
       corrupted: extra.corrupted === true ? true : extra.corrupted === false ? false : undefined,
+      unidentified: extra.unidentified === true ? true : extra.unidentified === false ? false : undefined,
+      unidentifiedTier: Number.isInteger(extra.unidentifiedTier) && extra.unidentifiedTier > 0 ? extra.unidentifiedTier : undefined,
       ravenTouched: extra.ravenTouched === true,
       runeSockets: Number.isInteger(extra.runeSockets) ? extra.runeSockets : undefined,
       exchange: extra.exchange === true,
@@ -896,8 +959,8 @@ function tradeCategory(className) {
 
 function tradeBaseType(drop) {
   const rarity = String(drop?.rarity || "").toLowerCase();
-  const name = stripItemQualityPrefix(drop?.name);
-  const base = stripItemQualityPrefix(drop?.baseType);
+  const name = isUnidentifiedLine(drop?.name) ? "" : stripItemQualityPrefix(drop?.name);
+  const base = isUnidentifiedLine(drop?.baseType) ? "" : stripItemQualityPrefix(drop?.baseType);
   const className = drop?.className || "";
   if (/currency|gem|divination/i.test(rarity) || /currency|gem|divination/i.test(className)) return name || base;
   if (rarity === "magic") {
@@ -906,6 +969,7 @@ function tradeBaseType(drop) {
   }
   if (rarity === "unique" || rarity === "rare") {
     if (base && base.toLowerCase() !== String(drop?.name || "").toLowerCase()) return base;
+    if (drop?.unidentified && (base || name)) return base || name;
     return "";
   }
   return base || name;
@@ -3814,11 +3878,33 @@ function namesMatch(a, b) {
   return foldKey(a) === foldKey(b) || priceKey(a) === priceKey(b) || slug(a) === slug(b);
 }
 
+function stripClipboardMarkup(text) {
+  return String(text || "")
+    .replace(/<<set:.+?>>/g, "")
+    .replace(/<(if:.+?|elif:.+?|else)>{(.+?)}/g, (_, type, body) => (String(type).startsWith("if:") ? body : ""));
+}
+
+function cleanItemTitleLine(line) {
+  return stripItemQualityPrefix(stripClipboardMarkup(parseAffixStrings(String(line || ""))))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isItemTitleLine(line) {
+  const t = cleanItemTitleLine(line);
+  if (!t) return false;
+  if (isItemJunkLine(t) || isUnidentifiedLine(t) || isCorruptedLine(t) || isRavenTouchedLine(t)) return false;
+  if (/^(mirrored|split|fractured item|synthesised item|foil unique)$/i.test(t)) return false;
+  if (/:/.test(t) && !/^[+\-\d({]/.test(t)) return false;
+  return true;
+}
+
 function isItemJunkLine(line) {
   const t = String(line || "")
     .replace(/\s+/g, " ")
     .trim();
   if (!t) return true;
+  if (isUnidentifiedLine(t)) return true;
   if (/^you cannot use this item/i.test(t)) return true;
   if (/stats will be ignored/i.test(t)) return true;
   if (/^right click to/i.test(t)) return true;
@@ -3871,6 +3957,101 @@ function searchCorrupted(drop) {
   return drop.corrupted;
 }
 
+function parseUnidentifiedFlag(raw) {
+  const m = String(raw || "").match(/^Unidentified(?:\s*\(Tier\s*(\d+)\))?\s*$/im);
+  if (!m) return { unidentified: false, unidentifiedTier: 0 };
+  return { unidentified: true, unidentifiedTier: m[1] ? Math.max(0, Number(m[1]) || 0) : 0 };
+}
+
+function isUnidentifiedLine(line) {
+  return /^unidentified(?:\s*\(tier\s*\d+\))?\s*$/i.test(String(line || "").trim());
+}
+
+function searchUnidentified(drop) {
+  if (!drop?.unidentified) return undefined;
+  if (typeof drop.pickUnid === "boolean") return drop.pickUnid;
+  return true;
+}
+
+function uniqueBaseKey(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function ninjaUniqueType(className) {
+  const t = String(className || "");
+  if (/jewels?/i.test(t)) return "UniqueJewels";
+  if (/flasks?/i.test(t)) return "UniqueFlasks";
+  if (/charms?/i.test(t)) return "UniqueCharms";
+  if (/relics?/i.test(t)) return "UniqueSanctumRelics";
+  if (/tablets?|precursor/i.test(t)) return "UniqueTablets";
+  if (/body|helmet|glove|boot|shield|buckler|foci|focus|quiver/i.test(t)) return "UniqueArmours";
+  if (/amulet|belt|ring/i.test(t)) return "UniqueAccessories";
+  if (/wand|mace|sword|axe|bow|staff|spear|claw|dagger|crossbow|flail|sceptre|quarter/i.test(t)) return "UniqueWeapons";
+  return "";
+}
+
+function uniqueVariantsForBase(base, className) {
+  const want = uniqueBaseKey(stripItemQualityPrefix(base));
+  if (!want) return [];
+  const seen = new Set();
+  const out = [];
+  function add(name, icon) {
+    const n = String(name || "").trim();
+    if (!n || /^incomplete$/i.test(n) || namesMatch(n, base)) return;
+    const id = uniqueBaseKey(n);
+    if (seen.has(id)) return;
+    seen.add(id);
+    out.push({ name: n, icon: icon || lookupIcon(n) || "" });
+  }
+  for (const name of UNIQUE_BY_BASE[want] || []) add(name);
+  const type = ninjaUniqueType(className);
+  const tables = type ? [prices.tables[type] || []] : Object.values(prices.tables || {});
+  for (const rows of tables) {
+    for (const row of rows || []) {
+      if (uniqueBaseKey(row.baseType || "") === want) add(row.name, row.icon);
+    }
+  }
+  for (const lore of loreCache.values()) {
+    if (uniqueBaseKey(lore.baseType || "") === want) add(lore.name, lore.icon);
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+function unidentifiedUniqueNeedsPick(drop) {
+  if (!drop?.unidentified || !/^unique$/i.test(drop.rarity || "") || drop.uniquePicked) return false;
+  const name = drop.name || "";
+  const base = drop.baseType || name;
+  return !name || namesMatch(name, base);
+}
+
+function applyUniquePick(log, drop, name) {
+  if (!drop || !name) return;
+  drop.name = name;
+  drop.uniqueId = slug(name);
+  drop.uniquePicked = true;
+  drop.quoteTried = false;
+  delete drop.quote;
+  if (log?.id) save();
+  paintPriceOverlay();
+}
+
+async function ensureUniqueVariants(log, drop) {
+  if (!unidentifiedUniqueNeedsPick(drop)) return;
+  const type = ninjaUniqueType(drop.className);
+  if (!type || (prices.tables[type] || []).length) return;
+  try {
+    const q = encodeURIComponent(leagueId());
+    const data = await ninjaFetch(`/poe2/api/economy/stash/current/item/overview?league=${q}&type=${type}`);
+    ingestItems(data, type);
+  } catch {
+    /* keep the local unique list */
+  }
+}
+
 function isFlavourBlock(block) {
   const lines = String(block || "")
     .split("\n")
@@ -3883,7 +4064,8 @@ function isFlavourBlock(block) {
       !isItemJunkLine(line) &&
       !isRavenTouchedLine(line) &&
       !isCorruptedLine(line) &&
-      !/^(mirrored|unidentified|split|fractured item|synthesised item)$/i.test(line)
+      !isUnidentifiedLine(line) &&
+      !/^(mirrored|split|fractured item|synthesised item)$/i.test(line)
   );
   if (!body.length) return false;
   if (body.some((line) => /[\d%+]/.test(line) || /^allocates /i.test(line))) return false;
@@ -3898,9 +4080,8 @@ function identityFromBlocks(blocks, rarity) {
       .filter(Boolean);
     if (!lines.length) continue;
     if (lines.some((line) => /^\{/.test(line) || /^(requirements|sockets|item level|quality)\b/i.test(line))) continue;
-    if (lines.some((line) => /:\s/.test(line) && !/^[+\-\d({]/.test(line))) continue;
     if (isFlavourBlock(lines.join("\n"))) continue;
-    const clean = lines.filter((line) => !isItemJunkLine(line) && !/^\{/.test(line));
+    const clean = lines.map((line) => cleanItemTitleLine(line)).filter((line) => isItemTitleLine(line) && !/^\{/.test(line));
     if (!clean.length) continue;
     if (/^(normal|magic|currency|gem|divination card)$/i.test(rarity)) return { name: clean[0], baseType: clean[0] };
     if (clean.length >= 2) return { name: clean[0], baseType: clean[1] };
@@ -3936,20 +4117,22 @@ function parsePoeItem(text) {
     }
     rest.push(line);
   }
-  const titleLines = rest.filter((line) => !isItemJunkLine(line)).map((line) => stripItemQualityPrefix(line));
+  const titleLines = rest.filter((line) => isItemTitleLine(line)).map((line) => cleanItemTitleLine(line));
   let name = titleLines[0] || "";
   let baseType = titleLines[1] || "";
   if (!name || (!baseType && /^(rare|unique)$/i.test(rarity))) {
     const extra = identityFromBlocks(blocks.slice(1), rarity);
-    if (!name) name = stripItemQualityPrefix(extra.name);
-    if (!baseType) baseType = stripItemQualityPrefix(extra.baseType);
+    if (!name) name = cleanItemTitleLine(extra.name);
+    if (!baseType) baseType = cleanItemTitleLine(extra.baseType);
   }
+  if (isUnidentifiedLine(name)) name = "";
+  if (isUnidentifiedLine(baseType)) baseType = "";
   if (/^(currency|gem|divination card)$/i.test(rarity)) baseType = name || baseType;
   else if (/^normal$/i.test(rarity)) baseType = name || baseType;
   else if (/^magic$/i.test(rarity) && (!baseType || namesMatch(baseType, name))) baseType = "";
   if (!baseType && /^(rare|unique|normal)$/i.test(rarity)) baseType = name;
   if (!name) return null;
-  if (/unidentified/i.test(raw)) name = baseType || name;
+  const { unidentified, unidentifiedTier } = parseUnidentifiedFlag(raw);
   let qty = 1;
   const stack = raw.match(/Stack Size:\s*([\d,]+)/i);
   if (stack) qty = Math.max(1, Number(stack[1].replace(/,/g, "")) || 1);
@@ -3971,7 +4154,7 @@ function parsePoeItem(text) {
   const charmHit = raw.match(/^Charm Slots:\s*(\d+)/im);
   const charmSlots = charmHit ? Math.max(0, Number(charmHit[1]) || 0) : 0;
   const isCorrupted = corrupted || mods.some((mod) => canonicalRollKind(mod.kind) === "corrupt");
-  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, ravenTouched, mods, usesRemaining, runeSockets, charmSlots, props };
+  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, unidentified, unidentifiedTier, ravenTouched, mods, usesRemaining, runeSockets, charmSlots, props };
 }
 
 function canonicalRollKind(kind) {
@@ -4070,7 +4253,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         ravenTouched = true;
         continue;
       }
-      if (isCorruptedLine(rawLine) || /^(unidentified|mirrored|split|fractured item|synthesised item)$/i.test(rawLine)) {
+      if (isCorruptedLine(rawLine) || isUnidentifiedLine(rawLine) || /^(mirrored|split|fractured item|synthesised item)$/i.test(rawLine)) {
         if (isCorruptedLine(rawLine) || /^mirrored$/i.test(foldItemFlagLine(rawLine))) afterFooter = true;
         continue;
       }
@@ -4421,10 +4604,25 @@ function handleOverlayClick(msg) {
     closeInspect();
     return;
   }
+  if (msg.pickUnique) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    applyUniquePick(log, drop, msg.pickUnique);
+    return;
+  }
   if (msg.pickCorrupt) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickCorrupt);
     if (!drop) return;
     drop.pickCorrupt = searchCorrupted(drop) === false;
+    drop.quoteTried = false;
+    delete drop.quote;
+    if (log?.id) save();
+    paintPriceOverlay();
+    return;
+  }
+  if (msg.pickUnid) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickUnid);
+    if (!drop) return;
+    drop.pickUnid = searchUnidentified(drop) === false;
     drop.quoteTried = false;
     delete drop.quote;
     if (log?.id) save();
@@ -4802,6 +5000,13 @@ function overlayCorruptHtml(log, drop) {
   return `<button type="button" class="price-overlay-corrupt${on ? " is-on" : ""}" data-pick-corrupt="${esc(drop.id)}" data-pick-log="${esc(log.id)}">Corrupted</button>`;
 }
 
+function overlayUnidHtml(log, drop) {
+  if (!drop?.unidentified) return "";
+  const on = searchUnidentified(drop) !== false;
+  const tier = Number(drop.unidentifiedTier) > 0 ? " T" + drop.unidentifiedTier : "";
+  return `<button type="button" class="price-overlay-unid${on ? " is-on" : ""}" data-pick-unid="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${on ? "Unidentified" + tier : "Identified"}</button>`;
+}
+
 function overlayRavenHtml(log, drop) {
   if (!drop?.ravenTouched) return "";
   const on = drop.pickRaven !== false;
@@ -4811,8 +5016,9 @@ function overlayRavenHtml(log, drop) {
 function overlayFlagsHtml(log, drop) {
   const raven = overlayRavenHtml(log, drop);
   const corrupt = overlayCorruptHtml(log, drop);
-  if (!raven && !corrupt) return "";
-  return `<div class="price-overlay-flags">${raven}${corrupt}</div>`;
+  const unid = overlayUnidHtml(log, drop);
+  if (!raven && !corrupt && !unid) return "";
+  return `<div class="price-overlay-flags">${raven}${corrupt}${unid}</div>`;
 }
 
 function equipTradeKey(id) {
@@ -4985,16 +5191,20 @@ function tradeSiteQuery(drop, filters) {
     stats,
     filters: {},
   };
-  if (unique && drop?.name) query.name = drop.name;
+  if (unique && drop?.name && !isUnidentifiedLine(drop.name) && !(searchUnidentified(drop) && namesMatch(drop.name, typeLine))) query.name = drop.name;
   if (typeLine) query.type = typeLine;
   const typeBag = {};
   if (category) typeBag.category = { option: category };
   if (unique) typeBag.rarity = { option: "unique" };
   else if (/^(rare|magic|normal)$/i.test(rarity)) typeBag.rarity = { option: "nonunique" };
   if (Object.keys(typeBag).length) query.filters.type_filters = { filters: typeBag };
-  if (typeof searchCorrupted(drop) === "boolean") {
-    query.filters.misc_filters = { filters: { corrupted: { option: searchCorrupted(drop) ? "true" : "false" } } };
+  const misc = {};
+  if (typeof searchCorrupted(drop) === "boolean") misc.corrupted = { option: searchCorrupted(drop) ? "true" : "false" };
+  if (searchUnidentified(drop)) {
+    misc.identified = { option: "false" };
+    if (Number(drop.unidentifiedTier) > 0) misc.unidentified_tier = { min: Number(drop.unidentifiedTier) };
   }
+  if (Object.keys(misc).length) query.filters.misc_filters = { filters: misc };
   const equip = {};
   if (Number.isInteger(drop?.pickRunes)) {
     const n = Math.max(0, Math.min(6, drop.pickRunes));
@@ -5181,8 +5391,17 @@ function priceOverlayHtml(log, drop) {
     isCharmItem(drop) ? "is-charm" : "",
     isBeltItem(drop) ? "is-belt" : "",
   ].filter(Boolean).join(" ");
-  const mods = listed.length ? `<div class="price-overlay-mods">${modButtons(listed)}</div>` : "";
+  const pickHtml = overlayUniquePickHtml(log, drop);
+  const mods = pickHtml || (listed.length ? `<div class="price-overlay-mods">${modButtons(listed)}</div>` : "");
   const props = overlayPropsHtml(log, drop);
+  const foot = pickHtml
+    ? ""
+    : `<div class="price-overlay-foot">
+        ${charmExtra}
+        ${runeExtra}
+        <div class="price-overlay-row"><span>PoE 2 trade</span><span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span></div>
+        ${overlayOffersHtml(drop)}
+      </div>`;
   return `
     <article class="price-overlay-card item-tip-card ${esc(kindClass)}">
       ${overlayBarHtml()}
@@ -5197,14 +5416,25 @@ function priceOverlayHtml(log, drop) {
       </div>
       ${props}
       ${mods}
-      <div class="price-overlay-foot">
-        ${charmExtra}
-        ${runeExtra}
-        <div class="price-overlay-row"><span>PoE 2 trade</span><span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span></div>
-        ${overlayOffersHtml(drop)}
-      </div>
+      ${foot}
       </div>
     </article>`;
+}
+
+function overlayUniquePickHtml(log, drop) {
+  if (!unidentifiedUniqueNeedsPick(drop)) return "";
+  const base = drop.baseType || drop.name;
+  const rows = uniqueVariantsForBase(base, drop.className);
+  if (rows.length <= 1) {
+    return drop.uniquePickTried ? "" : `<div class="price-overlay-identify"><div class="price-overlay-identify-label">Which ${esc(base)}?</div></div>`;
+  }
+  const btns = rows
+    .map(
+      (row) =>
+        `<button type="button" class="price-overlay-identify-item" data-pick-unique="${esc(row.name)}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${itemIconHtml(row.name, "lg")}<span>${esc(row.name)}</span></button>`
+    )
+    .join("");
+  return `<div class="price-overlay-identify"><div class="price-overlay-identify-label">Which ${esc(base)}?</div><div class="price-overlay-identify-grid">${btns}</div></div>`;
 }
 
 function paintPriceOverlay(forceInApp = false, fresh = false) {
@@ -5212,6 +5442,18 @@ function paintPriceOverlay(forceInApp = false, fresh = false) {
     affixTried = true;
     ensureAffixLadders().finally(() => paintPriceOverlay(forceInApp, fresh));
     return;
+  }
+  const pending = inspectTarget();
+  if (pending && unidentifiedUniqueNeedsPick(pending.drop)) {
+    const rows = uniqueVariantsForBase(pending.drop.baseType || pending.drop.name, pending.drop.className);
+    if (rows.length === 1) {
+      applyUniquePick(pending.log, pending.drop, rows[0].name);
+      return;
+    }
+    if (rows.length < 2 && !pending.drop.uniquePickTried) {
+      pending.drop.uniquePickTried = true;
+      ensureUniqueVariants(pending.log, pending.drop).finally(() => paintPriceOverlay(forceInApp, fresh));
+    }
   }
   const root = document.getElementById("price-overlay");
   const target = inspectTarget();
@@ -5403,14 +5645,19 @@ function rollChipsHtml(drop, logId) {
       ? `<button type="button" class="roll-chip is-flag is-raven${drop.pickRaven !== false ? " is-on" : ""}" data-pick-raven="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${drop.pickRaven !== false ? "Searching Raven-Touched" : "Not searching Raven-Touched"}">${drop.pickRaven !== false ? "Raven-Touched" : "Not Raven-Touched"}</button>`
       : `<span class="roll-chip is-flag is-raven is-on">Raven-Touched</span>`
     : "";
+  const unidFlag = drop && !Array.isArray(drop) && drop.unidentified
+    ? canPick
+      ? `<button type="button" class="roll-chip is-flag is-unid${searchUnidentified(drop) !== false ? " is-on" : ""}" data-pick-unid="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${searchUnidentified(drop) !== false ? "Searching unidentified" : "Searching identified"}">${searchUnidentified(drop) !== false ? "Unidentified" : "Identified"}</button>`
+      : `<span class="roll-chip is-flag is-unid is-on">Unidentified</span>`
+    : "";
   const showFlag = drop && !Array.isArray(drop) && drop.corrupted === true;
   const flag = showFlag
     ? canPick
       ? `<button type="button" class="roll-chip is-flag${searchCorrupted(drop) !== false ? " is-on" : ""}" data-pick-corrupt="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${searchCorrupted(drop) !== false ? "Searching corrupted" : "Searching not corrupted"}">Corrupted</button>`
       : `<span class="roll-chip is-flag is-on">Corrupted</span>`
     : "";
-  if (!rolls.length && !flag && !ravenFlag) return "";
-  return `<div class="roll-chips">${ravenFlag}${flag}${rolls
+  if (!rolls.length && !flag && !ravenFlag && !unidFlag) return "";
+  return `<div class="roll-chips">${ravenFlag}${unidFlag}${flag}${rolls
     .map((roll, i) => {
       const label = shortRoll(roll.text);
       if (!label) return "";
@@ -5435,6 +5682,7 @@ function tradeWaiting() {
 
 async function quoteRolledDrop(log, drop, force = false) {
   if (!window.chrome?.webview) return;
+  if (unidentifiedUniqueNeedsPick(drop) && uniqueVariantsForBase(drop.baseType || drop.name, drop.className).length > 1) return;
   if (!drop.id) drop.id = uid();
   drop.rolls = normalizeRolls(drop.rolls, drop);
   const picked = pickedRolls(drop);
@@ -5476,6 +5724,10 @@ async function quoteRolledDrop(log, drop, force = false) {
       extra.rolls = picked.map((roll) => roll.text);
       extra.filters = filters.concat(pickedPropFilters(drop));
       if (typeof searchCorrupted(drop) === "boolean") extra.corrupted = searchCorrupted(drop);
+      if (searchUnidentified(drop)) {
+        extra.unidentified = true;
+        if (Number(drop.unidentifiedTier) > 0) extra.unidentifiedTier = Number(drop.unidentifiedTier);
+      }
       if (wantsRavenTouched(drop)) extra.ravenTouched = true;
       if (Number.isInteger(drop.pickRunes)) extra.runeSockets = drop.pickRunes;
     }
@@ -5565,9 +5817,8 @@ function ingestClipboardItem(text, mode) {
     else showToast("No PoE item on the clipboard. Hover it in-game and press " + hint + ".");
     return;
   }
-  if (/^Unidentified$/im.test(text)) {
-    if (mode === "price") overlayNotice("Identify it first, then press " + hotkeys().price + ".");
-    else showToast("Identify it first, then press " + hotkeys().log + ".");
+  if (/^Unidentified(?:\s*\(Tier\s*\d+\))?\s*$/im.test(text) && mode !== "price") {
+    showToast("Identify it first, then press " + hotkeys().log + ".");
     return;
   }
   if (mode === "price") {
@@ -5584,6 +5835,11 @@ function ingestClipboardItem(text, mode) {
     if (parsed.ravenTouched) {
       drop.ravenTouched = true;
       drop.pickRaven = true;
+    }
+    if (parsed.unidentified) {
+      drop.unidentified = true;
+      drop.pickUnid = true;
+      if (parsed.unidentifiedTier > 0) drop.unidentifiedTier = parsed.unidentifiedTier;
     }
     if (parsed.props) drop.props = parsed.props;
     if (parsed.usesRemaining > 0) drop.usesRemaining = parsed.usesRemaining;
@@ -7179,6 +7435,14 @@ function onClick(event) {
     lookupOnePrice(priceLookup.dataset.priceLookup);
     return;
   }
+  const pickUnique = event.target.closest("[data-pick-unique]");
+  if (pickUnique) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickUnique.dataset.pickLog, pickUnique.dataset.pickDrop);
+    applyUniquePick(log, drop, pickUnique.dataset.pickUnique);
+    return;
+  }
   const pickCorrupt = event.target.closest("[data-pick-corrupt]");
   if (pickCorrupt) {
     event.preventDefault();
@@ -7186,6 +7450,20 @@ function onClick(event) {
     const { log, drop } = overlayLogDrop(pickCorrupt.dataset.pickLog, pickCorrupt.dataset.pickCorrupt);
     if (!drop) return;
     drop.pickCorrupt = searchCorrupted(drop) === false;
+    drop.quoteTried = false;
+    delete drop.quote;
+    if (log?.id) save();
+    if (ui.inspect) paintPriceOverlay();
+    else render();
+    return;
+  }
+  const pickUnid = event.target.closest("[data-pick-unid]");
+  if (pickUnid) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickUnid.dataset.pickLog, pickUnid.dataset.pickUnid);
+    if (!drop) return;
+    drop.pickUnid = searchUnidentified(drop) === false;
     drop.quoteTried = false;
     delete drop.quote;
     if (log?.id) save();

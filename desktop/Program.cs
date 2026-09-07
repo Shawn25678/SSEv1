@@ -527,7 +527,7 @@ sealed class TrackerWindow : Form
         }
     }
 
-    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool exchange = false, string havePref = "")
+    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool exchange = false, string havePref = "", bool? unidentified = null, int? unidentifiedTier = null)
     {
         name = (name ?? "").Trim();
         league = (league ?? "").Trim();
@@ -561,6 +561,8 @@ sealed class TrackerWindow : Form
             }))
             : rollList.Length > 0 ? ":roll:none" : "";
         extra += corrupted is true ? ":c1" : corrupted is false ? ":c0" : "";
+        extra += unidentified is true ? ":u1" : unidentified is false ? ":u0" : "";
+        extra += unidentifiedTier is int ut && ut > 0 ? ":ut" + ut : "";
         extra += ravenTouched ? ":rt" : "";
         extra += runeSockets is int rs ? ":r" + rs : "";
         extra += ":st:" + (useExchange ? TradeExchangeLive : TradeLive);
@@ -586,7 +588,7 @@ sealed class TrackerWindow : Form
             if (useExchange)
                 payload = await LookupExchangeListing(league, name, typeLine, havePref);
             if (payload is null || (payload.Json is null && !payload.RateLimited && !payload.Forbidden))
-                payload = await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets, category, ravenTouched);
+                payload = await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier);
             if (payload is { RateLimited: true })
             {
                 Reply(id, false, 429, "{\"error\":\"rate limited\"}");
@@ -946,7 +948,7 @@ sealed class TrackerWindow : Form
         return n;
     }
 
-    static IEnumerable<string> RolledQueries(string name, string typeLine, IReadOnlyList<RollFilter> filters, bool relax = false, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false)
+    static IEnumerable<string> RolledQueries(string name, string typeLine, IReadOnlyList<RollFilter> filters, bool relax = false, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool? unidentified = null, int? unidentifiedTier = null)
     {
         JsonArray FilterArray()
         {
@@ -975,15 +977,19 @@ sealed class TrackerWindow : Form
 
         JsonObject MiscFilters()
         {
-            var bag = new JsonObject();
+            var inner = new JsonObject();
             if (corrupted is bool flag)
+                inner["corrupted"] = new JsonObject { ["option"] = flag ? "true" : "false" };
+            if (unidentified is true)
+                inner["identified"] = new JsonObject { ["option"] = "false" };
+            if (unidentifiedTier is int ut && ut > 0)
+                inner["unidentified_tier"] = new JsonObject { ["min"] = ut };
+            var bag = new JsonObject();
+            if (inner.Count > 0)
             {
                 bag["misc_filters"] = new JsonObject
                 {
-                    ["filters"] = new JsonObject
-                    {
-                        ["corrupted"] = new JsonObject { ["option"] = flag ? "true" : "false" },
-                    },
+                    ["filters"] = inner,
                 };
             }
             var equipInner = new JsonObject();
@@ -1060,7 +1066,9 @@ sealed class TrackerWindow : Form
                 ["stats"] = stats,
                 ["filters"] = filtersBag,
             };
-            if (unique && !string.IsNullOrWhiteSpace(name))
+            if (unique && !string.IsNullOrWhiteSpace(name) &&
+                !Regex.IsMatch(name.Trim(), @"^Unidentified(?:\s*\(Tier\s*\d+\))?$", RegexOptions.IgnoreCase) &&
+                !(unidentified is true && name.Equals(typeLine, StringComparison.OrdinalIgnoreCase)))
                 query["name"] = name;
             if (includeType && !string.IsNullOrWhiteSpace(typeLine))
                 query["type"] = typeLine;
@@ -1081,7 +1089,7 @@ sealed class TrackerWindow : Form
             yield return Body(false, false).ToJsonString();
     }
 
-    async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false)
+    async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool? unidentified = null, int? unidentifiedTier = null)
     {
         var searchUri = "https://www.pathofexile.com/api/trade2/search/poe2/" + Uri.EscapeDataString(league);
         string? lastId = null;
@@ -1124,7 +1132,7 @@ sealed class TrackerWindow : Form
             }
         }
 
-        foreach (var body in RolledQueries(name, typeLine, filters, false, corrupted, rarity, runeSockets, category, ravenTouched))
+        foreach (var body in RolledQueries(name, typeLine, filters, false, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier))
         {
             var got = await Run(body);
             if (got is { RateLimited: true } or { Forbidden: true }) return got;
@@ -1133,7 +1141,7 @@ sealed class TrackerWindow : Form
         }
         if (filters.Count > 0 && lastTotal == 0)
         {
-            foreach (var body in RolledQueries(name, typeLine, filters, true, corrupted, rarity, runeSockets, category, ravenTouched).Take(1))
+            foreach (var body in RolledQueries(name, typeLine, filters, true, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier).Take(1))
             {
                 var got = await Run(body);
                 if (got is { RateLimited: true } or { Forbidden: true }) return got;
@@ -1841,7 +1849,16 @@ sealed class TrackerWindow : Form
                 var ravenTouched = root.TryGetProperty("ravenTouched", out var ravenEl) && ravenEl.ValueKind == JsonValueKind.True;
                 var exchange = root.TryGetProperty("exchange", out var xchgEl) && xchgEl.ValueKind == JsonValueKind.True;
                 var havePref = root.TryGetProperty("have", out var haveEl) ? haveEl.GetString() ?? "" : "";
-                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets, category, ravenTouched, exchange, havePref);
+                bool? unidentified = null;
+                if (root.TryGetProperty("unidentified", out var unidEl))
+                {
+                    if (unidEl.ValueKind == JsonValueKind.True) unidentified = true;
+                    else if (unidEl.ValueKind == JsonValueKind.False) unidentified = false;
+                }
+                int? unidentifiedTier = null;
+                if (root.TryGetProperty("unidentifiedTier", out var unidTierEl) && JsonInt(unidTierEl, out var unidTier) && unidTier > 0)
+                    unidentifiedTier = unidTier;
+                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets, category, ravenTouched, exchange, havePref, unidentified, unidentifiedTier);
                 return;
             }
             if (type == "backup-info")

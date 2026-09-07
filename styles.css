@@ -2767,6 +2767,35 @@ button.roll-chip:hover {
   cursor: pointer;
 }
 
+.price-overlay-unid {
+  align-self: start;
+  margin: 0;
+  padding: 2px 0 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.25;
+  text-align: right;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.price-overlay-unid.is-on {
+  color: color-mix(in srgb, var(--citadel) 35%, var(--ink) 65%);
+  font-weight: 700;
+  font-style: normal;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.roll-chip.is-flag.is-unid.is-on {
+  color: color-mix(in srgb, var(--citadel) 35%, var(--ink) 65%);
+  border-color: color-mix(in srgb, var(--citadel) 55%, var(--ink) 45%);
+  background: color-mix(in srgb, var(--citadel) 16%, transparent);
+}
+
 .price-overlay-corrupt.is-on {
   color: #e24a3a;
   font-weight: 700;
@@ -2787,6 +2816,45 @@ button.roll-chip:hover {
   color: #7aa2ff;
   border-color: #7aa2ff;
   background: color-mix(in srgb, #7aa2ff 16%, transparent);
+}
+
+.price-overlay-identify {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.price-overlay-identify-label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.price-overlay-identify-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.price-overlay-identify-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-2) 70%, transparent);
+  color: var(--unique-2);
+  font: inherit;
+  font-size: 0.92rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.price-overlay-identify-item:hover {
+  border-color: color-mix(in srgb, var(--unique) 55%, var(--line));
+  background: color-mix(in srgb, var(--unique) 14%, transparent);
 }
 
 .price-overlay-mods {

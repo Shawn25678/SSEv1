@@ -257,7 +257,7 @@
       document.addEventListener("click", (event) => {
         if (event.target.closest("[data-span-rid]")) return;
         const t = event.target.closest(
-          "[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-corrupt],[data-pick-raven],[data-pick-runes],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
+          "[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-runes],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
         );
         if (!t || !window.chrome?.webview) return;
         event.preventDefault();
