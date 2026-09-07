@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.7";
+const APP_VERSION = "1.0.8";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -465,19 +465,30 @@ window.__bossArtFail = function (img) {
   img.classList.add("is-fallback");
 };
 
+let updateCache = { at: 0, newer: false, latest: "" };
+
+function paintUpdatePanel() {
+  const status = document.getElementById("update-status");
+  const btn = document.getElementById("settings-update-btn");
+  if (status) status.textContent = updateCache.newer ? "v" + APP_VERSION + " → v" + updateCache.latest : "v" + APP_VERSION;
+  if (btn) btn.hidden = !updateCache.newer;
+}
+
 function checkAppUpdate() {
-  if (!window.chrome?.webview) return Promise.resolve({ newer: false, latest: "" });
+  if (!window.chrome?.webview) return Promise.resolve(updateCache);
+  paintUpdatePanel();
+  if (updateCache.at && Date.now() - updateCache.at < 5 * 60 * 1000) return Promise.resolve(updateCache);
   return webviewJson({ type: "update-check" }, 15000, "update check timed out")
     .then((data) => {
-      const newer = !!data?.newer;
-      const latest = String(data?.latest || "");
-      const status = document.getElementById("update-status");
-      const btn = document.getElementById("settings-update-btn");
-      if (status) status.textContent = newer ? "v" + APP_VERSION + " → v" + latest : "v" + APP_VERSION;
-      if (btn) btn.hidden = !newer;
-      return { newer, latest };
+      updateCache = { at: Date.now(), newer: !!data?.newer, latest: String(data?.latest || "") };
+      paintUpdatePanel();
+      return updateCache;
     })
-    .catch(() => ({ newer: false, latest: "" }));
+    .catch(() => {
+      updateCache.at = Date.now();
+      paintUpdatePanel();
+      return updateCache;
+    });
 }
 
 function startAppUpdate() {
@@ -4775,26 +4786,6 @@ function renderSettings() {
         </div>
       </article>
       <article class="panel">
-        <h3>App</h3>
-        <p class="muted" id="update-status" style="margin-top:8px">v${esc(APP_VERSION)}</p>
-        <div class="row-actions">
-          <button class="btn gold" id="settings-update-btn" type="button" hidden>Update</button>
-        </div>
-      </article>
-      <article class="panel" id="feedback">
-        <h3>Feedback</h3>
-        <form id="feedback-form" class="feedback-form">
-          <label>Title
-            <input id="feedback-title" name="title" required maxlength="80" />
-          </label>
-          <textarea name="body" rows="5" maxlength="2000" aria-label="Feedback"></textarea>
-          <div class="row-actions">
-            <button class="btn ghost" data-feedback-send="copy" type="button">Copy</button>
-            <button class="btn gold" type="submit">Send</button>
-          </div>
-        </form>
-      </article>
-      <article class="panel">
         <h3>Look</h3>
         <div class="preset-row" style="margin-top:12px">${presets}</div>
       </article>
@@ -4814,14 +4805,30 @@ function renderSettings() {
           <span>Titles</span>
           <select data-theme-font="display">${fontOptions(FONT_DISPLAY, pickTitleFont(t.display))}</select>
         </label>
-        <div class="font-preview">
-          <h3>The King in the Mists</h3>
-          <p>Divine Orb · Exalted Orb</p>
-        </div>
       </article>
       <div class="row-actions">
         <button class="btn ghost" data-theme-reset type="button">Reset look</button>
       </div>
+      <article class="panel" id="feedback">
+        <h3>Feedback</h3>
+        <form id="feedback-form" class="feedback-form">
+          <label>Title
+            <input id="feedback-title" name="title" required maxlength="80" />
+          </label>
+          <textarea name="body" rows="5" maxlength="2000" aria-label="Feedback"></textarea>
+          <div class="row-actions">
+            <button class="btn ghost" data-feedback-send="copy" type="button">Copy</button>
+            <button class="btn gold" type="submit">Send</button>
+          </div>
+        </form>
+      </article>
+      <article class="panel">
+        <h3>App</h3>
+        <p class="muted" id="update-status" style="margin-top:8px">v${esc(APP_VERSION)}</p>
+        <div class="row-actions">
+          <button class="btn gold" id="settings-update-btn" type="button" hidden>Update</button>
+        </div>
+      </article>
     </section>
   `;
 }

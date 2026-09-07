@@ -12,7 +12,7 @@
     <Description>Feedback inbox for Still Sane, Exile?</Description>
     <ApplicationManifest>..\desktop\app.manifest</ApplicationManifest>
     <ApplicationIcon>..\desktop\app.ico</ApplicationIcon>
-    <Version>1.0.7</Version>
+    <Version>1.0.8</Version>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
     <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>

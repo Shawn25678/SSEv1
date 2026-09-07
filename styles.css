@@ -1484,13 +1484,6 @@ button.price-chip {
   flex-wrap: wrap;
 }
 
-.farm-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-}
-
 .farm-foot {
   display: flex;
   flex-wrap: wrap;
@@ -2026,22 +2019,6 @@ button.roll-chip:hover {
   padding: 4px;
   background: var(--bg-2);
   cursor: pointer;
-}
-
-.font-preview {
-  margin-top: 14px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel);
-}
-
-.font-preview h3 {
-  margin: 0 0 4px;
-}
-
-.font-preview p {
-  margin: 0;
 }
 
 .ninja-note {
