@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.8";
+const APP_VERSION = "1.0.9";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -1990,7 +1990,6 @@ const PRICE_REFRESH_MS = 60 * 60 * 1000;
 const PRICE_RETRY_MS = 3 * 60 * 1000;
 const PRICE_CACHE_KEY = "poe2-exile-ledger-prices-v1";
 const BOSS_PRICE_CACHE_KEY = "poe2-exile-ledger-boss-prices-v1";
-const PRICE_CACHE_FRESH_MS = 5 * 60 * 1000;
 let catalogDiskStore = { version: 3, leagues: {} };
 
 function clonePriceMap(map) {
@@ -2445,12 +2444,27 @@ function formatCountdown(ms) {
   return m + ":" + String(s).padStart(2, "0");
 }
 
+function ninjaLiveLabel() {
+  if (prices.status === "loading") return "live check";
+  const due = prices.nextAt || (prices.fetchedAt ? prices.fetchedAt + PRICE_REFRESH_MS : 0);
+  if (!due) return "live on boot";
+  const ms = due - Date.now();
+  if (ms <= 0) return "live · next soon";
+  return "live · next " + formatCountdown(ms);
+}
+
 function paintPriceClock() {
   const el = document.getElementById("price-clock-time");
   const clock = document.getElementById("price-clock");
   if (clock) {
     clock.title = "poe.ninja prices load on launch, then every hour. Click to refresh now. F7 overlay uses PoE 2 trade only.";
   }
+  const live = document.getElementById("econ-live");
+  if (live) {
+    const label = ninjaLiveLabel();
+    if (live.textContent !== label) live.textContent = label;
+  }
+  maybeRefreshNinja();
   if (!el) return;
   let text = "Check prices";
   if (prices.status === "loading") text = "Checking…";
@@ -2463,7 +2477,6 @@ function paintPriceClock() {
   else if (prices.fetchedAt) text = (prices.cached ? "Last recorded " : "Checked ") + formatWhen(prices.fetchedAt);
   else if (prices.byName.size) text = "Last recorded";
   if (el.textContent !== text) el.textContent = text;
-  maybeRefreshNinja();
 }
 
 function startPriceClock() {
@@ -2593,9 +2606,7 @@ function kickFirstPriceCheck() {
   maybeRefreshNinja.enabled = true;
   if (!window.chrome?.webview) return;
   if (prices.status === "loading" || prices.filling) return;
-  if (!prices.fetchedAt && prices.byName.size) prices.nextAt = Date.now() + PRICE_RETRY_MS;
-  else if (prices.fetchedAt && !prices.nextAt) prices.nextAt = prices.fetchedAt + PRICE_REFRESH_MS;
-  if (ninjaPricesDue()) refreshPrices(false);
+  refreshPrices(false);
 }
 
 function dashboardPriceNames() {
@@ -4318,7 +4329,7 @@ function renderEcon() {
         <div class="econ-head">
           <div>
             <h2>Economy</h2>
-            <p class="muted">${esc(prices.league || leagueId())}${prices.fetchedAt ? " · " + (prices.cached ? "last recorded " : "") + esc(formatWhen(prices.fetchedAt)) : ""}${
+            <p class="muted">${esc(prices.league || leagueId())}${prices.fetchedAt ? " · " + (prices.cached ? "last recorded " : "") + esc(formatWhen(prices.fetchedAt)) : ""} · <span id="econ-live">${esc(ninjaLiveLabel())}</span>${
               prices.status === "loading" && haveEcon ? " · updating" : ""
             }${
               showBases ? " · bases listed separately" : ""
