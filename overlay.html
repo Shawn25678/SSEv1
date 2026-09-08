@@ -36,24 +36,39 @@
       }
       .price-overlay-shell {
         max-height: none;
+        position: relative;
+        isolation: isolate;
       }
       .price-overlay-main {
         flex: 0 0 420px;
         width: 420px;
         max-width: 420px;
+        position: relative;
+        z-index: 2;
       }
       .price-overlay-side {
         flex: 0 0 300px;
         width: 300px;
         max-width: 300px;
         max-height: 520px;
+        position: relative;
+        z-index: 1;
       }
       .price-overlay-side .price-overlay-offers {
         max-height: 460px;
       }
       .price-overlay-body {
-        overflow-x: hidden;
+        overflow-x: visible;
         min-width: 0;
+      }
+      .price-overlay-card .item-tip-head,
+      .price-overlay-flags,
+      .price-overlay-corrupt,
+      .price-overlay-raven,
+      .price-overlay-unid {
+        position: relative;
+        z-index: 4;
+        pointer-events: auto;
       }
       .price-overlay-bar {
         cursor: grab;
@@ -216,7 +231,7 @@
 
       document.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
-        if (event.target.closest("button, a, input, textarea, select, .price-overlay-offers, .price-overlay-mods, .price-overlay-span, .price-overlay-prop-quality, .price-overlay-prop-num, .price-overlay-q-edit, .price-overlay-rate-wrap")) {
+        if (event.target.closest("button, a, input, textarea, select, .price-overlay-flags, .price-overlay-offers, .price-overlay-mods, .price-overlay-span, .price-overlay-prop-quality, .price-overlay-prop-num, .price-overlay-q-edit, .price-overlay-rate-wrap")) {
           if (event.target.closest("input, textarea, .price-overlay-q-edit, .price-overlay-prop-quality, .price-overlay-prop-num")) {
             chrome.webview?.postMessage({ type: "overlay-activate" });
           }
