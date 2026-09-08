@@ -1,6 +1,6 @@
 #define MyAppName "Still Sane, Exile?"
 #define MyAppNameSafe "Still Sane Exile"
-#define MyAppVersion "1.0.18"
+#define MyAppVersion "1.0.19"
 #define MyAppExeName "StillSaneExile.exe"
 #define MyAppId "{{E8A4C2B1-7F3D-4A9E-8C15-2B6D91F04E77}"
 

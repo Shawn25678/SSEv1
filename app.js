@@ -191,7 +191,7 @@ function loadState() {
       hotkeyLog: parsed.hotkeyLog || "F8",
       hotkeyNext: parsed.hotkeyNext || "F9",
       hotkeyPrice: parsed.hotkeyPrice || "F7",
-      theme: { ...themeDefaults(), ...(parsed.theme || {}) },
+      theme: migrateTheme(parsed.theme),
     };
   } catch {
     return defaultState();
@@ -262,7 +262,7 @@ const THEME_PRESETS = {
     danger: "#b45a48",
     ok: "#8a9a6a",
     citadel: "#8a9aaa",
-    display: "Palatino Linotype",
+    display: "Georgia",
   },
   wraeclast: {
     label: "Wraeclast",
@@ -307,7 +307,7 @@ const THEME_PRESETS = {
     danger: "#c45a4c",
     ok: "#7d9a5a",
     citadel: "#5b6ea8",
-    display: "Cambria",
+    display: "Georgia",
   },
   sanctum: {
     label: "Sanctum",
@@ -322,7 +322,7 @@ const THEME_PRESETS = {
     danger: "#d45a6a",
     ok: "#c4a46a",
     citadel: "#a06070",
-    display: "Times New Roman",
+    display: "Georgia",
   },
   highgate: {
     label: "Highgate",
@@ -417,8 +417,23 @@ function themeDefaults() {
   };
 }
 
+/** Old Oriath/Kalguur/Sanctum presets baked in title fonts that shifted chrome/heading layout. */
+const LEGACY_PRESET_DISPLAY = {
+  oriath: "Palatino Linotype",
+  kalguur: "Cambria",
+  sanctum: "Times New Roman",
+};
+
+function migrateTheme(theme) {
+  const t = { ...themeDefaults(), ...(theme || {}) };
+  t.ui = "Segoe UI";
+  const legacy = LEGACY_PRESET_DISPLAY[t.preset];
+  if (legacy && t.display === legacy) t.display = "Georgia";
+  return t;
+}
+
 function currentTheme() {
-  return { ...themeDefaults(), ...(state.theme || {}) };
+  return { ...themeDefaults(), ...(state.theme || {}), ui: "Segoe UI" };
 }
 
 function pickTitleFont(name) {
@@ -446,6 +461,7 @@ function applyTheme() {
   root.style.setProperty("--ok", t.ok);
   root.style.setProperty("--citadel", t.citadel);
   root.style.setProperty("--font-display", fontStack(t.display));
+  // Body / UI layout font stays shared across looks — presets only change color vars.
   root.style.setProperty("--font-ui", `"Segoe UI", system-ui, sans-serif`);
   const link = document.getElementById("theme-fonts");
   if (link) {
@@ -455,7 +471,7 @@ function applyTheme() {
 }
 
 function setTheme(partial, preset = "custom") {
-  state.theme = { ...currentTheme(), ...partial, preset };
+  state.theme = { ...currentTheme(), ...partial, preset, ui: "Segoe UI" };
   save();
   applyTheme();
 }
@@ -5670,13 +5686,14 @@ function overlayAps(drop) {
 
 function overlayPhysDps(drop, qAt) {
   const q = Number.isFinite(Number(drop?.props?.quality)) ? Number(drop.props.quality) : 0;
-  const clip = Number(drop?.props?.physDps);
   const want = Number.isFinite(Number(qAt)) ? Number(qAt) : q;
-  if (Number.isFinite(clip) && clip > 0 && want === q) return clip;
   const physAt = physAtQuality(drop, want);
   const aps = overlayAps(drop);
-  if (!Number.isFinite(physAt) || !Number.isFinite(aps)) return NaN;
-  return physAt * aps;
+  if (Number.isFinite(physAt) && Number.isFinite(aps) && physAt > 0) return physAt * aps;
+  // Clip (N DPS) only when range/APS missing — game parentheticals can hide APS precision.
+  const clip = Number(drop?.props?.physDps);
+  if (Number.isFinite(clip) && clip > 0 && want === q) return clip;
+  return NaN;
 }
 
 function isSliderPropId(id) {
@@ -6255,35 +6272,37 @@ function dropPropRows(drop) {
   if (rollsLive && live && Number.isFinite(live.physAvg)) physAvg = live.physAvg;
   else if (!atItemQ) physAvg = physAtQuality(drop, qAt);
 
+  // Prefer avg × displayed APS (PoB). Clip parenthetical DPS only if range/APS missing.
   let pdps = NaN;
-  if (atItemQ && !rollsLive && Number.isFinite(Number(p.physDps)) && Number(p.physDps) > 0) pdps = Number(p.physDps);
-  else if (Number.isFinite(physAvg) && Number.isFinite(aps) && physAvg > 0) pdps = physAvg * aps;
+  if (Number.isFinite(physAvg) && Number.isFinite(aps) && physAvg > 0) pdps = physAvg * aps;
+  else if (atItemQ && !rollsLive && Number.isFinite(Number(p.physDps)) && Number(p.physDps) > 0) pdps = Number(p.physDps);
 
   const ele = hits.ele;
   let edps = NaN;
-  if (Number.isFinite(Number(p.eleDps)) && Number(p.eleDps) > 0) edps = Number(p.eleDps);
-  else if (Number.isFinite(ele) && Number.isFinite(apsClip) && ele > 0) edps = apsClip * ele;
+  if (Number.isFinite(ele) && Number.isFinite(aps) && ele > 0) edps = aps * ele;
+  else if (Number.isFinite(Number(p.eleDps)) && Number(p.eleDps) > 0) edps = Number(p.eleDps);
 
   const localAdds = eleAvgByTypeFromLocalAdds(drop);
   const eleDps = {};
   for (const type of ["fire", "cold", "lightning"]) {
     let avg = Number(p[type]);
     if (!Number.isFinite(avg) || avg <= 0) avg = localAdds ? localAdds[type] : NaN;
-    eleDps[type] = Number.isFinite(apsClip) && Number.isFinite(avg) && avg > 0 ? apsClip * avg : NaN;
+    eleDps[type] = Number.isFinite(aps) && Number.isFinite(avg) && avg > 0 ? aps * avg : NaN;
   }
   const chaos = hits.chaos;
-  const cdps = Number.isFinite(apsClip) && Number.isFinite(chaos) && chaos > 0 ? apsClip * chaos : NaN;
+  const cdps = Number.isFinite(aps) && Number.isFinite(chaos) && chaos > 0 ? aps * chaos : NaN;
   const hasPhys = Number.isFinite(pdps) && pdps > 0;
   const hasEle = Number.isFinite(edps) && edps > 0;
   const hasChaos = Number.isFinite(cdps) && cdps > 0;
 
-  // Prefer clipboard Total (427.1) over avg×APS / sum of rounded PDPS+EDPS (both → 427.0).
   let dps = NaN;
-  if (atItemQ && !rollsLive && Number.isFinite(Number(p.totalDps)) && Number(p.totalDps) > 0) dps = Number(p.totalDps);
+  const hitSum = [physAvg, ele, chaos].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+  const apsForTotal = Number.isFinite(aps) ? aps : apsClip;
+  if (hitSum > 0 && Number.isFinite(apsForTotal)) dps = hitSum * apsForTotal;
   else {
-    const hitSum = [physAvg, ele, chaos].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
-    if (hitSum > 0 && Number.isFinite(apsClip)) dps = hitSum * (rollsLive && Number.isFinite(aps) ? aps : apsClip);
-    else dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+    const sumParts = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+    if (sumParts > 0) dps = sumParts;
+    else if (atItemQ && !rollsLive && Number.isFinite(Number(p.totalDps)) && Number(p.totalDps) > 0) dps = Number(p.totalDps);
   }
   const rows = [];
   function add(id, label, value, kind, tag) {
@@ -7228,6 +7247,7 @@ function paintLiveDps(card) {
   const chaos = Number(d.dpsChaos);
   const physUntouched = incr === baseIncr && asIncr === baseAs && (!hasPflat || (flatLo === f0Lo && flatHi === f0Hi));
   const eflatUntouched = !hasEflat || Math.abs(eleAdd - eleBase) < 1e-9;
+  // Clip parenthetical DPS only when range/avg missing (game may hide APS precision).
   const useClip = itemQ === q && physUntouched && eflatUntouched;
   const clipPdps = Number(d.dpsPhysDps);
   const clipEdps = Number(d.dpsEleDps);
@@ -7235,12 +7255,10 @@ function paintLiveDps(card) {
   let pdps = Number.isFinite(physAt) ? aps * physAt : NaN;
   let edps = Number.isFinite(eleAt) ? aps * eleAt : NaN;
   const cdps = Number.isFinite(chaos) ? aps * chaos : NaN;
+  if (!Number.isFinite(pdps) && useClip && Number.isFinite(clipPdps) && clipPdps > 0) pdps = clipPdps;
+  if (!Number.isFinite(edps) && useClip && Number.isFinite(clipEdps) && clipEdps > 0) edps = clipEdps;
   let dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
-  if (useClip) {
-    if (Number.isFinite(clipPdps) && clipPdps > 0) pdps = clipPdps;
-    if (Number.isFinite(clipEdps) && clipEdps > 0) edps = clipEdps;
-    if (Number.isFinite(clipTdps) && clipTdps > 0) dps = clipTdps;
-  }
+  if (!(dps > 0) && useClip && Number.isFinite(clipTdps) && clipTdps > 0) dps = clipTdps;
   const pdpsEl = card.querySelector("[data-live-pdps]");
   if (pdpsEl && Number.isFinite(pdps)) pdpsEl.textContent = formatDpsLive(pdps);
   const edpsEl = card.querySelector("[data-live-edps]");
@@ -8115,7 +8133,7 @@ function applyImportedState(next) {
     ...next,
     logs: next.logs || [],
     hunted: next.hunted || [],
-    theme: { ...themeDefaults(), ...(next.theme || {}) },
+    theme: migrateTheme(next.theme),
   };
   save();
   applyTheme();

@@ -281,6 +281,7 @@
         const chaos = Number(d.dpsChaos);
         const physUntouched = incr === baseIncr && asIncr === baseAs && (!hasPflat || (flatLo === f0Lo && flatHi === f0Hi));
         const eflatUntouched = !hasEflat || Math.abs(eleAdd - eleBase) < 1e-9;
+        // Clip parenthetical DPS only when range/avg missing (game may hide APS precision).
         const useClip = itemQ === q && physUntouched && eflatUntouched;
         const clipPdps = Number(d.dpsPhysDps);
         const clipEdps = Number(d.dpsEleDps);
@@ -288,12 +289,10 @@
         let pdps = Number.isFinite(physAt) ? aps * physAt : NaN;
         let edps = Number.isFinite(eleAt) ? aps * eleAt : NaN;
         const cdps = Number.isFinite(chaos) ? aps * chaos : NaN;
+        if (!Number.isFinite(pdps) && useClip && Number.isFinite(clipPdps) && clipPdps > 0) pdps = clipPdps;
+        if (!Number.isFinite(edps) && useClip && Number.isFinite(clipEdps) && clipEdps > 0) edps = clipEdps;
         let dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
-        if (useClip) {
-          if (Number.isFinite(clipPdps) && clipPdps > 0) pdps = clipPdps;
-          if (Number.isFinite(clipEdps) && clipEdps > 0) edps = clipEdps;
-          if (Number.isFinite(clipTdps) && clipTdps > 0) dps = clipTdps;
-        }
+        if (!(dps > 0) && useClip && Number.isFinite(clipTdps) && clipTdps > 0) dps = clipTdps;
         const show = (n) => {
           const x = n * 10;
           const floored = Math.floor(x + 1e-12);
