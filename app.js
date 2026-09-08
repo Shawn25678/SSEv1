@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.23";
+const APP_VERSION = "1.0.24";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -7252,8 +7252,8 @@ function priceOverlayHtml(log, drop) {
           </div>
           ${props}
           ${mods}
-          ${foot}
           </div>
+          ${foot}
         </div>
         ${side}
       </div>

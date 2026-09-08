@@ -2646,6 +2646,11 @@ button.roll-chip:hover {
   line-height: 1.25;
 }
 
+.price-overlay-card .item-tip-name {
+  font-size: 1.24rem;
+  line-height: 1.2;
+}
+
 .item-tip-card.currency .item-tip-name,
 .item-tip-card .item-tip-name {
   color: var(--unique-2);
@@ -2806,6 +2811,7 @@ button.roll-chip:hover {
   flex: 1 1 auto;
   position: relative;
   isolation: isolate;
+  overflow: hidden;
 }
 
 .price-overlay-main {
@@ -2818,6 +2824,7 @@ button.roll-chip:hover {
   flex-direction: column;
   position: relative;
   z-index: 2;
+  overflow: hidden;
 }
 
 .price-overlay-side {
@@ -2832,6 +2839,17 @@ button.roll-chip:hover {
   background: color-mix(in srgb, var(--panel) 88%, #000);
   position: relative;
   z-index: 1;
+  overflow: hidden;
+}
+
+/* Main column drives shell height; side fills shell above foot and scrolls offers. */
+.price-overlay-card.has-offers .price-overlay-side {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  height: auto;
+  max-height: none;
 }
 
 .price-overlay-side-head {
@@ -2839,6 +2857,7 @@ button.roll-chip:hover {
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
+  flex: none;
   gap: 6px;
   padding: 10px 10px 8px;
   border-bottom: 1px solid var(--line);
@@ -2853,9 +2872,11 @@ button.roll-chip:hover {
 
 .price-overlay-side .price-overlay-offers {
   flex: 1 1 auto;
+  min-height: 0;
   max-height: none;
   border: 0;
   border-radius: 0;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -3067,31 +3088,15 @@ button.roll-chip:hover {
   color: var(--gold-2);
 }
 
-.price-overlay-corrupt {
-  margin: 0;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  color: color-mix(in srgb, var(--ink) 78%, var(--bg) 22%);
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 650;
-  line-height: 1.2;
-  letter-spacing: 0.01em;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
 .item-tip-title .price-overlay-flags {
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px 10px;
+  gap: 8px 14px;
   max-width: none;
-  margin-top: 2px;
+  margin-top: 4px;
   position: relative;
   z-index: 4;
   pointer-events: auto;
@@ -3100,44 +3105,33 @@ button.roll-chip:hover {
 .price-overlay-corrupt,
 .price-overlay-raven,
 .price-overlay-unid {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--ink) 55%, var(--bg) 45%);
+  font-family: inherit;
+  font-size: 1.05rem;
+  font-weight: 600;
+  font-style: normal;
+  line-height: 1.3;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
   position: relative;
   z-index: 4;
   pointer-events: auto;
-}
-
-.price-overlay-raven {
-  margin: 0;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.7rem;
-  line-height: 1.15;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.price-overlay-unid {
-  margin: 0;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 0.7rem;
-  line-height: 1.15;
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
 }
 
 .price-overlay-unid.is-on {
   color: color-mix(in srgb, var(--citadel) 35%, var(--ink) 65%);
   font-weight: 700;
   font-style: normal;
-  letter-spacing: 0.02em;
   text-transform: uppercase;
 }
 
@@ -3149,9 +3143,8 @@ button.roll-chip:hover {
 
 .price-overlay-corrupt.is-on {
   color: #f05a4a;
-  font-weight: 750;
+  font-weight: 700;
   font-style: normal;
-  letter-spacing: 0.02em;
   text-transform: uppercase;
 }
 
@@ -3159,7 +3152,6 @@ button.roll-chip:hover {
   color: #7aa2ff;
   font-weight: 700;
   font-style: normal;
-  letter-spacing: 0.02em;
   text-transform: uppercase;
 }
 
@@ -3805,9 +3797,13 @@ button.roll-chip:hover {
 .price-overlay-foot {
   display: grid;
   gap: 8px;
-  margin-top: 8px;
-  padding-top: 8px;
+  flex: none;
+  margin-top: 0;
+  padding: 8px 16px 12px;
   border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 92%, #000);
+  position: relative;
+  z-index: 3;
 }
 
 .price-overlay-foot .price-overlay-rune {
