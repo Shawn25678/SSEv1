@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.17";
+const APP_VERSION = "1.0.18";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -2095,6 +2095,8 @@ const ITEM_CANON = {
   "the trialmasters reliquary key": "The Trialmaster's Reliquary Key",
   "zarokh reliquary key": "Zarokh's Reliquary Key",
   "zarokhs reliquary key": "Zarokh's Reliquary Key",
+  "sekhemas resolve": "Safrin's Resolve",
+  "safrins resolve": "Safrin's Resolve",
   "morrigans insight": "Mórrigan's Insight",
 };
 
@@ -5782,8 +5784,71 @@ function dropIsModifiable(drop) {
 
 function formatDpsShown(n) {
   if (!Number.isFinite(n)) return "";
-  // Match PoB / in-game tooltip: one decimal, truncate (44.25 → 44.2).
-  return String(Math.trunc(n * 10 + Number.EPSILON) / 10);
+  // One decimal; banker's round-half-to-even (198.25→198.2, 44.25→44.2, 94.08→94.1).
+  const x = n * 10;
+  const floored = Math.floor(x + 1e-12);
+  const frac = x - floored;
+  const snapped = Math.abs(frac - 0.5) < 1e-6 ? (floored % 2 === 0 ? floored : floored + 1) : Math.round(x);
+  return (snapped / 10).toFixed(1);
+}
+
+function weaponHitAverages(drop) {
+  const p = drop?.props || {};
+  const phys =
+    Number.isFinite(Number(p.physLo)) && Number.isFinite(Number(p.physHi)) && Number(p.physHi) > 0
+      ? (Number(p.physLo) + Number(p.physHi)) / 2
+      : Number(p.phys);
+  let ele = Number(p.ele);
+  const fromAdds = eleAvgFromLocalAdds(drop);
+  if (Number.isFinite(fromAdds) && fromAdds > 0) {
+    ele = Number.isFinite(ele) && ele > 0 ? Math.max(ele, fromAdds) : fromAdds;
+  }
+  const chaos = Number(p.chaos);
+  return {
+    phys: Number.isFinite(phys) && phys > 0 ? phys : NaN,
+    ele: Number.isFinite(ele) && ele > 0 ? ele : NaN,
+    chaos: Number.isFinite(chaos) && chaos > 0 ? chaos : NaN,
+  };
+}
+
+function weaponDpsRollNatural(roll) {
+  const t = String(roll?.text || "")
+    .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune|unscalable(?: value)?)\)/gi, "")
+    .replace(/\s+/g, " ");
+  const nums = t.match(/\d+(?:\.\d+)?/g) || [];
+  return { a: Number(nums[0]), b: Number(nums[1]) };
+}
+
+function weaponDpsRollsTouched(drop) {
+  // True only if the user moved a slidable phys/%phys/AS roll off the clipboard value.
+  // flatAvg phys rows store wantMin as the pair average (trade), not the lo end — compare to that.
+  for (const roll of inspectRolls(drop) || []) {
+    const kind = weaponDpsRollKind(roll);
+    if (!kind || kind === "eflat") continue;
+    const { a, b } = weaponDpsRollNatural(roll);
+    const w = Number(roll.wantMin);
+    if (kind === "pincr" || kind === "asincr") {
+      if (Number.isFinite(w) && Number.isFinite(a) && Math.abs(w - a) > 0.02) return true;
+      continue;
+    }
+    if (kind === "pflat") {
+      if (roll.flatAvg) {
+        const avg = Number.isFinite(a) && Number.isFinite(b) ? (a + b) / 2 : NaN;
+        const nat =
+          Number.isFinite(avg) && Number.isInteger(a) && Number.isInteger(b)
+            ? Math.round(avg)
+            : Number.isFinite(avg)
+              ? Math.round(avg * 10) / 10
+              : NaN;
+        if (Number.isFinite(w) && Number.isFinite(nat) && Math.abs(w - nat) > 0.02) return true;
+        continue;
+      }
+      if (Number.isFinite(w) && Number.isFinite(a) && Math.abs(w - a) > 0.02) return true;
+      const ew = Number(Array.isArray(roll.extra) ? roll.extra[0]?.wantMin : NaN);
+      if (Number.isFinite(ew) && Number.isFinite(b) && Math.abs(ew - b) > 0.02) return true;
+    }
+  }
+  return false;
 }
 
 function formatOverlayProp(value, kind) {
@@ -6028,17 +6093,6 @@ function weaponDpsRollNums(roll, live) {
   };
 }
 
-function weaponDpsRollsTouched(drop) {
-  const m = weaponDpsModel(drop);
-  if (!m) return false;
-  // Weapon ele flats are hidden (not slidable). Only phys flats / %phys / AS rebuild DPS.
-  const keys = ["flatLo", "flatHi", "incr", "asIncr"];
-  for (const key of keys) {
-    if (Math.abs((Number(m.now[key]) || 0) - (Number(m.base[key]) || 0)) > 0.02) return true;
-  }
-  return false;
-}
-
 function weaponDpsRollEle(roll) {
   const t = String(roll?.text || "")
     .trim()
@@ -6160,6 +6214,9 @@ function weaponDpsCardAttrs(drop) {
     attr("fire", m.fire) +
     attr("cold", m.cold) +
     attr("lightning", m.lightning) +
+    attr("phys-dps", m.physDps) +
+    attr("ele-dps", m.eleDps) +
+    attr("total-dps", m.totalDps) +
     attr("flat-lo", m.base.flatLo) +
     attr("flat-hi", m.base.flatHi) +
     attr("incr", m.base.incr) +
@@ -6187,32 +6244,26 @@ function dropPropRows(drop) {
   const qAt = Math.round(Number(qualityForDps(drop)) || 0);
   const atItemQ = qAt === q;
   const rollsLive = weaponDpsRollsTouched(drop);
-  const m = weaponDpsModel(drop);
-  // Quality does not change elemental. Only rebuild from moved damage/AS rolls or a Q change on phys.
-  const live = m && (!atItemQ || rollsLive) ? weaponDamageAt(m, rollsLive ? m.now : m.base, qAt) : null;
+  const hits = weaponHitAverages(drop);
   const apsClip = Number.isFinite(overlayAps(drop)) ? overlayAps(drop) : Number(p.apsVal);
+  const m = weaponDpsModel(drop);
+  const live = m && rollsLive ? weaponDamageAt(m, m.now, qAt) : null;
   const aps = rollsLive && live && Number.isFinite(live.aps) ? live.aps : apsClip;
-  // Elemental is not quality-scaled and weapon ele flats aren't on sliders — clipboard / local adds only.
-  let ele = Number(p.ele);
-  const fromAdds = eleAvgFromLocalAdds(drop);
-  if (Number.isFinite(fromAdds) && fromAdds > 0) {
-    ele = Number.isFinite(ele) && ele > 0 ? Math.max(ele, fromAdds) : fromAdds;
-  }
-  const chaos = Number(p.chaos);
-  const clipPdps = Number(p.physDps);
-  const clipEdps = Number(p.eleDps);
-  const clipTotal = Number(p.totalDps);
-  // Clipboard damage already includes quality + runes. Only rebuild phys when Q or a phys roll moved.
+
+  // Canonical: avg(hit) × APS. Clipboard already includes quality/runes. Only rebuild phys if Q or a phys roll moved.
+  let physAvg = hits.phys;
+  if (rollsLive && live && Number.isFinite(live.physAvg)) physAvg = live.physAvg;
+  else if (!atItemQ) physAvg = physAtQuality(drop, qAt);
+
   let pdps = NaN;
-  if (atItemQ && !rollsLive && Number.isFinite(clipPdps) && clipPdps > 0) pdps = clipPdps;
-  else if (atItemQ && !rollsLive) {
-    const physAvg = physAtQuality(drop, q);
-    if (Number.isFinite(physAvg) && Number.isFinite(apsClip)) pdps = physAvg * apsClip;
-  } else if (live && Number.isFinite(live.physAvg) && Number.isFinite(aps)) pdps = live.physAvg * aps;
-  else pdps = overlayPhysDps(drop, qAt);
+  if (atItemQ && !rollsLive && Number.isFinite(Number(p.physDps)) && Number(p.physDps) > 0) pdps = Number(p.physDps);
+  else if (Number.isFinite(physAvg) && Number.isFinite(aps) && physAvg > 0) pdps = physAvg * aps;
+
+  const ele = hits.ele;
   let edps = NaN;
-  if (Number.isFinite(clipEdps) && clipEdps > 0) edps = clipEdps;
-  else if (Number.isFinite(apsClip) && Number.isFinite(ele) && ele > 0) edps = apsClip * ele;
+  if (Number.isFinite(Number(p.eleDps)) && Number(p.eleDps) > 0) edps = Number(p.eleDps);
+  else if (Number.isFinite(ele) && Number.isFinite(apsClip) && ele > 0) edps = apsClip * ele;
+
   const localAdds = eleAvgByTypeFromLocalAdds(drop);
   const eleDps = {};
   for (const type of ["fire", "cold", "lightning"]) {
@@ -6220,20 +6271,19 @@ function dropPropRows(drop) {
     if (!Number.isFinite(avg) || avg <= 0) avg = localAdds ? localAdds[type] : NaN;
     eleDps[type] = Number.isFinite(apsClip) && Number.isFinite(avg) && avg > 0 ? apsClip * avg : NaN;
   }
+  const chaos = hits.chaos;
   const cdps = Number.isFinite(apsClip) && Number.isFinite(chaos) && chaos > 0 ? apsClip * chaos : NaN;
   const hasPhys = Number.isFinite(pdps) && pdps > 0;
   const hasEle = Number.isFinite(edps) && edps > 0;
   const hasChaos = Number.isFinite(cdps) && cdps > 0;
+
+  // Prefer clipboard Total (427.1) over avg×APS / sum of rounded PDPS+EDPS (both → 427.0).
   let dps = NaN;
-  if (atItemQ && !rollsLive && Number.isFinite(clipTotal) && clipTotal > 0) dps = clipTotal;
+  if (atItemQ && !rollsLive && Number.isFinite(Number(p.totalDps)) && Number(p.totalDps) > 0) dps = Number(p.totalDps);
   else {
-    const physAvg = live && Number.isFinite(live.physAvg) ? live.physAvg : physAtQuality(drop, atItemQ ? q : qAt);
-    const useAps = rollsLive && live && Number.isFinite(live.aps) ? live.aps : apsClip;
-    const parts = [];
-    if (Number.isFinite(physAvg) && Number.isFinite(useAps) && physAvg > 0) parts.push(physAvg * useAps);
-    if (Number.isFinite(ele) && Number.isFinite(apsClip) && ele > 0) parts.push(apsClip * ele);
-    if (Number.isFinite(cdps) && cdps > 0) parts.push(cdps);
-    dps = parts.length ? parts.reduce((a, b) => a + b, 0) : [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+    const hitSum = [physAvg, ele, chaos].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+    if (hitSum > 0 && Number.isFinite(apsClip)) dps = hitSum * (rollsLive && Number.isFinite(aps) ? aps : apsClip);
+    else dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
   }
   const rows = [];
   function add(id, label, value, kind, tag) {
@@ -7099,6 +7149,8 @@ function paintLiveDps(card) {
   let eleAdd = 0;
   let hasEflat = false;
   let hasPflat = false;
+  let hasPincr = false;
+  let hasAsincr = false;
   const eleAddBy = { fire: 0, cold: 0, lightning: 0 };
   for (const el of card.querySelectorAll("[data-dps-kind]")) {
     const liveEl = el.querySelector("[data-roll-live]");
@@ -7106,10 +7158,12 @@ function paintLiveDps(card) {
     const a = liveEl ? Number(liveEl.textContent) : Number(el.dataset.dpsA);
     const b = extraEl ? Number(extraEl.textContent) : Number(el.dataset.dpsB);
     if (el.dataset.dpsKind === "pincr") {
+      hasPincr = true;
       if (Number.isFinite(a)) incr += a;
       continue;
     }
     if (el.dataset.dpsKind === "asincr") {
+      hasAsincr = true;
       if (Number.isFinite(a)) asIncr += a;
       continue;
     }
@@ -7125,11 +7179,15 @@ function paintLiveDps(card) {
       if (type && eleAddBy[type] != null) eleAddBy[type] += (a + b) / 2;
     }
   }
-  const as0 = 1 + (Number(d.dpsAsIncr) || 0) / 100;
+  const baseIncr = Number(d.dpsIncr) || 0;
+  const baseAs = Number(d.dpsAsIncr) || 0;
+  if (!hasPincr) incr = baseIncr;
+  if (!hasAsincr) asIncr = baseAs;
+  const as0 = 1 + baseAs / 100;
   const as1 = 1 + asIncr / 100;
   let aps = baseAps;
   if (as0 > 0 && as0 !== as1) aps = Math.round((baseAps / as0) * as1 * 100) / 100;
-  const inc0 = 1 + (Number(d.dpsIncr) || 0) / 100;
+  const inc0 = 1 + baseIncr / 100;
   const inc1 = 1 + incr / 100;
   const more = 1 + q / 100;
   const f0Lo = Number(d.dpsFlatLo) || 0;
@@ -7168,10 +7226,21 @@ function paintLiveDps(card) {
       : eleClip
     : NaN;
   const chaos = Number(d.dpsChaos);
-  const pdps = Number.isFinite(physAt) ? aps * physAt : NaN;
-  const edps = Number.isFinite(eleAt) ? aps * eleAt : NaN;
+  const physUntouched = incr === baseIncr && asIncr === baseAs && (!hasPflat || (flatLo === f0Lo && flatHi === f0Hi));
+  const eflatUntouched = !hasEflat || Math.abs(eleAdd - eleBase) < 1e-9;
+  const useClip = itemQ === q && physUntouched && eflatUntouched;
+  const clipPdps = Number(d.dpsPhysDps);
+  const clipEdps = Number(d.dpsEleDps);
+  const clipTdps = Number(d.dpsTotalDps);
+  let pdps = Number.isFinite(physAt) ? aps * physAt : NaN;
+  let edps = Number.isFinite(eleAt) ? aps * eleAt : NaN;
   const cdps = Number.isFinite(chaos) ? aps * chaos : NaN;
-  const dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+  let dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+  if (useClip) {
+    if (Number.isFinite(clipPdps) && clipPdps > 0) pdps = clipPdps;
+    if (Number.isFinite(clipEdps) && clipEdps > 0) edps = clipEdps;
+    if (Number.isFinite(clipTdps) && clipTdps > 0) dps = clipTdps;
+  }
   const pdpsEl = card.querySelector("[data-live-pdps]");
   if (pdpsEl && Number.isFinite(pdps)) pdpsEl.textContent = formatDpsLive(pdps);
   const edpsEl = card.querySelector("[data-live-edps]");

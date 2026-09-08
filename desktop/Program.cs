@@ -2587,9 +2587,15 @@ sealed class TrackerWindow : Form
             u.Contains("/Uniques/", StringComparison.OrdinalIgnoreCase) ||
             u.Contains("/Maps/", StringComparison.OrdinalIgnoreCase));
         if (!string.IsNullOrWhiteSpace(prefer)) return prefer;
-        return urls.FirstOrDefault(u =>
+        var fromList = urls.FirstOrDefault(u =>
             !u.Contains("CurrencyModValues", StringComparison.OrdinalIgnoreCase) &&
             !u.Contains("CurrencyAddModToRare", StringComparison.OrdinalIgnoreCase)) ?? "";
+        if (!string.IsNullOrWhiteSpace(fromList)) return fromList;
+        var art = Regex.Match(html, @"Art/2DItems/[A-Za-z0-9_./-]+", RegexOptions.IgnoreCase);
+        if (!art.Success) return "";
+        var path = art.Value.Replace("\\", "/");
+        path = Regex.Replace(path, @"\.(webp|png|jpg|jpeg)$", "", RegexOptions.IgnoreCase);
+        return "https://cdn.poe2db.tw/image/" + path + ".webp";
     }
 
     static string ReadHtmlFlavour(string html)

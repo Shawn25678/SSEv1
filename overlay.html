@@ -204,6 +204,8 @@
         let eleAdd = 0;
         let hasEflat = false;
         let hasPflat = false;
+        let hasPincr = false;
+        let hasAsincr = false;
         const eleAddBy = { fire: 0, cold: 0, lightning: 0 };
         for (const el of card.querySelectorAll("[data-dps-kind]")) {
           const liveEl = el.querySelector("[data-roll-live]");
@@ -211,10 +213,12 @@
           const a = liveEl ? Number(liveEl.textContent) : Number(el.dataset.dpsA);
           const b = extraEl ? Number(extraEl.textContent) : Number(el.dataset.dpsB);
           if (el.dataset.dpsKind === "pincr") {
+            hasPincr = true;
             if (Number.isFinite(a)) incr += a;
             continue;
           }
           if (el.dataset.dpsKind === "asincr") {
+            hasAsincr = true;
             if (Number.isFinite(a)) asIncr += a;
             continue;
           }
@@ -230,11 +234,15 @@
             if (type && eleAddBy[type] != null) eleAddBy[type] += (a + b) / 2;
           }
         }
-        const as0 = 1 + (Number(d.dpsAsIncr) || 0) / 100;
+        const baseIncr = Number(d.dpsIncr) || 0;
+        const baseAs = Number(d.dpsAsIncr) || 0;
+        if (!hasPincr) incr = baseIncr;
+        if (!hasAsincr) asIncr = baseAs;
+        const as0 = 1 + baseAs / 100;
         const as1 = 1 + asIncr / 100;
         let aps = baseAps;
         if (as0 > 0 && as0 !== as1) aps = Math.round((baseAps / as0) * as1 * 100) / 100;
-        const inc0 = 1 + (Number(d.dpsIncr) || 0) / 100;
+        const inc0 = 1 + baseIncr / 100;
         const inc1 = 1 + incr / 100;
         const more = 1 + q / 100;
         const f0Lo = Number(d.dpsFlatLo) || 0;
@@ -271,11 +279,28 @@
         const eleClip = Number.isFinite(eleFromParts) && eleFromParts > 0 ? eleFromParts : clipEle;
         const eleAt = Number.isFinite(eleClip) ? (hasEflat ? Math.max(0, eleClip - eleBase + eleAdd) : eleClip) : NaN;
         const chaos = Number(d.dpsChaos);
-        const pdps = Number.isFinite(physAt) ? aps * physAt : NaN;
-        const edps = Number.isFinite(eleAt) ? aps * eleAt : NaN;
+        const physUntouched = incr === baseIncr && asIncr === baseAs && (!hasPflat || (flatLo === f0Lo && flatHi === f0Hi));
+        const eflatUntouched = !hasEflat || Math.abs(eleAdd - eleBase) < 1e-9;
+        const useClip = itemQ === q && physUntouched && eflatUntouched;
+        const clipPdps = Number(d.dpsPhysDps);
+        const clipEdps = Number(d.dpsEleDps);
+        const clipTdps = Number(d.dpsTotalDps);
+        let pdps = Number.isFinite(physAt) ? aps * physAt : NaN;
+        let edps = Number.isFinite(eleAt) ? aps * eleAt : NaN;
         const cdps = Number.isFinite(chaos) ? aps * chaos : NaN;
-        const dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
-        const show = (n) => String(Math.trunc(n * 10 + Number.EPSILON) / 10);
+        let dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+        if (useClip) {
+          if (Number.isFinite(clipPdps) && clipPdps > 0) pdps = clipPdps;
+          if (Number.isFinite(clipEdps) && clipEdps > 0) edps = clipEdps;
+          if (Number.isFinite(clipTdps) && clipTdps > 0) dps = clipTdps;
+        }
+        const show = (n) => {
+          const x = n * 10;
+          const floored = Math.floor(x + 1e-12);
+          const frac = x - floored;
+          const snapped = Math.abs(frac - 0.5) < 1e-6 ? (floored % 2 === 0 ? floored : floored + 1) : Math.round(x);
+          return (snapped / 10).toFixed(1);
+        };
         const pdpsEl = card.querySelector("[data-live-pdps]");
         if (pdpsEl && Number.isFinite(pdps)) pdpsEl.textContent = show(pdps);
         const edpsEl = card.querySelector("[data-live-edps]");

@@ -437,7 +437,7 @@ const BOSSES = [
     access: "Djinn Barya with 4 trials, area level 75+",
     uniques: [
       drop("Sandstorm Visage", "uncommon", "Changing Seasons relic"),
-      drop("Sekhema's Resolve", "very-rare", "Burden of Leadership relic"),
+      drop("Safrin's Resolve", "very-rare", "Burden of Leadership relic (was Sekhema's Resolve)"),
       drop("Against the Darkness", "rare", "Desperate Alliance relic · jewel rolls vary", { freeform: true, hint: "Paste the jewel mods" }),
       drop("Temporalis", "very-rare", "Last Flame relic"),
       drop("The Burden of Leadership", "uncommon"),
