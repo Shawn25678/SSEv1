@@ -61,11 +61,15 @@
         overflow-x: visible;
         min-width: 0;
       }
-      .price-overlay-card .item-tip-head,
+      .price-overlay-card .item-tip-head {
+        grid-template-columns: 56px 1fr;
+      }
       .price-overlay-flags,
       .price-overlay-corrupt,
       .price-overlay-raven,
-      .price-overlay-unid {
+      .price-overlay-unid,
+      .price-overlay-base-mode,
+      .price-overlay-dps-tag {
         position: relative;
         z-index: 4;
         pointer-events: auto;
@@ -139,23 +143,42 @@
         if (!nameA || nameA !== nameB) return false;
         const modsA = a.querySelector(".price-overlay-mods")?.innerHTML || "";
         const modsB = b.querySelector(".price-overlay-mods")?.innerHTML || "";
-        if (modsA !== modsB) return false;
-        const propsA = a.querySelector(".price-overlay-props")?.innerHTML || "";
-        const propsB = b.querySelector(".price-overlay-props")?.innerHTML || "";
-        return propsA === propsB;
+        return modsA === modsB;
+      }
+
+      function syncOverlayChild(oldParent, nextParent, sel, beforeSel) {
+        if (!oldParent || !nextParent) return;
+        const oldEl = oldParent.querySelector(sel);
+        const nextEl = nextParent.querySelector(sel);
+        if (nextEl && oldEl) {
+          if (oldEl.innerHTML !== nextEl.innerHTML || oldEl.className !== nextEl.className) oldEl.replaceWith(nextEl);
+        } else if (nextEl && !oldEl) {
+          const before = beforeSel ? oldParent.querySelector(beforeSel) : null;
+          if (before) before.before(nextEl);
+          else oldParent.appendChild(nextEl);
+        } else if (!nextEl && oldEl) oldEl.remove();
       }
 
       function patchOverlayQuote(oldCard, nextCard) {
         oldCard.className = nextCard.className;
         const shell = oldCard.querySelector(".price-overlay-shell");
         if (!shell) return false;
+        const oldBody = oldCard.querySelector(".price-overlay-body");
+        const nextBody = nextCard.querySelector(".price-overlay-body");
+
+        const oldHead = oldCard.querySelector(".item-tip-head");
+        const nextHead = nextCard.querySelector(".item-tip-head");
+        if (oldHead && nextHead && oldHead.innerHTML !== nextHead.innerHTML) oldHead.replaceWith(nextHead);
+
+        syncOverlayChild(oldBody, nextBody, ".price-overlay-meta", ".price-overlay-props");
+        syncOverlayChild(oldBody, nextBody, ".price-overlay-props", ".price-overlay-mods");
+
         const oldSide = oldCard.querySelector(".price-overlay-side");
         const nextSide = nextCard.querySelector(".price-overlay-side");
         if (nextSide && oldSide) oldSide.replaceWith(nextSide);
         else if (nextSide && !oldSide) shell.appendChild(nextSide);
         else if (!nextSide && oldSide) oldSide.remove();
 
-        const oldBody = oldCard.querySelector(".price-overlay-body");
         const oldFoot = oldCard.querySelector(".price-overlay-foot");
         const nextFoot = nextCard.querySelector(".price-overlay-foot");
         if (nextFoot && oldFoot) oldFoot.replaceWith(nextFoot);
@@ -229,9 +252,12 @@
         if (event.detail > 1 && !event.target.closest("input, textarea")) event.preventDefault();
       });
 
+      const overlayControlSel =
+        "button, a, input, textarea, select, .price-overlay-flags, .price-overlay-base-modes, .price-overlay-dps-tags, .price-overlay-offers, .price-overlay-mods, .price-overlay-span, .price-overlay-prop-quality, .price-overlay-prop-num, .price-overlay-q-edit, .price-overlay-rate-wrap";
+
       document.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
-        if (event.target.closest("button, a, input, textarea, select, .price-overlay-flags, .price-overlay-offers, .price-overlay-mods, .price-overlay-span, .price-overlay-prop-quality, .price-overlay-prop-num, .price-overlay-q-edit, .price-overlay-rate-wrap")) {
+        if (event.target.closest(overlayControlSel)) {
           if (event.target.closest("input, textarea, .price-overlay-q-edit, .price-overlay-prop-quality, .price-overlay-prop-num")) {
             chrome.webview?.postMessage({ type: "overlay-activate" });
           }
@@ -272,11 +298,11 @@
       document.addEventListener(
         "click",
         (event) => {
-          if (skipClick) {
-            skipClick = false;
-            event.preventDefault();
-            event.stopPropagation();
-          }
+          if (!skipClick) return;
+          skipClick = false;
+          if (event.target.closest(overlayControlSel)) return;
+          event.preventDefault();
+          event.stopPropagation();
         },
         true
       );

@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.22";
+const APP_VERSION = "1.0.23";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -7244,11 +7244,11 @@ function priceOverlayHtml(log, drop) {
           <div class="price-overlay-body">
           <div class="item-tip-head">
             ${dropIconHtml(drop, "lg")}
-            <div>
+            <div class="item-tip-title">
               <div class="item-tip-name">${esc(drop.name)}</div>
               ${overlayBaseHtml(log, drop)}
+              ${overlayFlagsHtml(log, drop)}
             </div>
-            ${overlayFlagsHtml(log, drop)}
           </div>
           ${props}
           ${mods}

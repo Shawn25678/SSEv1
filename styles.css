@@ -2627,10 +2627,16 @@ button.roll-chip:hover {
 }
 
 .price-overlay-card .item-tip-head {
-  grid-template-columns: 56px 1fr auto;
+  grid-template-columns: 56px 1fr;
   align-items: start;
   position: relative;
   z-index: 3;
+}
+
+.item-tip-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 
 .item-tip-name {
@@ -3062,9 +3068,8 @@ button.roll-chip:hover {
 }
 
 .price-overlay-corrupt {
-  align-self: start;
   margin: 0;
-  padding: 0;
+  padding: 2px 0;
   border: 0;
   background: transparent;
   color: color-mix(in srgb, var(--ink) 78%, var(--bg) 22%);
@@ -3073,17 +3078,20 @@ button.roll-chip:hover {
   font-weight: 650;
   line-height: 1.2;
   letter-spacing: 0.01em;
-  text-align: right;
+  text-align: left;
   white-space: nowrap;
   cursor: pointer;
 }
 
-.price-overlay-flags {
+.item-tip-title .price-overlay-flags {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0;
-  max-width: 7.5rem;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px 10px;
+  max-width: none;
+  margin-top: 2px;
   position: relative;
   z-index: 4;
   pointer-events: auto;
@@ -3098,31 +3106,29 @@ button.roll-chip:hover {
 }
 
 .price-overlay-raven {
-  align-self: start;
   margin: 0;
-  padding: 0;
+  padding: 2px 0;
   border: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
   font-size: 0.7rem;
   line-height: 1.15;
-  text-align: right;
+  text-align: left;
   white-space: nowrap;
   cursor: pointer;
 }
 
 .price-overlay-unid {
-  align-self: start;
   margin: 0;
-  padding: 0;
+  padding: 2px 0;
   border: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
   font-size: 0.7rem;
   line-height: 1.15;
-  text-align: right;
+  text-align: left;
   white-space: nowrap;
   cursor: pointer;
 }
