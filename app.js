@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.19";
+const APP_VERSION = "1.0.20";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -5657,9 +5657,9 @@ function qualityFilterState(drop) {
   return { value: q, cap, min, on };
 }
 
+const DPS_DISPLAY_QUALITY = 20;
+
 function qualityForDps(drop) {
-  const quality = qualityFilterState(drop);
-  if (quality?.on) return quality.min;
   return dpsDisplayQuality(drop);
 }
 
@@ -5731,7 +5731,7 @@ function isTypedPropId(id) {
 function dpsDisplayQuality(drop) {
   const itemQ = Number.isFinite(Number(drop?.props?.quality)) ? Number(drop.props.quality) : 0;
   if (!dropIsModifiable(drop)) return itemQ;
-  return Math.max(20, itemQ);
+  return DPS_DISPLAY_QUALITY;
 }
 
 function dpsSearchSlack(drop) {
@@ -5801,12 +5801,8 @@ function dropIsModifiable(drop) {
 
 function formatDpsShown(n) {
   if (!Number.isFinite(n)) return "";
-  // One decimal; banker's round-half-to-even (198.25→198.2, 44.25→44.2, 94.08→94.1).
-  const x = n * 10;
-  const floored = Math.floor(x + 1e-12);
-  const frac = x - floored;
-  const snapped = Math.abs(frac - 0.5) < 1e-6 ? (floored % 2 === 0 ? floored : floored + 1) : Math.round(x);
-  return (snapped / 10).toFixed(1);
+  // Match pathofexile.com / trade extended.pdps / common DPS calcs: two decimals (166.155→166.16).
+  return (Math.round(n * 100 + Number.EPSILON) / 100).toFixed(2);
 }
 
 function weaponHitAverages(drop) {
@@ -7160,7 +7156,7 @@ function paintLiveDps(card) {
   const baseAps = Number(d?.dpsAps);
   if (!Number.isFinite(baseAps) || baseAps <= 0) return;
   const itemQ = Number(d.dpsItemQ) || 0;
-  const q = Number.isFinite(Number(d.dpsShowQ)) ? Number(d.dpsShowQ) : Number(d.dpsQ) || 0;
+  const q = Number.isFinite(Number(d.dpsShowQ)) ? Number(d.dpsShowQ) : DPS_DISPLAY_QUALITY;
   let flatLo = 0;
   let flatHi = 0;
   let incr = 0;
