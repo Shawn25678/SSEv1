@@ -43,6 +43,9 @@ body {
 
 body {
   overflow-x: hidden;
+}
+
+body:has(.app-menu) {
   display: grid;
   grid-template-columns: 212px minmax(0, 1fr);
 }
@@ -85,6 +88,24 @@ body.view-bosses #main {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+body.view-econ .app {
+  max-width: none;
+  width: 100%;
+  min-width: 0;
+}
+
+body.view-econ #main,
+body.view-econ .econ,
+body.view-econ .econ .panel {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+body.view-econ .econ .panel {
+  overflow-x: hidden;
 }
 
 .bg-glow {
@@ -2068,6 +2089,8 @@ button.roll-chip:hover {
 .econ {
   display: grid;
   gap: 10px;
+  min-width: 0;
+  width: 100%;
 }
 
 .econ-head {
@@ -2113,7 +2136,8 @@ button.roll-chip:hover {
   flex-wrap: wrap;
   gap: 6px;
   margin: 8px 0 10px;
-  overflow: visible;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .econ-cats .chip {
@@ -2124,8 +2148,10 @@ button.roll-chip:hover {
 .econ-chart {
   display: grid;
   gap: 8px;
+  min-width: 0;
   margin-bottom: 10px;
   padding: 12px;
+  overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: 12px;
   background: var(--bg-2);
@@ -2152,6 +2178,14 @@ button.roll-chip:hover {
 .econ-chart-plot {
   display: grid;
   gap: 4px;
+  min-width: 0;
+}
+
+.econ-chart-plot .spark {
+  width: 100%;
+  max-width: 100%;
+  height: 120px;
+  overflow: hidden;
 }
 
 .econ-chart-axis {
@@ -2168,10 +2202,11 @@ button.roll-chip:hover {
 
 .econ-row {
   display: grid;
-    grid-template-columns: 32px minmax(0, 1fr) 120px 48px auto;
+  grid-template-columns: 32px minmax(0, 1fr) minmax(40px, 120px) minmax(36px, 48px) auto;
   gap: 8px;
   align-items: center;
   width: 100%;
+  min-width: 0;
   padding: 6px 10px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -2208,9 +2243,11 @@ button.roll-chip:hover {
 }
 
 .econ-row .spark {
-  width: 120px;
+  width: 100%;
+  max-width: 120px;
   height: 36px;
-  flex: none;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .econ-price {
@@ -2271,8 +2308,15 @@ button.roll-chip:hover {
 
 .econ-trend {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
+}
+
+.econ-trend-col,
+.econ-list,
+.econ-head,
+.econ-tools {
+  min-width: 0;
 }
 
 .econ-trend-col h3 {
@@ -2316,8 +2360,14 @@ button.roll-chip:hover {
   border: 1px solid var(--line-strong);
 }
 
+@media (max-width: 1180px) {
+  .econ-trend {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 860px) {
-  body {
+  body:has(.app-menu) {
     grid-template-columns: 168px minmax(0, 1fr);
   }
 
@@ -2576,8 +2626,10 @@ button.roll-chip:hover {
   display: grid;
   gap: 6px;
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 12px 16px 14px;
 }
 
@@ -3093,9 +3145,10 @@ button.roll-chip:hover {
 
 .price-overlay-span {
   display: grid;
-  grid-template-columns: 2.2em 1fr 2.2em;
+  grid-template-columns: 2.2em minmax(0, 1fr) 2.2em;
   gap: 6px;
   align-items: center;
+  min-width: 0;
   padding: 4px 0 0;
   color: var(--muted);
   font-size: 0.72rem;

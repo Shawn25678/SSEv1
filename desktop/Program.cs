@@ -1592,7 +1592,21 @@ sealed class TrackerWindow : Form
     async void OnLoad(object? sender, EventArgs e)
     {
         DropUnusedJsonFolder();
-        var index = ExtractWebFiles();
+        string index;
+        try
+        {
+            index = ExtractWebFiles();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                "Still Sane could not unpack its files to:\n" + Path.Combine(AppDataDir(), "www") + "\n\n" + ex.Message,
+                "Still Sane, Exile?",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+            Close();
+            return;
+        }
         var userData = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ExileLedger");
@@ -2348,10 +2362,13 @@ sealed class TrackerWindow : Form
         if (File.Exists(leftoverSigil)) File.Delete(leftoverSigil);
         var stampPath = Path.Combine(dir, ".stamp");
         var want = ExtractStamp();
+        var needed = new[]
+        {
+            "index.html", "overlay.html", "styles.css", "app.js", "affix-ladders.js",
+            "decks.js", "deck-game.js", "bosses.js", "icons.js", "still-sane-sigil.png",
+        };
         if (File.Exists(stampPath)
-            && File.Exists(index)
-            && File.Exists(Path.Combine(dir, "app.js"))
-            && File.Exists(Path.Combine(dir, "overlay.html"))
+            && needed.All(name => File.Exists(Path.Combine(dir, name)))
             && Directory.Exists(Path.Combine(dir, "art"))
             && File.ReadAllText(stampPath) == want)
             return index;
@@ -2740,6 +2757,8 @@ sealed class PriceOverlayForm : Form
     };
     readonly Action<string> _forward;
     bool _ready;
+    int _cssW = 428;
+    int _cssH = 220;
     string? _pendingKind;
     string? _pendingHtml;
     string? _pendingVars;
@@ -2860,6 +2879,25 @@ sealed class PriceOverlayForm : Form
         TopMost = true;
     }
 
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        ApplySize(e.DeviceDpiNew);
+    }
+
+    void ApplySize(int dpi = 0)
+    {
+        var scale = (dpi > 0 ? dpi : DeviceDpi) / 96.0;
+        var screen = Screen.FromControl(this).WorkingArea;
+        var minW = (int)Math.Ceiling(280 * scale);
+        var minH = (int)Math.Ceiling(90 * scale);
+        Width = Math.Clamp((int)Math.Ceiling(_cssW * scale), minW, Math.Max(minW, screen.Width / 2));
+        Height = Math.Clamp((int)Math.Ceiling(_cssH * scale), minH, Math.Max(minH, (int)(screen.Height * 0.92)));
+        var x = Math.Clamp(Location.X, screen.Left, Math.Max(screen.Left, screen.Right - Width));
+        var y = Math.Clamp(Location.Y, screen.Top, Math.Max(screen.Top, screen.Bottom - Height));
+        if (x != Location.X || y != Location.Y) Location = new Point(x, y);
+    }
+
     void PlaceNearCursor()
     {
         GetCursorPos(out var pt);
@@ -2881,11 +2919,10 @@ sealed class PriceOverlayForm : Form
             var type = doc.RootElement.TryGetProperty("type", out var typeEl) ? typeEl.GetString() : "";
             if (type == "overlay-size")
             {
-                var w = doc.RootElement.TryGetProperty("w", out var wEl) && wEl.ValueKind == JsonValueKind.Number && wEl.TryGetInt32(out var ww) ? ww : Width;
-                var h = doc.RootElement.TryGetProperty("h", out var hEl) && hEl.ValueKind == JsonValueKind.Number && hEl.TryGetInt32(out var hh) ? hh : Height;
-                var screen = Screen.FromControl(this).WorkingArea;
-                Width = Math.Clamp(w, 280, Math.Max(280, screen.Width / 2));
-                Height = Math.Clamp(h, 90, Math.Max(90, (int)(screen.Height * 0.92)));
+                _cssW = doc.RootElement.TryGetProperty("w", out var wEl) && wEl.ValueKind == JsonValueKind.Number && wEl.TryGetInt32(out var ww) ? ww : _cssW;
+                _cssH = doc.RootElement.TryGetProperty("h", out var hEl) && hEl.ValueKind == JsonValueKind.Number && hEl.TryGetInt32(out var hh) ? hh : _cssH;
+                if (InvokeRequired) BeginInvoke(() => ApplySize());
+                else ApplySize();
                 return;
             }
             if (type == "overlay-drag")

@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.15";
+const APP_VERSION = "1.0.16";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -2591,11 +2591,12 @@ function itemHoverAttr(name) {
   return `data-tip="${esc(name)}"`;
 }
 
-function itemIconHtml(name, size = "") {
+function itemIconHtml(name, size = "", slot = false) {
   const src = lookupIcon(name);
   const cls = "item-icon" + (size ? " " + size : "");
-  if (!src) return size === "lg" ? `<span class="${cls} missing" aria-hidden="true"></span>` : "";
-  return `<img class="${cls}" src="${esc(src)}" alt="" draggable="false" onerror="this.remove()" />`;
+  if (!src) return size === "lg" || slot ? `<span class="${cls} missing" aria-hidden="true"></span>` : "";
+  const fail = slot ? "this.classList.add('missing')" : "this.remove()";
+  return `<img class="${cls}" src="${esc(src)}" alt="" draggable="false" onerror="${fail}" />`;
 }
 
 function itemNameHtml(name, size) {
@@ -6152,7 +6153,7 @@ function econRowHtml(row, type) {
     .join(" · ");
   const priced = Number.isFinite(row.amount) || Number.isFinite(row.divine);
   return `<button class="econ-row${open ? " is-open" : ""}" type="button" title="${esc(extra)}" ${itemHoverAttr(row.name)} data-econ-open="${esc(row.name)}" data-econ-id="${esc(String(row.ninjaId ?? ""))}" data-econ-kind="${esc(row.kind || "")}" data-econ-type="${esc(cat)}">
-    ${itemIconHtml(row.name)}
+    ${itemIconHtml(row.name, "", true)}
     <span class="econ-copy">
       <span class="${NINJA_ITEMS.includes(cat) ? "unique-name" : "econ-name"}">${esc(row.name)}</span>
     </span>
@@ -7283,6 +7284,7 @@ function render() {
   const shown = document.getElementById("item-tip")?.dataset.for || "";
   if (ui.view === "hunt" || ui.view === "bosses" || ui.view === "title") ui.view = "dash";
   document.body.classList.toggle("view-bosses", ui.view === "bosses");
+  document.body.classList.toggle("view-econ", ui.view === "econ");
   document.body.classList.toggle("view-decks", ui.view === "decks");
   renderStats();
   renderDivineTape();

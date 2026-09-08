@@ -7,19 +7,29 @@
       html,
       body {
         margin: 0;
+        height: auto;
+        min-height: 0;
+        display: block;
         background: #120e0a;
         overflow: hidden;
       }
       #root {
         margin: 0;
+        width: max-content;
+        max-width: 100%;
       }
       .price-overlay-card {
         width: 420px;
         max-width: 100%;
         max-height: none;
         margin: 0;
+        overflow-x: hidden;
         box-shadow: none;
         cursor: grab;
+      }
+      .price-overlay-body {
+        overflow-x: hidden;
+        min-width: 0;
       }
       .price-overlay-bar {
         cursor: grab;
@@ -33,6 +43,9 @@
       .price-overlay-offers,
       .price-overlay-offer {
         cursor: default;
+      }
+      .price-overlay-offers {
+        max-height: 360px;
       }
     </style>
   </head>
@@ -59,6 +72,12 @@
           h: Math.max(90, Math.ceil(r.height) + 4),
         });
       }
+
+      let fitTimer = 0;
+      window.addEventListener("resize", () => {
+        clearTimeout(fitTimer);
+        fitTimer = setTimeout(fit, 120);
+      });
 
       chrome.webview.addEventListener("message", (event) => {
         let msg = event.data;
