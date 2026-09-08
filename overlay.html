@@ -185,13 +185,17 @@
       function fit() {
         const card = root.querySelector(".price-overlay-card") || root.firstElementChild;
         if (!card || !window.chrome?.webview) return;
+        const prevH = card.style.height;
+        const prevMax = card.style.maxHeight;
+        card.style.height = "auto";
+        card.style.maxHeight = "none";
         const bar = card.querySelector(".price-overlay-bar");
         const bodyEl = card.querySelector(".price-overlay-body");
         const foot = card.querySelector(".price-overlay-foot");
         const barH = bar ? bar.offsetHeight : 0;
         const bodyH = bodyEl ? bodyEl.scrollHeight : 0;
         const footH = foot ? foot.offsetHeight : 0;
-        let h = barH + bodyH + footH;
+        let h = Math.max(card.scrollHeight, barH + bodyH + footH);
         const cs = getComputedStyle(card);
         h += (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
         let w = card.classList.contains("has-offers") ? 720 : 420;
@@ -200,8 +204,10 @@
           const r = card.getBoundingClientRect();
           const er = extra.getBoundingClientRect();
           w = Math.max(w, er.right - r.left);
-          h = Math.max(h, er.bottom - r.top);
+          h = Math.max(h, Math.ceil(er.bottom - r.top));
         }
+        card.style.height = prevH;
+        card.style.maxHeight = prevMax;
         const nextW = Math.max(280, Math.ceil(w) + 4);
         const nextH = Math.max(90, Math.ceil(h) + 4);
         if (nextW === lastFitW && nextH === lastFitH) return;
