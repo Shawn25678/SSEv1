@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.20";
+const APP_VERSION = "1.0.21";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -35,7 +35,7 @@ const backupInfo = { folder: "", downloads: "" };
 const sessionStarted = Date.now();
 let toastTimer = 0;
 const ninjaWait = new Map();
-const tradeRate = { readyAt: 0, waitMs: 0, hits: 0, max: 7, window: 15, limited: false };
+const tradeRate = { readyAt: 0, waitMs: 0, hits: 0, max: 1, window: 5, limited: false };
 let rateBarTimer = 0;
 const prices = {
   status: "idle",
@@ -169,6 +169,19 @@ const UNIQUE_BY_BASE = {
   "ultimate life flask": ["Olroth's Resolve", "Opportunity"],
   "utility belt": ["Cat O' Nine Tails", "Ingenuity", "Mageblood"],
   "wide belt": ["Birthright Buckle", "Brynabas", "The Gnashing Sash"],
+};
+
+// Unique mod templates (PoB2 / poe2db). Keys must match foldKey (apostrophes stripped).
+// Used when clipboard has no (min–max) so overlay can still slide.
+const UNIQUE_ROLL_TEMPLATES = {
+  "ventors gamble": [
+    "+(0-80) to maximum Life",
+    "+(0-20) to Spirit",
+    "(-25-25)% increased Rarity of Items found",
+    "+(-40-40)% to Fire Resistance",
+    "+(-40-40)% to Cold Resistance",
+    "+(-40-40)% to Lightning Resistance",
+  ],
 };
 
 function loadState() {
@@ -1352,7 +1365,7 @@ function parseRollHit(hit) {
 
 function parseRollSpan(raw) {
   const t = parseAffixStrings(String(raw || ""));
-  const hits = [...t.matchAll(/(-?\d+(?:\.\d+)?)\s*\(\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\s*\)/g)];
+  const hits = [...t.matchAll(/(-?\d+(?:\.\d+)?)\s*\(\s*(-?\d+(?:\.\d+)?)\s*[-–—]\s*(-?\d+(?:\.\d+)?)\s*\)/g)];
   const first = parseRollHit(hits[0]);
   if (!first) return null;
   let spanLo = first.lo;
@@ -1362,7 +1375,7 @@ function parseRollSpan(raw) {
     const extra = parseRollHit(hits[i]);
     if (extra) extras.push(extra);
   }
-  const bracket = t.match(/\[\s*(-?\d+(?:\.\d+)?)\s*[-–]\s*(-?\d+(?:\.\d+)?)\s*\]/);
+  const bracket = t.match(/\[\s*(-?\d+(?:\.\d+)?)\s*[-–—]\s*(-?\d+(?:\.\d+)?)\s*\]/);
   if (bracket) {
     let a = Number(bracket[1]);
     let b = Number(bracket[2]);
@@ -1745,7 +1758,82 @@ function siblingRolls(rows, row) {
   return (rows || []).filter((line) => line.affix === row.affix);
 }
 
+function parseTemplateRange(text) {
+  const t = parseAffixStrings(String(text || ""));
+  const hit = t.match(/\(\s*([+-]?\d+(?:\.\d+)?)\s*[-–—]\s*([+-]?\d+(?:\.\d+)?)\s*\)/);
+  if (!hit) return null;
+  let lo = Number(hit[1]);
+  let hi = Number(hit[2]);
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+  if (lo > hi) {
+    const swap = lo;
+    lo = hi;
+    hi = swap;
+  }
+  return { lo, hi };
+}
+
+/** Fold unique template lines like +(-40-40)% so they match clipboard ±N% resists. */
+function foldUniqueMod(text) {
+  const t = parseAffixStrings(String(text || "")).replace(
+    /\(\s*[+-]?\d+(?:\.\d+)?\s*[-–—]\s*[+-]?\d+(?:\.\d+)?\s*\)/g,
+    "#"
+  );
+  return foldTradeMatcher(t);
+}
+
+function uniqueRollTemplatesFor(drop) {
+  const name = foldKey(drop?.name || "");
+  const listed = UNIQUE_ROLL_TEMPLATES[name] || UNIQUE_ROLL_TEMPLATES[priceKey(drop?.name || "")] || [];
+  const lore = lookupLore(drop?.name);
+  const extras = [...(lore?.explicits || []), ...(lore?.implicits || []), ...(lore?.variants || [])].filter((line) =>
+    /\(\s*[+-]?\d+(?:\.\d+)?\s*[-–—]\s*[+-]?\d+(?:\.\d+)?\s*\)/.test(String(line || ""))
+  );
+  return [...listed, ...extras];
+}
+
+function applyUniqueTemplateRange(row, tmpl) {
+  const range = parseTemplateRange(tmpl);
+  if (!range || !(range.hi > range.lo)) return false;
+  row.spanLo = range.lo;
+  row.spanHi = range.hi;
+  if (!(Number(row.hi) > Number(row.lo))) {
+    row.lo = range.lo;
+    row.hi = range.hi;
+  }
+  if (!Number.isFinite(row.value)) row.value = firstClipboardRoll(row.text, invertedTradeRoll(row.text));
+  if (!Number.isFinite(row.wantMin)) row.wantMin = Number.isFinite(row.value) ? Number(row.value) : range.lo;
+  return true;
+}
+
+/** Attach unique mod (min–max) when clipboard only has a rolled value (checkbox-only otherwise). */
+function attachUniqueRollRange(row, ctx) {
+  const unique = row?.unique || /unique/i.test(String(ctx?.rarity || ""));
+  if (!unique || !row) return row;
+  const spanLo = Number.isFinite(row.spanLo) ? Number(row.spanLo) : Number(row.lo);
+  const spanHi = Number.isFinite(row.spanHi) ? Number(row.spanHi) : Number(row.hi);
+  if (Number.isFinite(spanLo) && Number.isFinite(spanHi) && spanHi > spanLo) return row;
+  const want = foldUniqueMod(row.text || "");
+  if (!want) return row;
+  const templates = uniqueRollTemplatesFor(ctx);
+  for (const tmpl of templates) {
+    if (foldUniqueMod(tmpl) !== want) continue;
+    if (applyUniqueTemplateRange(row, tmpl)) return row;
+  }
+  // ±N% to Fire/Cold/Lightning Resistance vs +(-40-40)% templates (sign-folded mismatch).
+  const res = want.match(/^#%\s+to\s+(fire|cold|lightning)\s+resistance$/i);
+  if (res) {
+    const needle = "#% to " + res[1].toLowerCase() + " resistance";
+    for (const tmpl of templates) {
+      if (foldUniqueMod(tmpl) !== needle) continue;
+      if (applyUniqueTemplateRange(row, tmpl)) return row;
+    }
+  }
+  return row;
+}
+
 function expandRollSpan(row, ctx, siblings) {
+  attachUniqueRollRange(row, ctx);
   const lo = Number(row.lo);
   const hi = Number(row.hi);
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return row;
@@ -1770,8 +1858,10 @@ function expandRollSpan(row, ctx, siblings) {
       .filter(Boolean);
   }
   if (!rollHasAffixTiers(row)) {
-    row.spanLo = lo;
-    row.spanHi = hi;
+    const spanLo = Number.isFinite(row.spanLo) ? Number(row.spanLo) : lo;
+    const spanHi = Number.isFinite(row.spanHi) ? Number(row.spanHi) : hi;
+    row.spanLo = Math.min(spanLo, lo);
+    row.spanHi = Math.max(spanHi, hi);
     delete row.spanSteps;
     delete row.spanTiers;
     clipExtra();
@@ -2020,8 +2110,8 @@ function applyTradeRate(rate) {
   else if (rate.waitMs === 0 && tradeRate.readyAt <= Date.now()) tradeRate.readyAt = Date.now();
   tradeRate.waitMs = Math.max(0, rate.waitMs || 0);
   tradeRate.hits = Number(rate.hits) || 0;
-  tradeRate.max = Number(rate.max) > 0 ? Number(rate.max) : tradeRate.max || 7;
-  tradeRate.window = Number(rate.window) > 0 ? Number(rate.window) : tradeRate.window || 15;
+  tradeRate.max = Number(rate.max) > 0 ? Number(rate.max) : tradeRate.max || 1;
+  tradeRate.window = Number(rate.window) > 0 ? Number(rate.window) : tradeRate.window || 5;
   tradeRate.limited = !!rate.limited;
   paintRateBar();
 }
@@ -2036,18 +2126,20 @@ function formatRateWait(ms) {
 
 function rateStatus() {
   const left = Math.max(0, tradeRate.readyAt - Date.now());
-  const max = tradeRate.max || 7;
+  const max = tradeRate.max || 1;
   const hits = tradeRate.hits || 0;
-  const window = tradeRate.window || 15;
-  const counts = hits + "/" + max + " / " + window + "s";
+  const window = tradeRate.window || 5;
+  const counts = hits + " of " + max + " · resets " + window + "s";
+  const tipBase = "PoE 2 trade: " + hits + " of " + max + " searches used in a " + window + "s window.";
   if (left > 0) {
     const wait = formatRateWait(left);
     return {
       wait: true,
       limited: !!tradeRate.limited,
       label: tradeRate.limited ? "Rate limited" : "Rate limiting",
-      chip: wait,
+      chip: "wait " + wait,
       line: (tradeRate.limited ? "Rate limited · " : "Rate limiting · ") + wait,
+      title: tipBase + " Waiting " + wait + " for a free slot.",
     };
   }
   return {
@@ -2056,6 +2148,7 @@ function rateStatus() {
     label: "Rate limiting",
     chip: counts,
     line: "Rate limiting · " + counts,
+    title: tipBase + " Searches wait until a slot opens.",
   };
 }
 
@@ -2069,6 +2162,7 @@ function paintRateBar() {
     clock.hidden = !desktop;
     clock.classList.toggle("is-wait", status.wait);
     clock.classList.toggle("is-limited", status.wait && status.limited);
+    if (status.title) clock.title = status.title;
   }
   if (clockLabel) clockLabel.textContent = status.label;
   if (clockText) clockText.textContent = status.chip;
@@ -2619,14 +2713,76 @@ function ingestExchange(data, type) {
   if (type) prices.tables[type] = rows;
 }
 
+function isRuneforgedBaseType(baseType) {
+  // Ninja uses both "Runeforged …" and "Runemastered …" (and rare "Runemasted") for the upgrade base.
+  return /^(?:runeforged|runemastered|runemasted)\b/i.test(String(baseType || "").trim());
+}
+
+function isRuneforgedUniqueName(name) {
+  const n = String(name || "");
+  return /,\s*(?:runeforged|runemastered|runemasted)\b/i.test(n) || /\(\s*(?:runeforged|runemastered|runemasted)\s*\)/i.test(n);
+}
+
+/** Skip Runeforged upgrade lines when a plain base exists for the same unique name. */
+function runeforgedPriceSkipSet(lines) {
+  const byName = new Map();
+  for (const line of lines || []) {
+    if (!line?.name) continue;
+    let group = byName.get(line.name);
+    if (!group) {
+      group = [];
+      byName.set(line.name, group);
+    }
+    group.push(line);
+  }
+  const skip = new Set();
+  for (const group of byName.values()) {
+    const hasPlain = group.some((line) => !isRuneforgedBaseType(line.baseType) && !isRuneforgedUniqueName(line.name));
+    if (!hasPlain) continue;
+    for (const line of group) {
+      if (isRuneforgedBaseType(line.baseType) || isRuneforgedUniqueName(line.name)) skip.add(line);
+    }
+  }
+  for (const line of lines || []) {
+    if (line && isRuneforgedUniqueName(line.name)) skip.add(line);
+  }
+  return skip;
+}
+
+function shouldSkipRuneforgedPriceRow(row, siblingRows) {
+  if (!row?.name) return false;
+  if (isRuneforgedUniqueName(row.name)) return true;
+  if (!isRuneforgedBaseType(row.baseType)) return false;
+  const peers = Array.isArray(siblingRows) ? siblingRows : null;
+  if (peers) {
+    return peers.some(
+      (other) =>
+        other &&
+        other !== row &&
+        other.name === row.name &&
+        !isRuneforgedBaseType(other.baseType) &&
+        !isRuneforgedUniqueName(other.name)
+    );
+  }
+  return !UNIQUE_BY_BASE[uniqueBaseKey(row.baseType)]?.length;
+}
+
 function ingestItems(data, type) {
   const unit = data?.core?.primary || "exalted";
   const rows = [];
-  for (const line of data?.lines || []) {
+  const lines = data?.lines || [];
+  const skipRuneforged = runeforgedPriceSkipSet(lines);
+  const replacedNames = new Set();
+  for (const line of lines) {
     const amount = Number(line.primaryValue ?? line.divineValue ?? line.exaltedValue ?? line.chaosValue);
     const divine = toDivine(amount, unit);
-    rememberPrice(line.name, divine, line.listingCount, line.icon || line.image, amount, unit);
-    rememberNinjaLore(line);
+    if (!skipRuneforged.has(line)) {
+      // First plain line for a name replaces so old Runemastered blends (maxDivine) are cleared.
+      const replace = !replacedNames.has(line.name);
+      if (line.name) replacedNames.add(line.name);
+      rememberPrice(line.name, divine, line.listingCount, line.icon || line.image, amount, unit, "ninja", replace);
+      rememberNinjaLore(line);
+    }
     if (line?.name) {
       rows.push({
         name: line.name,
@@ -2645,6 +2801,35 @@ function ingestItems(data, type) {
     }
   }
   if (type) prices.tables[type] = rows;
+  collapseRuneforgedBlendedPrices();
+}
+
+/** After tables load: if plain + Runemastered share a name, force byName to the plain price only. */
+function collapseRuneforgedBlendedPrices() {
+  for (const rows of Object.values(prices.tables || {})) {
+    if (!Array.isArray(rows) || !rows.length) continue;
+    const byName = new Map();
+    for (const row of rows) {
+      if (!row?.name || !pricedHit(row)) continue;
+      let group = byName.get(row.name);
+      if (!group) {
+        group = { plain: null, rune: false };
+        byName.set(row.name, group);
+      }
+      if (isRuneforgedBaseType(row.baseType) || isRuneforgedUniqueName(row.name)) {
+        group.rune = true;
+        continue;
+      }
+      if (!group.plain || (row.listings || 0) > (group.plain.listings || 0)) group.plain = row;
+    }
+    for (const { plain, rune } of byName.values()) {
+      if (!plain || !rune) continue;
+      const hit = lookupPrice(plain.name);
+      if (!pricedHit(hit)) continue;
+      if (!(Number(hit.maxDivine) > Number(hit.divine) * 1.05)) continue;
+      rememberPrice(plain.name, plain.divine, plain.listings, plain.icon, plain.amount, plain.unit, "ninja", true);
+    }
+  }
 }
 
 function rememberNinjaLore(line) {
@@ -2910,6 +3095,12 @@ function hitDivine(hit) {
   return NaN;
 }
 
+function formatChipAmount(divine) {
+  const shown = priceDisplay(divine);
+  if (!Number.isFinite(shown.amount)) return "—";
+  return formatNum(shown.amount);
+}
+
 function priceChip(name) {
   const hit = lookupPrice(name);
   const mark = `data-price-for="${esc(name)}"`;
@@ -2917,9 +3108,16 @@ function priceChip(name) {
     const low = hitDivine(hit);
     const high = Number.isFinite(hit.maxDivine) ? hit.maxDivine : low;
     const spread = Number.isFinite(low) && Number.isFinite(high) && high > low * 1.2;
-    const label = spread ? `${formatDivine(low)}–${formatDivine(high)}` : formatDivine(low);
     const currency = currencyForAmount(spread ? high : low);
-    return `<span class="price-chip${hit.cached ? " is-cached" : ""}" ${mark} title="${spread ? srcLabel(hit) + " floor–high" : srcLabel(hit)}" ${itemHoverAttr(currency)}>${itemIconHtml(currency)}${esc(label)}</span>`;
+    const icon = itemIconHtml(currency);
+    const label = icon
+      ? spread
+        ? `${formatChipAmount(low)}–${formatChipAmount(high)}`
+        : formatChipAmount(low)
+      : spread
+        ? `${formatDivine(low)}–${formatDivine(high)}`
+        : formatDivine(low);
+    return `<span class="price-chip${hit.cached ? " is-cached" : ""}" ${mark} title="${spread ? srcLabel(hit) + " floor–high" : srcLabel(hit)}" ${itemHoverAttr(currency)}>${icon}${esc(label)}</span>`;
   }
   if (prices.looking.has(name)) {
     return `<span class="price-chip is-empty" ${mark}>checking…</span>`;
@@ -3029,7 +3227,7 @@ function linkCatalogPrices() {
   const priced = [];
   const seen = new Set();
   for (const hit of prices.byName.values()) {
-    if (!pricedHit(hit) || !hit.name || seen.has(hit.name)) continue;
+    if (!pricedHit(hit) || !hit.name || seen.has(hit.name) || isRuneforgedUniqueName(hit.name)) continue;
     seen.add(hit.name);
     priced.push(hit);
   }
@@ -3038,6 +3236,7 @@ function linkCatalogPrices() {
     const want = foldKey(name).replace(/ support$/, "");
     const wantSlug = typeof slug === "function" ? slug(name) : "";
     const hit = priced.find((row) => {
+      if (isRuneforgedUniqueName(row.name)) return false;
       const got = foldKey(row.name).replace(/ support$/, "");
       return got === want || (wantSlug && typeof slug === "function" && slug(row.name) === wantSlug);
     });
@@ -3278,8 +3477,9 @@ function bestLeagueDump(leagues) {
 }
 
 function applyCatalogRows(rows, extra = {}) {
-  for (const row of rows || []) {
-    if (!row?.name || !pricedHit(row)) continue;
+  const list = rows || [];
+  for (const row of list) {
+    if (!row?.name || !pricedHit(row) || shouldSkipRuneforgedPriceRow(row, list)) continue;
     const prev = lookupPrice(row.name);
     if (pricedHit(prev) && !prev.cached && extra.cached) continue;
     if (pricedHit(prev) && prev.source === "ninja" && row.source !== "ninja" && extra.cached) continue;
@@ -3288,8 +3488,9 @@ function applyCatalogRows(rows, extra = {}) {
     stampPriceHit(row.name, {
       at: row.at || extra.at || 0,
       cached: extra.cached != null ? extra.cached : true,
-      maxDivine: row.maxDivine,
-      maxAmount: row.maxAmount,
+      // Never restore a blended maxDivine from cache (plain + Runemastered).
+      maxDivine: replace ? row.divine : row.maxDivine,
+      maxAmount: replace ? row.amount : row.maxAmount,
       source: row.source,
     });
   }
@@ -3379,6 +3580,7 @@ function hydrateFromDump(dump, cached = true) {
   prices.error = "";
   if (Array.isArray(dump.empty)) dump.empty.forEach((name) => prices.checkedEmpty.add(name));
   applyCatalogRows(items.length ? items : tableRows, { cached });
+  collapseRuneforgedBlendedPrices();
   return true;
 }
 
@@ -3396,13 +3598,13 @@ function stampPriceHit(name, extra) {
 }
 
 function applyPriceRow(row, extra = {}) {
-  if (!row?.name) return;
-  rememberPrice(row.name, row.divine, row.listings, row.icon, row.amount, row.unit, row.source);
+  if (!row?.name || shouldSkipRuneforgedPriceRow(row, extra.siblings)) return;
+  rememberPrice(row.name, row.divine, row.listings, row.icon, row.amount, row.unit, row.source, true);
   stampPriceHit(row.name, {
     at: row.at || extra.at || 0,
     cached: extra.cached != null ? extra.cached : !!row.cached,
-    maxDivine: row.maxDivine,
-    maxAmount: row.maxAmount,
+    maxDivine: row.divine,
+    maxAmount: row.amount,
     source: row.source,
   });
 }
@@ -3501,13 +3703,15 @@ function hydratePriceCache() {
         prices.status = "ready";
         prices.error = "";
         prices.checkedEmpty = new Set(Array.isArray(dump.empty) ? dump.empty : []);
-        for (const row of items.length ? items : tableRows) applyPriceRow(row, { cached: true });
+        const sourceRows = items.length ? items : tableRows;
+        for (const row of sourceRows) applyPriceRow(row, { cached: true, siblings: sourceRows });
       } else {
         hydrateFromDump(dump, true);
       }
     }
     hydrateBossPriceCache();
     linkCatalogPrices();
+    collapseRuneforgedBlendedPrices();
     return prices.byName.size > 0;
   } catch {
     return hydrateBossPriceCache() || prices.byName.size > 0;
@@ -3580,16 +3784,14 @@ function paintPriceClock() {
   }
   maybeRefreshNinja();
   if (!el) return;
-  let text = "Check prices";
-  if (prices.status === "loading") text = "Checking…";
+  let text = ninjaLiveLabel();
+  if (prices.status === "loading") text = "live check";
   else if (prices.filling) {
     const total = prices.gapTotal || 0;
     const done = Math.min(prices.gapDone || 0, total);
     text = total ? `Boss prices ${done}/${total}` : "Checking listings…";
     if (tradeWaiting()) text += " · waiting";
-  } else if (prices.looking.size) text = prices.looking.size ? `Listings ${prices.looking.size}…` : "Checking listings…";
-  else if (prices.fetchedAt) text = (prices.cached ? "Last recorded " : "As of ") + formatHour(prices.fetchedAt);
-  else if (prices.byName.size) text = "Last recorded";
+  } else if (prices.looking.size) text = `Listings ${prices.looking.size}…`;
   if (el.textContent !== text) el.textContent = text;
 }
 
@@ -3887,13 +4089,19 @@ function tradeAliases(name) {
 
 function hitFromTables(name) {
   const want = foldKey(name).replace(/ support$/, "");
+  let fallback = null;
   for (const rows of Object.values(prices.tables || {})) {
     for (const row of rows || []) {
       if (!row?.name || !pricedHit(row)) continue;
-      if (foldKey(row.name).replace(/ support$/, "") === want) return row;
+      if (foldKey(row.name).replace(/ support$/, "") !== want) continue;
+      if (isRuneforgedBaseType(row.baseType) || isRuneforgedUniqueName(row.name)) {
+        if (!fallback) fallback = row;
+        continue;
+      }
+      return row;
     }
   }
-  return null;
+  return fallback;
 }
 
 async function lookupOnePrice(name) {
@@ -4647,7 +4855,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       mod.tier = 0;
     }
   }
-  return { mods: cleanClipboardRolls(flat, { className, props }), ravenTouched };
+  return { mods: cleanClipboardRolls(flat, { className, props, name: itemName, rarity, baseType: itemBase }), ravenTouched };
 }
 
 function parseAffixStrings(text) {
@@ -5217,6 +5425,13 @@ function formatRollNum(n, step) {
   return String(Math.round(n));
 }
 
+function formatSignedRollNum(n, step, signed) {
+  if (!Number.isFinite(n)) return "";
+  const mag = formatRollNum(Math.abs(n), step);
+  if (signed) return (n < 0 ? "-" : "+") + mag;
+  return n < 0 ? "-" + mag : mag;
+}
+
 function sliderDriver(roll) {
   const selfLo = Number.isFinite(roll?.spanLo) ? Number(roll.spanLo) : Number(roll?.lo);
   const selfHi = Number.isFinite(roll?.spanHi) ? Number(roll.spanHi) : Number(roll?.hi);
@@ -5417,27 +5632,31 @@ function overlayModTextHtml(roll) {
   const extras = Array.isArray(roll.extra) ? roll.extra : [];
   const values = [n, ...extras.map((ex) => extraLiveValue(roll, ex))];
   const rid = Number.isInteger(roll.rid) && roll.rid > 0 ? String(roll.rid) : "";
+  const step = rollUsesDecimals(roll) ? "0.1" : "1";
   const re = /([+-]?)(\d+(?:\.\d+)?)/g;
   let out = "";
   let last = 0;
   let i = 0;
   let hit;
   while (i < values.length && (hit = re.exec(text))) {
-    const shown = formatRollNum(values[i], rollUsesDecimals(roll) ? "0.1" : "1");
-    out += esc(text.slice(last, hit.index)) + esc(hit[1] || "");
+    const signed = hit[1] === "+" || hit[1] === "-";
+    const shown = formatSignedRollNum(values[i], step, signed);
+    out += esc(text.slice(last, hit.index));
     if (i === 0) {
       const lo = Number.isFinite(roll.spanLo) ? Number(roll.spanLo) : Number(roll.lo);
       const hi = Number.isFinite(roll.spanHi) ? Number(roll.spanHi) : Number(roll.hi);
       const tiers = encodeSpanTiers(parseSpanTiers(roll.spanTiers));
       const tierAttr = tiers ? ` data-span-tiers="${esc(tiers)}"` : "";
-      out += `<b data-roll-live="${esc(rid)}" data-span-lo="${lo}" data-span-hi="${hi}"${tierAttr}>${esc(shown)}</b>`;
+      const signAttr = signed ? ` data-signed="1"` : "";
+      out += `<b data-roll-live="${esc(rid)}" data-span-lo="${lo}" data-span-hi="${hi}"${tierAttr}${signAttr}>${esc(shown)}</b>`;
     } else {
       const ex = extras[i - 1];
       const elo = Number.isFinite(ex?.spanLo) ? Number(ex.spanLo) : Number(ex?.lo);
       const ehi = Number.isFinite(ex?.spanHi) ? Number(ex.spanHi) : Number(ex?.hi);
       const tiers = encodeSpanTiers(parseSpanTiers(ex?.spanTiers));
       const tierAttr = tiers ? ` data-span-tiers="${esc(tiers)}"` : "";
-      out += `<b data-roll-extra="${esc(rid)}" data-extra-lo="${elo}" data-extra-hi="${ehi}"${tierAttr}>${esc(shown)}</b>`;
+      const signAttr = signed ? ` data-signed="1"` : "";
+      out += `<b data-roll-extra="${esc(rid)}" data-extra-lo="${elo}" data-extra-hi="${ehi}"${tierAttr}${signAttr}>${esc(shown)}</b>`;
     }
     last = hit.index + hit[0].length;
     i += 1;
@@ -5553,9 +5772,10 @@ function overlayCharmHtml(log, drop) {
 
 function overlayCorruptHtml(log, drop) {
   if (/currency|gem|divination/i.test(drop?.rarity || "") || /currency|gem|divination/i.test(drop?.className || "")) return "";
-  if (drop.corrupted !== true) return "";
-  const on = searchCorrupted(drop) !== false;
-  return `<button type="button" class="price-overlay-corrupt${on ? " is-on" : ""}" data-pick-corrupt="${esc(drop.id)}" data-pick-log="${esc(log.id)}">Corrupted</button>`;
+  if (typeof drop?.corrupted !== "boolean") return "";
+  const on = searchCorrupted(drop) === true;
+  const label = on ? "Corrupted" : "Not corrupted";
+  return `<button type="button" class="price-overlay-corrupt${on ? " is-on" : ""}" data-pick-corrupt="${esc(drop.id)}" data-pick-log="${esc(log.id)}" title="${on ? "Searching corrupted" : "Searching not corrupted"}">${label}</button>`;
 }
 
 function overlayUnidHtml(log, drop) {
@@ -6529,7 +6749,15 @@ function setDropDpsType(log, drop, tag) {
 }
 
 function overlayBaseHtml(log, drop) {
-  const base = drop.baseType || drop.className || "";
+  let base = drop.baseType || drop.className || "";
+  if (!base) return "";
+  if (namesMatch(base, drop.name)) {
+    if (overlayUsesExchange(drop) && drop.className && !namesMatch(drop.className, drop.name)) {
+      base = drop.className;
+    } else {
+      return "";
+    }
+  }
   if (!canRelaxBase(drop)) return `<div class="item-tip-base">${esc(base)}</div>`;
   const on = searchExactBase(drop);
   const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
@@ -6963,7 +7191,7 @@ function priceOverlayHtml(log, drop) {
     const live = rollHasAffixTiers(roll) && Number(roll.tier) > 0
       ? rollKindLabel(roll, rollTierAtValue(roll, overlaySliderValue(roll)))
       : tag;
-    return `<div class="price-overlay-mod-wrap${on}${ghost}"><div class="price-overlay-mod-line"><button type="button" class="price-overlay-q-toggle" ${pickAttrs(roll)} title="${esc(hint + roll.text)}"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod${kind}"><span class="price-overlay-mod-main"><span class="price-overlay-mod-text"${weaponDpsLineAttrs(roll)}>${overlayModTextHtml(roll)}</span>${pillHtml(live, kind, roll)}</span>${rollFlatAvgInputHtml(roll)}</div></div>${rollSpanHtml(roll)}</div>`;
+    return `<div class="price-overlay-mod-wrap${on}${ghost}"><div class="price-overlay-mod-line"><button type="button" class="price-overlay-q-toggle" ${pickAttrs(roll)} title="${esc(hint + roll.text)}"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod${kind}"><span class="price-overlay-mod-main"><span class="price-overlay-mod-text"${weaponDpsLineAttrs(roll)}>${overlayModTextHtml(roll)}</span></span><span class="price-overlay-mod-trail">${rollFlatAvgInputHtml(roll)}${pillHtml(live, kind, roll)}</span></div></div>${rollSpanHtml(roll)}</div>`;
   }
   function modButtons(list) {
     return affixGroups(list)
@@ -6984,7 +7212,7 @@ function priceOverlayHtml(log, drop) {
             return `<div class="price-overlay-hybrid-row" data-hybrid-rid="${esc(String(roll.rid || ""))}"><span class="price-overlay-hybrid-line"${weaponDpsLineAttrs(roll)}>${overlayModTextHtml(roll)}</span>${span}</div>`;
           })
           .join("");
-        return `<div class="price-overlay-mod-wrap${on}"><div class="price-overlay-mod-line"><button type="button" class="price-overlay-q-toggle" ${pickAttrs(sample)} title="${esc(hint)}"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod is-hybrid${kind}"><span class="price-overlay-mod-main"><div class="price-overlay-hybrid-rows">${rows}</div>${pillHtml(liveTag, kind, sample)}</span></div></div></div>`;
+        return `<div class="price-overlay-mod-wrap${on}"><div class="price-overlay-mod-line"><button type="button" class="price-overlay-q-toggle" ${pickAttrs(sample)} title="${esc(hint)}"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod is-hybrid${kind}"><span class="price-overlay-mod-main"><div class="price-overlay-hybrid-rows">${rows}</div></span><span class="price-overlay-mod-trail">${pillHtml(liveTag, kind, sample)}</span></div></div></div>`;
       })
       .join("");
   }
@@ -6997,29 +7225,37 @@ function priceOverlayHtml(log, drop) {
   const pickHtml = overlayUniquePickHtml(log, drop);
   const mods = pickHtml || (listed.length ? `<div class="price-overlay-mods">${modButtons(listed)}</div>` : "");
   const props = overlayPropsHtml(log, drop);
-  const foot = pickHtml
-    ? ""
-    : `<div class="price-overlay-foot">
-        ${charmExtra}
-        ${overlayExchangeHaveHtml(log, drop)}
-        <div class="price-overlay-row"><span>PoE 2 trade</span><span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span></div>
-        ${overlayOffersHtml(drop)}
-      </div>`;
+  const offers = pickHtml ? "" : overlayOffersHtml(drop);
+  const hasOffers = !!offers;
+  const tradeBtns = `<span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span>`;
+  const exchange = overlayExchangeHaveHtml(log, drop);
+  const footBits = [charmExtra, exchange, hasOffers ? "" : `<div class="price-overlay-row price-overlay-trade">${tradeBtns}</div>`]
+    .filter(Boolean)
+    .join("");
+  const foot = pickHtml || !footBits ? "" : `<div class="price-overlay-foot">${footBits}</div>`;
+  const side = hasOffers
+    ? `<aside class="price-overlay-side"><div class="price-overlay-side-head"><span class="price-overlay-side-label">PoE 2 trade</span>${tradeBtns}</div>${offers}</aside>`
+    : "";
   return `
-    <article class="price-overlay-card item-tip-card ${esc(kindClass)}"${weaponDpsCardAttrs(drop)}>
+    <article class="price-overlay-card item-tip-card ${esc(kindClass)}${hasOffers ? " has-offers" : ""}"${weaponDpsCardAttrs(drop)}>
       ${overlayBarHtml()}
-      <div class="price-overlay-body">
-      <div class="item-tip-head">
-        ${dropIconHtml(drop, "lg")}
-        <div>
-          <div class="item-tip-name">${esc(drop.name)}</div>
-          ${overlayBaseHtml(log, drop)}
+      <div class="price-overlay-shell">
+        <div class="price-overlay-main">
+          <div class="price-overlay-body">
+          <div class="item-tip-head">
+            ${dropIconHtml(drop, "lg")}
+            <div>
+              <div class="item-tip-name">${esc(drop.name)}</div>
+              ${overlayBaseHtml(log, drop)}
+            </div>
+            ${overlayFlagsHtml(log, drop)}
+          </div>
+          ${props}
+          ${mods}
+          ${foot}
+          </div>
         </div>
-        ${overlayFlagsHtml(log, drop)}
-      </div>
-      ${props}
-      ${mods}
-      ${foot}
+        ${side}
       </div>
     </article>`;
 }
@@ -7292,9 +7528,11 @@ function paintOverlaySpanLive(input) {
     const wrap = input.closest(".price-overlay-mod-wrap");
     if (wrap) {
       wrap.classList.add("is-on");
-      const shownLive = input.dataset.spanDec === "1" ? String(Math.round(value * 10) / 10) : String(Math.round(value));
       for (const el of wrap.querySelectorAll('[data-roll-live="' + rid.replace(/"/g, "") + '"]')) {
-        el.textContent = shownLive;
+        const signed = el.dataset.signed === "1";
+        const mag =
+          input.dataset.spanDec === "1" ? String(Math.round(Math.abs(value) * 10) / 10) : String(Math.round(Math.abs(value)));
+        el.textContent = signed ? (value < 0 ? "-" : "+") + mag : value < 0 ? "-" + mag : mag;
       }
     }
     return;
@@ -7313,23 +7551,27 @@ function paintOverlaySpanLive(input) {
   }
   const scope = hybridRow || wrap;
   const step = input.step === "0.1" ? "0.1" : "1";
-  const shown = step === "0.1" ? String(Math.round(value * 10) / 10) : String(Math.round(value));
+  const shown = formatSignedRollNum(value, step, false);
   const driverTiers = parseSpanTiers(input.dataset.spanTiers);
   const divs = Number(input.dataset.spanDivs);
   const u = Number.isFinite(min) && Number.isFinite(max) && max > min ? (value - min) / (max - min) : 0;
-  function showAt(n, lo, hi) {
-    if (String(lo).includes(".") || String(hi).includes(".")) return String(Math.round(n * 10) / 10);
-    return String(Math.round(n));
+  function showAt(n, lo, hi, signed) {
+    return formatSignedRollNum(
+      n,
+      String(lo).includes(".") || String(hi).includes(".") ? "0.1" : "1",
+      !!signed
+    );
   }
   function mapped(el, elo, ehi) {
     const lineTiers = parseSpanTiers(el.dataset.spanTiers);
+    const signed = el.dataset.signed === "1";
     if (divs > 1 && lineTiers.length) {
       const n = divToDamage(lineTiers, value);
-      if (Number.isFinite(n)) return showAt(n, elo, ehi);
+      if (Number.isFinite(n)) return showAt(n, elo, ehi, signed);
     }
     const n = mapByTier(driverTiers, value, lineTiers);
-    if (Number.isFinite(n)) return showAt(n, elo, ehi);
-    if (ehi > elo) return showAt(elo + u * (ehi - elo), elo, ehi);
+    if (Number.isFinite(n)) return showAt(n, elo, ehi, signed);
+    if (ehi > elo) return showAt(elo + u * (ehi - elo), elo, ehi, signed);
     return "";
   }
   for (const el of scope ? scope.querySelectorAll("[data-roll-live]") : []) {
@@ -7337,14 +7579,16 @@ function paintOverlaySpanLive(input) {
     const ehi = Number(el.dataset.spanHi);
     const text = mapped(el, elo, ehi);
     if (text) el.textContent = text;
-    else if (el.getAttribute("data-roll-live") === rid) el.textContent = shown;
+    else if (el.getAttribute("data-roll-live") === rid) {
+      el.textContent = formatSignedRollNum(value, step, el.dataset.signed === "1");
+    }
   }
   for (const el of overlayLiveEl(scope, "", true)) {
     const elo = Number(el.dataset.extraLo);
     const ehi = Number(el.dataset.extraHi);
     const text = mapped(el, elo, ehi);
     if (text) el.textContent = text;
-    else if (ehi > elo) el.textContent = showAt(elo + u * (ehi - elo), elo, ehi);
+    else if (ehi > elo) el.textContent = showAt(elo + u * (ehi - elo), elo, ehi, el.dataset.signed === "1");
   }
   const em = host.querySelector("em");
   if (em) em.textContent = shown;
@@ -7422,11 +7666,18 @@ function rollChipsHtml(drop, logId) {
       ? `<button type="button" class="roll-chip is-flag is-unid${searchUnidentified(drop) !== false ? " is-on" : ""}" data-pick-unid="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${searchUnidentified(drop) !== false ? "Searching unidentified" : "Searching identified"}">${searchUnidentified(drop) !== false ? "Unidentified" : "Identified"}</button>`
       : `<span class="roll-chip is-flag is-unid is-on">Unidentified</span>`
     : "";
-  const showFlag = drop && !Array.isArray(drop) && drop.corrupted === true;
-  const flag = showFlag
+  const showCorrupt =
+    drop &&
+    !Array.isArray(drop) &&
+    typeof drop.corrupted === "boolean" &&
+    !/currency|gem|divination/i.test(drop.rarity || "") &&
+    !/currency|gem|divination/i.test(drop.className || "");
+  const corruptOn = showCorrupt && searchCorrupted(drop) === true;
+  const corruptLabel = corruptOn ? "Corrupted" : "Not corrupted";
+  const flag = showCorrupt
     ? canPick
-      ? `<button type="button" class="roll-chip is-flag${searchCorrupted(drop) !== false ? " is-on" : ""}" data-pick-corrupt="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${searchCorrupted(drop) !== false ? "Searching corrupted" : "Searching not corrupted"}">Corrupted</button>`
-      : `<span class="roll-chip is-flag is-on">Corrupted</span>`
+      ? `<button type="button" class="roll-chip is-flag${corruptOn ? " is-on" : ""}" data-pick-corrupt="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${corruptOn ? "Searching corrupted" : "Searching not corrupted"}">${corruptLabel}</button>`
+      : `<span class="roll-chip is-flag${corruptOn ? " is-on" : ""}">${corruptLabel}</span>`
     : "";
   if (!rolls.length && !flag && !ravenFlag && !unidFlag) return "";
   return `<div class="roll-chips">${ravenFlag}${unidFlag}${flag}${rolls
@@ -7705,27 +7956,6 @@ function renderDash() {
     }
   }
   const topLoot = [...tally.values()].sort((a, b) => b.divine - a.divine || b.qty - a.qty).slice(0, 8);
-  const ninjaNote =
-    prices.status === "ready"
-      ? `Prices · ${esc(prices.league)} · ${itemIconHtml(currencyNameForUnit(convertMain()), "xs")}1${unitShort(convertMain())} = ${
-          itemIconHtml(currencyNameForUnit(nextConvertUnit(convertMain(), 1)), "xs")
-        }${esc(
-          formatAmount(
-            amountFromDivine(amountInDivine(1, convertMain()), nextConvertUnit(convertMain(), 1)),
-            nextConvertUnit(convertMain(), 1)
-          )
-        )} · ${
-          prices.cached ? "last recorded " : ""
-        }${esc(formatHour(prices.fetchedAt))}`
-      : prices.status === "loading" && prices.byName.size
-        ? "Updating last recorded prices…"
-        : prices.status === "loading"
-          ? "Loading prices…"
-          : prices.status === "error"
-            ? `Prices unavailable${prices.error ? " — " + prices.error : ""}`
-            : prices.byName.size
-              ? "Last recorded prices"
-              : "Fetching prices…";
   const recent = state.logs.slice(0, 8);
   const onKill = new Set((liveForFarm?.drops || []).map((drop) => drop.uniqueId || drop.name));
   const progress = uniqueProgress(farm);
@@ -7733,10 +7963,10 @@ function renderDash() {
   const dropTiles = (farm?.uniques || [])
     .map((item) => {
       const qty = counts[item.id] || 0;
-      return `<button class="drop-tile${onKill.has(item.id) ? " is-on-kill" : ""}" data-farm-drop="${esc(item.id)}" ${itemHoverAttr(item.name)} type="button">
+      return `<button class="drop-tile${onKill.has(item.id) ? " is-on-kill" : ""}" data-farm-drop="${esc(item.id)}" ${itemHoverAttr(item.name)} type="button" title="${esc(item.name)}">
         ${itemIconHtml(item.name, "lg")}
         <span class="drop-copy">
-          <span class="unique-name">${esc(item.name)}</span>
+          <span class="unique-name" title="${esc(item.name)}">${esc(item.name)}</span>
           <span class="drop-meta">${qty} · ${esc(formatPct(hits[item.id] || 0, kills))} ${priceChip(item.name)}</span>
         </span>
       </button>`;
@@ -7794,7 +8024,6 @@ function renderDash() {
           </div>
         </div>
       </article>
-      <p class="muted ninja-note">${ninjaNote}</p>
       <div class="dash-grid">
         <article class="panel">
           <h3>Most farmed</h3>
@@ -9789,14 +10018,42 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+function isCurrencyTipKind(lore) {
+  const rarity = String(lore?.rarity || "");
+  const base = String(lore?.baseType || "");
+  return /currency|omen|socketable/i.test(rarity) || /currency|omen|socketable/i.test(base);
+}
+
+function isCurrencyTipNoise(text) {
+  const t = String(text || "").trim();
+  if (!t) return true;
+  if (/you've found .+ pin!?$/i.test(t)) return true;
+  if (/while this item is active/i.test(t)) return true;
+  if (/^shift click to unstack\.?$/i.test(t)) return true;
+  return false;
+}
+
+function tipBaseLabel(lore, name) {
+  const base = cleanMod(lore?.baseType || "");
+  const rarity = cleanMod(lore?.rarity || "");
+  if (!base) return rarity && !namesMatch(rarity, name) ? rarity : "";
+  if (namesMatch(base, name)) return rarity && !namesMatch(rarity, name) && !namesMatch(rarity, base) ? rarity : "";
+  return base;
+}
+
 function itemTipHtml(name, lore, loading) {
   const note = catalogNoteFor(name);
+  const currency = isCurrencyTipKind(lore);
+  const baseLabel = tipBaseLabel(lore, name);
   const seen = new Set();
+  if (baseLabel) seen.add(modFamily(baseLabel));
+  if (name) seen.add(modFamily(name));
   function renderLines(list, cls) {
     return (list || [])
       .map((text) => cleanMod(text))
       .filter((text) => {
         if (!text) return false;
+        if (currency && isCurrencyTipNoise(text)) return false;
         const key = modFamily(text);
         if (seen.has(key)) return false;
         seen.add(key);
@@ -9805,19 +10062,23 @@ function itemTipHtml(name, lore, loading) {
       .map((text) => `<div class="${cls}">${esc(text)}</div>`)
       .join("");
   }
-  const props = renderLines((lore?.properties || []).slice(0, 4), "item-tip-prop");
+  const props = renderLines((lore?.properties || []).slice(0, currency ? 6 : 4), "item-tip-prop");
   const implicits = renderLines(lore?.implicits, "item-tip-mod implicit");
-  const explicits = renderLines(lore?.explicits, "item-tip-mod");
+  const explicits = renderLines(currency ? (lore?.explicits || []).slice(0, 3) : lore?.explicits, "item-tip-mod");
   const kind = (lore?.rarity || "Unique").toLowerCase();
-  const flavour = lore?.flavour || "";
-  const descr = lore?.descr && flavour && lore.descr.toLowerCase() === flavour.toLowerCase() ? "" : lore?.descr || "";
+  const flavour = currency ? "" : lore?.flavour || "";
+  let descr = lore?.descr && flavour && lore.descr.toLowerCase() === flavour.toLowerCase() ? "" : lore?.descr || "";
+  if (currency && isCurrencyTipNoise(descr)) descr = "";
+  if (currency && descr && /right click this item then left click/i.test(descr)) {
+    descr = descr.replace(/\s*Shift click to unstack\.?/i, "").trim();
+  }
   const empty = !implicits && !explicits && !descr && !flavour && !props;
-  return `<div class="item-tip-card ${esc(kind)}">
+  return `<div class="item-tip-card ${esc(kind)}${currency ? " currency" : ""}">
     <div class="item-tip-head">
       ${itemIconHtml(name, "lg")}
       <div>
         <div class="item-tip-name">${esc(lore?.name || name)}</div>
-        <div class="item-tip-base">${esc(lore?.baseType || lore?.rarity || "")}</div>
+        ${baseLabel ? `<div class="item-tip-base">${esc(baseLabel)}</div>` : ""}
       </div>
     </div>
     ${props}

@@ -356,7 +356,7 @@ sealed class TrackerWindow : Form
     Dictionary<string, string>? ExchangeTags;
     DateTime ExchangeTagsAt;
     static readonly SemaphoreSlim SlotLock = new(1, 1);
-    const double RateDesyncSec = 0.8;
+    const double RateDesyncSec = 2;
 
     sealed class SlidingLimit
     {
@@ -408,7 +408,7 @@ sealed class TrackerWindow : Form
         public static TradeLimiter Default()
         {
             var limiter = new TradeLimiter();
-            limiter.Limits.Add(new SlidingLimit(7, 15));
+            limiter.Limits.Add(new SlidingLimit(1, 5));
             return limiter;
         }
 
@@ -428,13 +428,20 @@ sealed class TrackerWindow : Form
         public (int hits, int max, int window) Snapshot()
         {
             SlidingLimit? tight = null;
+            SlidingLimit? minute = null;
             foreach (var limit in Limits)
             {
                 limit.Prune();
                 if (tight is null || limit.WindowSec < tight.WindowSec) tight = limit;
+                // Prefer the ~60s bucket for the chip (GGG search often exposes 15:60).
+                if (limit.WindowSec >= 50 && limit.WindowSec <= 70)
+                {
+                    if (minute is null || limit.Max < minute.Max) minute = limit;
+                }
             }
-            if (tight is null) return (0, 7, 15);
-            return (tight.Used, tight.Max, Math.Max(1, (int)Math.Round(tight.WindowSec)));
+            var pick = minute ?? tight;
+            if (pick is null) return (0, 1, 5);
+            return (pick.Used, pick.Max, Math.Max(1, (int)Math.Round(pick.WindowSec)));
         }
     }
 
@@ -2155,11 +2162,21 @@ sealed class TrackerWindow : Form
 
     static void AdjustLimiter(TradeLimiter limiter, HttpResponseMessage res)
     {
-        string Header(string name) =>
-            res.Headers.TryGetValues(name, out var values) ? string.Join(",", values) : "";
+        string Header(string name)
+        {
+            if (res.Headers.TryGetValues(name, out var values))
+                return string.Join(",", values);
+            foreach (var header in res.Headers)
+            {
+                if (string.Equals(header.Key, name, StringComparison.OrdinalIgnoreCase))
+                    return string.Join(",", header.Value);
+            }
+            return "";
+        }
 
         var retry = RetryAfterMs(res) ?? 0;
-        var rules = Header("x-rate-limit-rules").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var rulesRaw = Header("x-rate-limit-rules");
+        var rules = rulesRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (rules.Length == 0)
         {
             if (retry > 0) limiter.PenaltyUntil = DateTime.UtcNow.AddMilliseconds(retry);
@@ -2171,6 +2188,12 @@ sealed class TrackerWindow : Form
         {
             var limits = Header("x-rate-limit-" + rule).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             var states = Header("x-rate-limit-" + rule + "-state").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (limits.Length == 0)
+            {
+                // Rule names are usually Ip/Account; retry lowercase once like GGG docs.
+                limits = Header("x-rate-limit-" + rule.ToLowerInvariant()).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                states = Header("x-rate-limit-" + rule.ToLowerInvariant() + "-state").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            }
             for (var i = 0; i < limits.Length; i++)
             {
                 var capParts = limits[i].Split(':');
@@ -2189,10 +2212,8 @@ sealed class TrackerWindow : Form
             return;
         }
 
+        // Drop bootstrap / stale buckets (EE2 destroy), then add/sync server rules.
         limiter.Limits.RemoveAll(limit => !incoming.Any(row => limit.Same(row.max, row.window)));
-        if (limiter.Limits.Count == 0)
-            limiter.Limits.Add(new SlidingLimit(incoming[0].max, incoming[0].window));
-
         foreach (var row in incoming)
         {
             var limit = limiter.Limits.Find(item => item.Same(row.max, row.window));
@@ -2205,6 +2226,8 @@ sealed class TrackerWindow : Form
             if (row.penalty > 0)
                 limiter.PenaltyUntil = DateTime.UtcNow.AddSeconds(row.penalty);
         }
+        if (limiter.Limits.Count == 0)
+            limiter.Limits.Add(new SlidingLimit(incoming[0].max, incoming[0].window));
         if (retry > 0)
             limiter.PenaltyUntil = DateTime.UtcNow.AddMilliseconds(Math.Max(retry, limiter.Limited ? (limiter.PenaltyUntil - DateTime.UtcNow).TotalMilliseconds : 0));
     }
@@ -2887,10 +2910,15 @@ sealed class PriceOverlayForm : Form
     bool _allowActivate;
     int _cssW = 428;
     int _cssH = 220;
+    int _appliedW;
+    int _appliedH;
     string? _pendingKind;
     string? _pendingHtml;
     string? _pendingVars;
     string? _pendingNotice;
+
+    const int OverlayNarrowCssW = 424;
+    const int OverlayWideCssW = 724; // main 420 + side 300 + chrome
 
     public PriceOverlayForm(Action<string> forward)
     {
@@ -2903,6 +2931,21 @@ sealed class PriceOverlayForm : Form
         Height = 220;
         BackColor = Color.FromArgb(18, 14, 10);
         Controls.Add(_web);
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        // Kill DWM size/move fades so offers panel snaps instead of growing.
+        try
+        {
+            var disable = 1;
+            _ = DwmSetWindowAttribute(Handle, 3, ref disable, sizeof(int)); // DWMWA_TRANSITIONS_FORCEDISABLED
+        }
+        catch
+        {
+            /* older Windows */
+        }
     }
 
     protected override bool ShowWithoutActivation => !_allowActivate;
@@ -2941,6 +2984,9 @@ sealed class PriceOverlayForm : Form
         }
         base.WndProc(ref m);
     }
+
+    [DllImport("dwmapi.dll")]
+    static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
 
     [DllImport("user32.dll")]
     static extern bool GetCursorPos(out NativePoint pt);
@@ -3022,7 +3068,13 @@ sealed class PriceOverlayForm : Form
         _pendingHtml = html;
         _pendingVars = vars;
         _pendingNotice = null;
-        if (fresh || !Visible) PlaceNearCursor();
+        SnapWidthForHtml(html);
+        if (fresh || !Visible)
+        {
+            ApplySize();
+            PlaceNearCursor();
+        }
+        else ApplySize();
         Peek();
         FlushPending();
     }
@@ -3033,7 +3085,12 @@ sealed class PriceOverlayForm : Form
         _pendingNotice = text;
         _pendingVars = vars;
         _pendingHtml = null;
-        if (!Visible) PlaceNearCursor();
+        _cssW = OverlayNarrowCssW;
+        if (!Visible)
+        {
+            ApplySize();
+            PlaceNearCursor();
+        }
         Peek();
         FlushPending();
     }
@@ -3043,6 +3100,14 @@ sealed class PriceOverlayForm : Form
         _pendingKind = null;
         _allowActivate = false;
         Hide();
+    }
+
+    void SnapWidthForHtml(string? html)
+    {
+        if (string.IsNullOrEmpty(html)) return;
+        _cssW = html.Contains("has-offers", StringComparison.Ordinal)
+            ? OverlayWideCssW
+            : OverlayNarrowCssW;
     }
 
     void FlushPending()
@@ -3072,28 +3137,36 @@ sealed class PriceOverlayForm : Form
 
     void ApplySize(int dpi = 0)
     {
+        if (!IsHandleCreated) return;
         var scale = (dpi > 0 ? dpi : DeviceDpi) / 96.0;
         var screen = Screen.FromControl(this).WorkingArea;
         var minW = (int)Math.Ceiling(280 * scale);
         var minH = (int)Math.Ceiling(90 * scale);
-        Width = Math.Clamp((int)Math.Ceiling(_cssW * scale), minW, Math.Max(minW, screen.Width / 2));
-        Height = Math.Clamp((int)Math.Ceiling(_cssH * scale), minH, Math.Max(minH, (int)(screen.Height * 0.92)));
-        var x = Math.Clamp(Location.X, screen.Left, Math.Max(screen.Left, screen.Right - Width));
-        var y = Math.Clamp(Location.Y, screen.Top, Math.Max(screen.Top, screen.Bottom - Height));
-        if (x != Location.X || y != Location.Y) Location = new Point(x, y);
+        var w = Math.Clamp((int)Math.Ceiling(_cssW * scale), minW, Math.Max(minW, screen.Width / 2));
+        var h = Math.Clamp((int)Math.Ceiling(_cssH * scale), minH, Math.Max(minH, (int)(screen.Height * 0.92)));
+        var x = Math.Clamp(Location.X, screen.Left, Math.Max(screen.Left, screen.Right - w));
+        var y = Math.Clamp(Location.Y, screen.Top, Math.Max(screen.Top, screen.Bottom - h));
+        if (w == _appliedW && h == _appliedH && x == Location.X && y == Location.Y) return;
+        _appliedW = w;
+        _appliedH = h;
+        // One native snap (DWM transitions disabled on this HWND).
+        SetWindowPos(Handle, HwndTopmost, x, y, w, h, SwpNoActivate);
     }
 
     void PlaceNearCursor()
     {
         GetCursorPos(out var pt);
         var screen = Screen.FromPoint(new Point(pt.X, pt.Y)).WorkingArea;
+        var w = _appliedW > 0 ? _appliedW : Width;
+        var h = _appliedH > 0 ? _appliedH : Height;
         var x = pt.X + 28;
         var y = pt.Y - 36;
-        if (x + Width > screen.Right) x = pt.X - Width - 20;
-        if (y + Height > screen.Bottom) y = screen.Bottom - Height;
+        if (x + w > screen.Right) x = pt.X - w - 20;
+        if (y + h > screen.Bottom) y = screen.Bottom - h;
         if (x < screen.Left) x = screen.Left;
         if (y < screen.Top) y = screen.Top;
-        Location = new Point(x, y);
+        if (x == Location.X && y == Location.Y) return;
+        SetWindowPos(Handle, HwndTopmost, x, y, 0, 0, SwpNoActivate | SwpNoSize);
     }
 
     void OnMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -3118,9 +3191,11 @@ sealed class PriceOverlayForm : Form
                 void Move()
                 {
                     var screen = Screen.FromControl(this).WorkingArea;
-                    var x = Math.Clamp(Location.X + dx, screen.Left, Math.Max(screen.Left, screen.Right - Width));
-                    var y = Math.Clamp(Location.Y + dy, screen.Top, Math.Max(screen.Top, screen.Bottom - Height));
-                    Location = new Point(x, y);
+                    var w = _appliedW > 0 ? _appliedW : Width;
+                    var h = _appliedH > 0 ? _appliedH : Height;
+                    var x = Math.Clamp(Location.X + dx, screen.Left, Math.Max(screen.Left, screen.Right - w));
+                    var y = Math.Clamp(Location.Y + dy, screen.Top, Math.Max(screen.Top, screen.Bottom - h));
+                    SetWindowPos(Handle, HwndTopmost, x, y, 0, 0, SwpNoActivate | SwpNoSize);
                 }
                 if (InvokeRequired) BeginInvoke(Move);
                 else Move();

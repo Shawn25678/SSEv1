@@ -269,6 +269,30 @@ body.view-econ .econ .panel {
   border-bottom: 1px solid var(--line);
 }
 
+.top-log-link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0 0 2px;
+  margin: 0 auto 0 0;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  align-self: flex-end;
+}
+
+.top-log-link:hover {
+  color: var(--gold-2);
+}
+
+.top-log-link.is-active {
+  color: var(--gold);
+}
+
 .brand {
   display: flex;
   gap: 14px;
@@ -436,6 +460,7 @@ h1 {
   gap: 12px;
   align-items: flex-end;
   justify-content: flex-end;
+  width: 100%;
 }
 
 .league-field {
@@ -741,7 +766,7 @@ select:focus {
 
 .rate-clock {
   cursor: default;
-  min-width: 7.5rem;
+  min-width: 9.5rem;
 }
 
 .rate-clock[hidden] {
@@ -1637,7 +1662,7 @@ button.price-chip {
 
 .drop-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
   gap: 8px;
   align-items: stretch;
 }
@@ -1659,13 +1684,13 @@ button.price-chip {
 
 @media (max-width: 1100px) {
   .drop-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
   }
 }
 
 @media (max-width: 720px) {
   .drop-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
   }
 
   .farm-foot-end {
@@ -1675,14 +1700,14 @@ button.price-chip {
 
 .drop-tile {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr);
+  grid-template-columns: 40px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   width: 100%;
   height: 100%;
   text-align: left;
-  padding: 12px 14px;
+  padding: 8px 9px;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--panel);
@@ -1693,19 +1718,27 @@ button.price-chip {
 
 .drop-tile .item-icon.lg {
   grid-row: 1 / span 2;
+  width: 40px;
+  height: 40px;
 }
 
 .drop-copy {
   display: grid;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
 }
 
 .drop-tile .unique-name {
-  display: block;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
+  font-size: 0.84rem;
+  line-height: 1.22;
+  font-weight: 500;
 }
 
 .drop-tile .drop-meta {
@@ -2208,13 +2241,6 @@ button.roll-chip:hover {
   cursor: pointer;
 }
 
-.ninja-note {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-
 .econ {
   display: grid;
   gap: 10px;
@@ -2504,10 +2530,14 @@ button.roll-chip:hover {
     grid-template-columns: 1fr 1fr;
   }
 
-  .top,
   .top-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .top-log-link {
+    align-self: flex-start;
+    margin-right: 0;
   }
 
   .unique-row {
@@ -2754,6 +2784,67 @@ button.roll-chip:hover {
   user-select: none;
 }
 
+.price-overlay-card.has-offers {
+  width: 720px;
+  max-width: min(740px, calc(100vw - 32px));
+}
+
+.price-overlay-shell {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.price-overlay-main {
+  flex: 0 1 420px;
+  width: 420px;
+  max-width: 420px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.price-overlay-side {
+  flex: 0 0 300px;
+  width: 300px;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 88%, #000);
+}
+
+.price-overlay-side-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.price-overlay-side-label {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.price-overlay-side .price-overlay-offers {
+  flex: 1 1 auto;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  overflow-y: auto;
+}
+
 .price-overlay-card.item-tip-card {
   display: flex;
   flex-direction: column;
@@ -2935,7 +3026,8 @@ button.roll-chip:hover {
 
 .price-overlay-sec-label {
   color: var(--gold-2);
-  font-size: 0.68rem;
+  font-size: 0.74rem;
+  font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -2964,13 +3056,15 @@ button.roll-chip:hover {
 .price-overlay-corrupt {
   align-self: start;
   margin: 0;
-  padding: 2px 0 0;
+  padding: 0;
   border: 0;
   background: transparent;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--ink) 78%, var(--bg) 22%);
   font: inherit;
-  font-size: 0.82rem;
-  line-height: 1.25;
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
   text-align: right;
   white-space: nowrap;
   cursor: pointer;
@@ -2980,19 +3074,20 @@ button.roll-chip:hover {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 1px;
+  gap: 0;
+  max-width: 7.5rem;
 }
 
 .price-overlay-raven {
   align-self: start;
   margin: 0;
-  padding: 2px 0 0;
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 0.82rem;
-  line-height: 1.25;
+  font-size: 0.7rem;
+  line-height: 1.15;
   text-align: right;
   white-space: nowrap;
   cursor: pointer;
@@ -3001,13 +3096,13 @@ button.roll-chip:hover {
 .price-overlay-unid {
   align-self: start;
   margin: 0;
-  padding: 2px 0 0;
+  padding: 0;
   border: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 0.82rem;
-  line-height: 1.25;
+  font-size: 0.7rem;
+  line-height: 1.15;
   text-align: right;
   white-space: nowrap;
   cursor: pointer;
@@ -3017,7 +3112,7 @@ button.roll-chip:hover {
   color: color-mix(in srgb, var(--citadel) 35%, var(--ink) 65%);
   font-weight: 700;
   font-style: normal;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
 }
 
@@ -3028,10 +3123,10 @@ button.roll-chip:hover {
 }
 
 .price-overlay-corrupt.is-on {
-  color: #e24a3a;
-  font-weight: 700;
+  color: #f05a4a;
+  font-weight: 750;
   font-style: normal;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
 }
 
@@ -3039,7 +3134,7 @@ button.roll-chip:hover {
   color: #7aa2ff;
   font-weight: 700;
   font-style: normal;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
   text-transform: uppercase;
 }
 
@@ -3110,8 +3205,8 @@ button.roll-chip:hover {
   grid-template-columns: max-content max-content;
   justify-content: start;
   align-items: center;
-  column-gap: 14px;
-  row-gap: 6px;
+  column-gap: 16px;
+  row-gap: 7px;
   padding: 8px 4px 4px;
 }
 
@@ -3119,7 +3214,7 @@ button.roll-chip:hover {
   width: auto;
   min-width: 0;
   justify-content: flex-start;
-  gap: 4px;
+  gap: 6px;
   padding: 0;
 }
 
@@ -3134,23 +3229,24 @@ button.roll-chip:hover {
 }
 
 .price-overlay-meta .price-overlay-prop-num.is-sockets {
-  grid-column: 1 / -1;
+  grid-column: 1;
+  grid-row: 2;
   justify-content: flex-start;
-  gap: 8px;
+  gap: 6px;
 }
 
 .price-overlay-meta .price-overlay-prop-num.is-meta .price-overlay-q-toggle {
   flex: 0 0 auto;
-  gap: 5px;
+  gap: 6px;
   min-height: 24px;
   padding: 0;
-  font-size: 0.9rem;
-  font-weight: 650;
+  font-size: 0.96rem;
+  font-weight: 600;
 }
 
 .price-overlay-meta .price-overlay-prop-num.is-meta .price-overlay-q-toggle span {
   white-space: nowrap;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .price-overlay-meta .price-overlay-dps-box {
@@ -3163,7 +3259,7 @@ button.roll-chip:hover {
 .price-overlay-meta .price-overlay-q-input {
   width: 2.85em;
   padding: 2px 5px;
-  font-size: 0.9rem;
+  font-size: 0.96rem;
 }
 
 .price-overlay-socket-chips {
@@ -3194,8 +3290,8 @@ button.roll-chip:hover {
   background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 0.88rem;
-  font-weight: 550;
+  font-size: 0.94rem;
+  font-weight: 600;
   line-height: 1.35;
   text-align: left;
   cursor: pointer;
@@ -3442,7 +3538,7 @@ button.roll-chip:hover {
 .price-overlay-mod-wrap {
   display: grid;
   gap: 2px;
-  padding: 6px 4px 8px;
+  padding: 5px 4px 6px;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
 }
 
@@ -3493,24 +3589,38 @@ button.roll-chip:hover {
   border-radius: 0;
   color: #7aa2ff;
   font: inherit;
-  font-size: 0.88rem;
+  font-size: 0.94rem;
+  font-weight: 600;
   line-height: 1.3;
   padding: 0;
   cursor: default;
 }
 
-.price-overlay-mod > .price-overlay-q-edit {
+.price-overlay-mod > .price-overlay-q-edit,
+.price-overlay-mod-trail {
   flex: none;
   margin-top: 1px;
 }
 
+.price-overlay-mod-trail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  min-width: 0;
+}
+
+.price-overlay-mod-trail .price-overlay-q-edit {
+  margin-top: 0;
+}
+
 .price-overlay-mod-main {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px 8px;
   min-width: 0;
-  width: 100%;
+  flex: 1 1 auto;
 }
 
 .price-overlay-mod-text,
@@ -3581,15 +3691,16 @@ button.roll-chip:hover {
 .price-overlay-pill {
   display: inline-flex;
   align-items: center;
-  margin: 0 0 0 auto;
-  padding: 1px 5px;
+  margin: 0;
+  padding: 0 1px;
   border-radius: 3px;
-  font-size: 0.62rem;
+  font-size: 0.7rem;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  line-height: 1.2;
+  letter-spacing: 0.04em;
+  line-height: 1.15;
   text-transform: uppercase;
   color: #9aa3b5;
+  white-space: nowrap;
 }
 
 .price-overlay-mod.is-enchant,
@@ -3639,8 +3750,8 @@ button.roll-chip:hover {
 .price-overlay-pill.is-prefix,
 .price-overlay-pill.is-suffix {
   background: transparent;
-  padding: 1px 0;
-  color: #7aa2ff;
+  padding: 0;
+  color: #8eb0ff;
 }
 
 .price-overlay-mod.is-ghost,
@@ -3680,11 +3791,15 @@ button.roll-chip:hover {
 
 .price-overlay-row {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.price-overlay-trade {
+  justify-content: flex-end;
 }
 
 .price-overlay-trade-btns {
@@ -3851,7 +3966,7 @@ button.roll-chip:hover {
 
 .price-overlay-card.is-charm .price-overlay-mod-text,
 .price-overlay-card.is-charm .price-overlay-hybrid-line {
-  font-size: 0.95rem;
+  font-size: 0.98rem;
   line-height: 1.4;
   white-space: normal;
 }

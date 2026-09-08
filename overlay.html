@@ -30,6 +30,27 @@
         box-shadow: none;
         cursor: grab;
       }
+      .price-overlay-card.has-offers {
+        width: 720px;
+        max-width: 100%;
+      }
+      .price-overlay-shell {
+        max-height: none;
+      }
+      .price-overlay-main {
+        flex: 0 0 420px;
+        width: 420px;
+        max-width: 420px;
+      }
+      .price-overlay-side {
+        flex: 0 0 300px;
+        width: 300px;
+        max-width: 300px;
+        max-height: 520px;
+      }
+      .price-overlay-side .price-overlay-offers {
+        max-height: 460px;
+      }
       .price-overlay-body {
         overflow-x: hidden;
         min-width: 0;
@@ -76,30 +97,70 @@
         const r = card.getBoundingClientRect();
         let w = r.width;
         let h = r.height;
+        if (card.classList.contains("has-offers")) w = Math.max(w, 720);
+        else w = Math.max(w, 420);
         const extra = card.querySelector(".price-overlay-rate-card");
         if (extra && getComputedStyle(extra).display !== "none") {
           const er = extra.getBoundingClientRect();
           w = Math.max(w, er.right - r.left);
           h = Math.max(h, er.bottom - r.top);
         }
+        const nextW = Math.max(280, Math.ceil(w) + 4);
+        const nextH = Math.max(90, Math.ceil(h) + 4);
+        if (nextW === lastFitW && nextH === lastFitH) return;
+        lastFitW = nextW;
+        lastFitH = nextH;
         chrome.webview.postMessage({
           type: "overlay-size",
-          w: Math.max(280, Math.ceil(w) + 4),
-          h: Math.max(90, Math.ceil(h) + 4),
+          w: nextW,
+          h: nextH,
         });
       }
 
-      let fitTimer = 0;
-      window.addEventListener("resize", () => {
-        clearTimeout(fitTimer);
-        fitTimer = setTimeout(fit, 120);
-      });
+      function sameOverlayItem(a, b) {
+        if (!a || !b) return false;
+        const nameA = a.querySelector(".item-tip-name")?.textContent || "";
+        const nameB = b.querySelector(".item-tip-name")?.textContent || "";
+        if (!nameA || nameA !== nameB) return false;
+        const modsA = a.querySelector(".price-overlay-mods")?.innerHTML || "";
+        const modsB = b.querySelector(".price-overlay-mods")?.innerHTML || "";
+        if (modsA !== modsB) return false;
+        const propsA = a.querySelector(".price-overlay-props")?.innerHTML || "";
+        const propsB = b.querySelector(".price-overlay-props")?.innerHTML || "";
+        return propsA === propsB;
+      }
+
+      function patchOverlayQuote(oldCard, nextCard) {
+        oldCard.className = nextCard.className;
+        const shell = oldCard.querySelector(".price-overlay-shell");
+        if (!shell) return false;
+        const oldSide = oldCard.querySelector(".price-overlay-side");
+        const nextSide = nextCard.querySelector(".price-overlay-side");
+        if (nextSide && oldSide) oldSide.replaceWith(nextSide);
+        else if (nextSide && !oldSide) shell.appendChild(nextSide);
+        else if (!nextSide && oldSide) oldSide.remove();
+
+        const oldBody = oldCard.querySelector(".price-overlay-body");
+        const oldFoot = oldCard.querySelector(".price-overlay-foot");
+        const nextFoot = nextCard.querySelector(".price-overlay-foot");
+        if (nextFoot && oldFoot) oldFoot.replaceWith(nextFoot);
+        else if (nextFoot && !oldFoot && oldBody) oldBody.appendChild(nextFoot);
+        else if (!nextFoot && oldFoot) oldFoot.remove();
+
+        const oldBar = oldCard.querySelector(".price-overlay-bar");
+        const nextBar = nextCard.querySelector(".price-overlay-bar");
+        if (oldBar && nextBar && oldBar.innerHTML !== nextBar.innerHTML) oldBar.replaceWith(nextBar);
+        return true;
+      }
+
+      let lastFitW = 0;
+      let lastFitH = 0;
       document.addEventListener("mouseover", (event) => {
         if (event.target.closest(".price-overlay-rate-wrap")) requestAnimationFrame(fit);
       });
       document.addEventListener("mouseout", (event) => {
         const wrap = event.target.closest(".price-overlay-rate-wrap");
-        if (wrap && !wrap.contains(event.relatedTarget)) requestAnimationFrame(() => requestAnimationFrame(fit));
+        if (wrap && !wrap.contains(event.relatedTarget)) requestAnimationFrame(fit);
       });
 
       chrome.webview.addEventListener("message", (event) => {
@@ -113,8 +174,21 @@
         }
         if (msg?.type === "paint") {
           if (msg.vars) document.documentElement.style.cssText = msg.vars;
-          root.innerHTML = msg.html || "";
-          requestAnimationFrame(() => requestAnimationFrame(fit));
+          const html = msg.html || "";
+          const cur = root.querySelector(".price-overlay-card");
+          if (cur && html) {
+            const tmp = document.createElement("div");
+            tmp.innerHTML = html;
+            const next = tmp.querySelector(".price-overlay-card");
+            if (next && sameOverlayItem(cur, next) && patchOverlayQuote(cur, next)) {
+              fit();
+              requestAnimationFrame(fit);
+              return;
+            }
+          }
+          root.innerHTML = html;
+          fit();
+          requestAnimationFrame(fit);
         }
         if (msg?.type === "notice") {
           if (msg.vars) document.documentElement.style.cssText = msg.vars;
@@ -126,7 +200,8 @@
             '<article class="price-overlay-card item-tip-card"><div class="price-overlay-bar"><span class="price-overlay-rate is-empty" aria-hidden="true"></span><span class="price-overlay-league">Still Sane, Exile?</span><button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button></div><div class="price-overlay-body"><div class="item-tip-descr">' +
             text +
             "</div></div></article>";
-          requestAnimationFrame(() => requestAnimationFrame(fit));
+          fit();
+          requestAnimationFrame(fit);
         }
       });
 
@@ -343,9 +418,11 @@
           const wrap = t.closest(".price-overlay-mod-wrap");
           if (wrap) {
             wrap.classList.add("is-on");
-            const shownLive = t.dataset.spanDec === "1" ? String(Math.round(value * 10) / 10) : String(Math.round(value));
             for (const el of wrap.querySelectorAll('[data-roll-live="' + rid.replace(/"/g, "") + '"]')) {
-              if (Number.isFinite(value)) el.textContent = shownLive;
+              if (!Number.isFinite(value)) continue;
+              const signed = el.dataset.signed === "1";
+              const mag = t.dataset.spanDec === "1" ? String(Math.round(Math.abs(value) * 10) / 10) : String(Math.round(Math.abs(value)));
+              el.textContent = signed ? (value < 0 ? "-" : "+") + mag : value < 0 ? "-" + mag : mag;
             }
           }
           return;
@@ -387,9 +464,13 @@
           if (v < parts[parts.length - 1].lo) return { i: parts.length - 1, u: 0 };
           return { i: parts.length - 1, u: 0 };
         }
-        function showAt(n, lo, hi) {
-          if (String(lo).includes(".") || String(hi).includes(".")) return String(Math.round(n * 10) / 10);
-          return String(Math.round(n));
+        function showAt(n, lo, hi, signed) {
+          const mag =
+            String(lo).includes(".") || String(hi).includes(".")
+              ? String(Math.round(Math.abs(n) * 10) / 10)
+              : String(Math.round(Math.abs(n)));
+          if (signed) return (n < 0 ? "-" : "+") + mag;
+          return n < 0 ? "-" + mag : mag;
         }
         function atDiv(parts, pos) {
           const n = parts.length;
@@ -447,6 +528,7 @@
           const elo = Number(el.dataset.spanLo);
           const ehi = Number(el.dataset.spanHi);
           const lineTiers = parseTiers(el.dataset.spanTiers);
+          const signed = el.dataset.signed === "1";
           let n = NaN;
           if (divs > 1 && lineTiers.length) n = atDiv(lineTiers, value);
           else {
@@ -454,13 +536,14 @@
             if (pos && lineTiers[pos.i]) n = lineTiers[pos.i].lo + pos.u * (lineTiers[pos.i].hi - lineTiers[pos.i].lo);
             else if (ehi > elo) n = elo + u * (ehi - elo);
           }
-          if (Number.isFinite(n)) el.textContent = showAt(n, elo, ehi);
-          else if (el.getAttribute("data-roll-live") === rid) el.textContent = shown;
+          if (Number.isFinite(n)) el.textContent = showAt(n, elo, ehi, signed);
+          else if (el.getAttribute("data-roll-live") === rid) el.textContent = showAt(value, min, max, signed);
         }
         for (const el of scope ? scope.querySelectorAll("[data-roll-extra]") : []) {
           const elo = Number(el.dataset.extraLo);
           const ehi = Number(el.dataset.extraHi);
           const extraTiers = parseTiers(el.dataset.spanTiers);
+          const signed = el.dataset.signed === "1";
           let n = NaN;
           if (divs > 1 && extraTiers.length) n = atDiv(extraTiers, value);
           else {
@@ -468,7 +551,7 @@
             if (pos && extraTiers[pos.i]) n = extraTiers[pos.i].lo + pos.u * (extraTiers[pos.i].hi - extraTiers[pos.i].lo);
             else if (ehi > elo) n = elo + u * (ehi - elo);
           }
-          if (Number.isFinite(n)) el.textContent = showAt(n, elo, ehi);
+          if (Number.isFinite(n)) el.textContent = showAt(n, elo, ehi, signed);
         }
         const em = host.querySelector("em");
         if (em) em.textContent = shown;

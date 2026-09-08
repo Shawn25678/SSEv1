@@ -24,9 +24,6 @@
         <button class="menu-link is-active" data-view="dash" type="button">
           <span class="menu-link-title">Dashboard</span>
         </button>
-        <button class="menu-link" data-view="log" type="button">
-          <span class="menu-link-title">Loot log</span>
-        </button>
         <button class="menu-link" data-view="econ" type="button">
           <span class="menu-link-title">Economy</span>
         </button>
@@ -58,6 +55,7 @@
     <div class="app">
       <header class="top">
         <div class="top-actions">
+          <button class="top-log-link" data-view="log" type="button">Loot log</button>
           <label class="league-field">
             <span>League</span>
             <select id="league-input">
@@ -70,13 +68,13 @@
             </div>
             <div class="rate-pop-card" id="rate-pop-card" role="tooltip"></div>
           </div>
-          <div class="price-clock rate-clock" id="rate-clock" role="status" title="PoE 2 trade site rate limit. Searches wait until a slot opens.">
+          <div class="price-clock rate-clock" id="rate-clock" role="status" title="PoE 2 trade: searches used of the limit, then the window resets.">
             <span id="rate-clock-label">Rate limiting</span>
-            <strong id="rate-clock-time">0/7 / 15s</strong>
+            <strong id="rate-clock-time">0 of 1 · resets 5s</strong>
           </div>
           <button type="button" class="price-clock" id="price-clock" data-check-prices title="poe.ninja updates on the hour. Click to refresh now.">
-            <span>Prices</span>
-            <strong id="price-clock-time">Check prices</strong>
+            <span>Ninja</span>
+            <strong id="price-clock-time">live on the hour</strong>
           </button>
         </div>
       </header>
