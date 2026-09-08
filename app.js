@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.25";
+const APP_VERSION = "1.0.26";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -4402,7 +4402,8 @@ function isItemTitleLine(line) {
   const t = cleanItemTitleLine(line);
   if (!t) return false;
   if (isItemJunkLine(t) || isUnidentifiedLine(t) || isCorruptedLine(t) || isRavenTouchedLine(t) || isSanctifiedLine(t)) return false;
-  if (/^(mirrored|split|fractured item|synthesised item|foil unique)$/i.test(t)) return false;
+  if (/^(mirrored|split|synthesised item|foil unique)$/i.test(t)) return false;
+  if (isFracturedItemLine(t)) return false;
   if (/:/.test(t) && !/^[+\-\d({]/.test(t)) return false;
   return true;
 }
@@ -4453,6 +4454,14 @@ function isMirroredLine(line) {
 
 function isSanctifiedLine(line) {
   return /^sanctified$/i.test(foldItemFlagLine(line));
+}
+
+function isFracturedItemLine(line) {
+  return /^fractured item$/i.test(foldItemFlagLine(line));
+}
+
+function lineHasFracturedTag(rawLine) {
+  return /\(fractured\)/i.test(String(rawLine || ""));
 }
 
 function isAllocatesRoll(text) {
@@ -4582,7 +4591,8 @@ function isFlavourBlock(block) {
       !isCorruptedLine(line) &&
       !isUnidentifiedLine(line) &&
       !isSanctifiedLine(line) &&
-      !/^(mirrored|split|fractured item|synthesised item)$/i.test(line)
+      !isFracturedItemLine(line) &&
+      !/^(mirrored|split|synthesised item)$/i.test(line)
   );
   if (!body.length) return false;
   if (body.some((line) => /[\d%+]/.test(line) || /^allocates /i.test(line))) return false;
@@ -4664,6 +4674,12 @@ function parsePoeItem(text) {
   const mods = parsedMods.mods;
   const ravenTouched =
     parsedMods.ravenTouched || /raven-?touched/i.test(parseAffixStrings(raw).replace(/[\u2010-\u2015]/g, "-"));
+  const fractured =
+    !!parsedMods.fractured ||
+    flagLines.some((line) => isFracturedItemLine(line)) ||
+    /\(fractured\)/i.test(raw) ||
+    /\{[^}]*\bfractured\b/i.test(raw) ||
+    (mods || []).some((mod) => !!mod.fractured);
   const useHit = raw.match(/(\d+)\s+uses? remaining/i);
   const usesRemaining = useHit ? Math.max(0, Number(String(useHit[1]).replace(/,/g, "")) || 0) : 0;
   const runeMods = mods.filter((mod) => canonicalRollKind(mod.kind) === "rune").length;
@@ -4674,7 +4690,7 @@ function parsePoeItem(text) {
   const charmHit = raw.match(/^Charm Slots:\s*(\d+)/im);
   const charmSlots = charmHit ? Math.max(0, Number(charmHit[1]) || 0) : 0;
   const isCorrupted = corrupted || mods.some((mod) => canonicalRollKind(mod.kind) === "corrupt");
-  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, mirrored, sanctified, unidentified, unidentifiedTier, ravenTouched, mods, usesRemaining, runeSockets, charmSlots, props };
+  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, mirrored, sanctified, unidentified, unidentifiedTier, ravenTouched, fractured, mods, usesRemaining, runeSockets, charmSlots, props };
 }
 
 function canonicalRollKind(kind) {
@@ -4705,23 +4721,24 @@ function parseModInfoLine(rawLine) {
     .trim();
   const tierHit = inner.match(/\(tier:\s*(\d+)\)/i);
   const tier = tierHit ? Number(tierHit[1]) || 0 : 0;
-  if (/corruption enhancement/i.test(inner) || /corrupted implicit/i.test(inner)) return { kind: "corrupt", slot: "", tier, unique: false };
-  if (/\bprefix modifier\b/i.test(inner) || /^prefix\b/i.test(inner)) return { kind: "explicit", slot: "prefix", tier, unique: false };
-  if (/\bsuffix modifier\b/i.test(inner) || /^suffix\b/i.test(inner)) return { kind: "explicit", slot: "suffix", tier, unique: false };
+  const fractured = /\bfractured\b/i.test(inner);
+  if (/corruption enhancement/i.test(inner) || /corrupted implicit/i.test(inner)) return { kind: "corrupt", slot: "", tier, unique: false, fractured };
+  if (/\bprefix modifier\b/i.test(inner) || /^prefix\b/i.test(inner)) return { kind: "explicit", slot: "prefix", tier, unique: false, fractured };
+  if (/\bsuffix modifier\b/i.test(inner) || /^suffix\b/i.test(inner)) return { kind: "explicit", slot: "suffix", tier, unique: false, fractured };
   if (
     /\benchant modifier\b/i.test(inner) ||
     /^enchant\b/i.test(inner) ||
     /^enhancement\b/i.test(inner)
   ) {
-    return { kind: "enchant", slot: "", tier, unique: false };
+    return { kind: "enchant", slot: "", tier, unique: false, fractured };
   }
-  if (/\bimplicit modifier\b/i.test(inner) || /^implicit\b/i.test(inner)) return { kind: "implicit", slot: "", tier, unique: false };
+  if (/\bimplicit modifier\b/i.test(inner) || /^implicit\b/i.test(inner)) return { kind: "implicit", slot: "", tier, unique: false, fractured };
   if (/\b(?:added )?augment modifier\b/i.test(inner) || /\brune modifier\b/i.test(inner) || /^(?:rune|augment|added augment)\b/i.test(inner)) {
-    return { kind: "rune", slot: "", tier, unique: false };
+    return { kind: "rune", slot: "", tier, unique: false, fractured };
   }
-  if (/\b(?:vaal )?unique modifier\b/i.test(inner)) return { kind: "explicit", slot: "", tier: 0, unique: true };
-  if (/\bexplicit modifier\b/i.test(inner) || /^explicit\b/i.test(inner)) return { kind: "explicit", slot: "", tier, unique: false };
-  return { kind: "explicit", slot: "", tier, unique: false };
+  if (/\b(?:vaal )?unique modifier\b/i.test(inner)) return { kind: "explicit", slot: "", tier: 0, unique: true, fractured };
+  if (/\bexplicit modifier\b/i.test(inner) || /^explicit\b/i.test(inner)) return { kind: "explicit", slot: "", tier, unique: false, fractured };
+  return { kind: "explicit", slot: "", tier, unique: false, fractured };
 }
 
 function kindFromLineTag(rawLine) {
@@ -4733,13 +4750,14 @@ function kindFromLineTag(rawLine) {
 }
 
 function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase = "", className = "", props = null) {
-  if (/^(currency|gem|divination card)$/i.test(rarity)) return { mods: [], ravenTouched: false };
+  if (/^(currency|gem|divination card)$/i.test(rarity)) return { mods: [], ravenTouched: false, fractured: false };
   const charm = /charm/i.test(className);
   const uniqueItem = /unique/i.test(String(rarity || ""));
   const groups = [];
   let affix = 0;
   let afterFooter = false;
   let ravenTouched = false;
+  let itemFractured = false;
   for (const block of blocks || []) {
     if (afterFooter) break;
     if (isFlavourBlock(block)) continue;
@@ -4747,6 +4765,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
     let sectionSlot = "";
     let sectionTier = 0;
     let sectionUnique = false;
+    let sectionFractured = false;
     let headerAffix = 0;
     let sawHeader = false;
     const collected = [];
@@ -4763,6 +4782,8 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         sectionSlot = info.slot;
         sectionTier = info.tier || 0;
         sectionUnique = !!info.unique;
+        sectionFractured = !!info.fractured;
+        if (sectionFractured) itemFractured = true;
         affix += 1;
         headerAffix = affix;
         sawHeader = true;
@@ -4777,8 +4798,10 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         isCorruptedLine(rawLine) ||
         isUnidentifiedLine(rawLine) ||
         isSanctifiedLine(rawLine) ||
-        /^(mirrored|split|fractured item|synthesised item)$/i.test(rawLine)
+        isFracturedItemLine(rawLine) ||
+        /^(mirrored|split|synthesised item)$/i.test(rawLine)
       ) {
+        if (isFracturedItemLine(rawLine)) itemFractured = true;
         if (isCorruptedLine(rawLine) || isMirroredLine(rawLine)) afterFooter = true;
         continue;
       }
@@ -4787,6 +4810,8 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       if (!tagged && /:\s/.test(rawLine) && !/^[+\-\d({]/.test(rawLine) && !isGrantedSkillRoll(rawLine)) continue;
       if (rawLine.length > 160) continue;
       const kind = tagged || sectionKind;
+      const fractured = lineHasFracturedTag(rawLine) || (sawHeader && sectionFractured);
+      if (fractured) itemFractured = true;
       collected.push({
         text: parseAffixStrings(rawLine),
         kind,
@@ -4794,6 +4819,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         affix: sawHeader ? headerAffix : 0,
         tier: sawHeader ? sectionTier : 0,
         unique: sawHeader ? sectionUnique : false,
+        fractured,
         charm,
       });
     }
@@ -4855,7 +4881,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       mod.tier = 0;
     }
   }
-  return { mods: cleanClipboardRolls(flat, { className, props, name: itemName, rarity, baseType: itemBase }), ravenTouched };
+  return { mods: cleanClipboardRolls(flat, { className, props, name: itemName, rarity, baseType: itemBase }), ravenTouched, fractured: itemFractured || flat.some((mod) => !!mod.fractured) };
 }
 
 function parseAffixStrings(text) {
@@ -4865,7 +4891,7 @@ function parseAffixStrings(text) {
 function stripAdvancedRanges(text) {
   return String(text || "")
     .replace(/\s*[—–]\s*Unscalable Value/gi, "")
-    .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune|unscalable(?: value)?)\)/gi, "")
+    .replace(/\s*\((?:augmented|unmet|implicit|enchant|fractured|(?:added )?(?:rune|augment)|unscalable(?: value)?)\)/gi, "")
     .replace(/([+-]?)(-?\d+(?:\.\d+)?)\((?:[^)]*)\)/g, (_, sign, n) => (sign || "") + n)
     .replace(/\(([-+]?\d[\d.\s,|/~—–-]*[-+]?\d)\)/g, "")
     .replace(/\s+/g, " ")
@@ -4906,6 +4932,7 @@ function keepRollMeta(roll, text, kind, slot, pick) {
   if (Number.isInteger(roll?.affix) && roll.affix > 0) row.affix = roll.affix;
   if (Number(roll?.tier) > 0) row.tier = Number(roll.tier);
   if (roll?.unique) row.unique = true;
+  if (roll?.fractured) row.fractured = true;
   if (roll?.charm) row.charm = true;
   if (Number.isInteger(roll?.rid) && roll.rid > 0) row.rid = roll.rid;
   if (Number.isFinite(roll?.lo) && Number.isFinite(roll?.hi)) {
@@ -4968,7 +4995,7 @@ function cleanClipboardRolls(mods, ctx) {
     const raw = rollLineText(mod) || String(mod || "");
     const text = stripAdvancedRanges(
       parseAffixStrings(raw)
-        .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune)\)/gi, "")
+        .replace(/\s*\((?:augmented|unmet|implicit|enchant|fractured|(?:added )?(?:rune|augment))\)/gi, "")
         .replace(/\s+/g, " ")
         .trim()
     );
@@ -4985,7 +5012,7 @@ function cleanClipboardRolls(mods, ctx) {
 
 function shortRoll(text) {
   return stripAdvancedRanges(String(text || ""))
-    .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune)\)/gi, "")
+    .replace(/\s*\((?:augmented|unmet|implicit|enchant|fractured|rune)\)/gi, "")
     .replace(/\bmaximum /gi, "")
     .replace(/\bto Fire Resistance/gi, " Fire Res")
     .replace(/\bto Cold Resistance/gi, " Cold Res")
@@ -5384,7 +5411,8 @@ function rollKindLabel(roll, tierOverride) {
   if (roll?.ghost) return "Typical";
   const kind = canonicalRollKind(roll?.kind);
   let tag = "";
-  if (kind === "skill" || isGrantedSkillRoll(roll?.text)) tag = "Skill";
+  if (roll?.fractured) tag = "Fractured";
+  else if (kind === "skill" || isGrantedSkillRoll(roll?.text)) tag = "Skill";
   else if (kind === "implicit") tag = "Implicit";
   else if (kind === "corrupt") tag = "Corrupted";
   else if (kind === "enchant") tag = "Enchant";
@@ -5395,22 +5423,26 @@ function rollKindLabel(roll, tierOverride) {
     else if (slot === "suffix") tag = "Suffix";
   }
   const tier = Number.isInteger(tierOverride) && tierOverride > 0 ? tierOverride : Number(roll?.tier);
-  if (tag && tier > 0 && !roll?.unique && (rollHasAffixTiers(roll) || kind === "corrupt")) tag += " T" + tier;
+  if (tag && tier > 0 && !roll?.unique && (roll?.fractured || rollHasAffixTiers(roll) || kind === "corrupt")) tag += " T" + tier;
   if (tag && roll?.hybrid) tag += " · hyb";
   return tag;
 }
 
 function rollKindClass(roll) {
   const kind = canonicalRollKind(roll?.kind);
-  if (kind === "skill" || isGrantedSkillRoll(roll?.text)) return " is-skill";
-  if (kind === "implicit") return " is-implicit";
-  if (kind === "corrupt") return " is-corrupt";
-  if (kind === "enchant") return " is-enchant";
-  if (kind === "rune") return " is-rune";
-  const slot = rollSlot(roll);
-  if (slot === "prefix") return " is-prefix";
-  if (slot === "suffix") return " is-suffix";
-  return "";
+  let cls = "";
+  if (kind === "skill" || isGrantedSkillRoll(roll?.text)) cls = " is-skill";
+  else if (kind === "implicit") cls = " is-implicit";
+  else if (kind === "corrupt") cls = " is-corrupt";
+  else if (kind === "enchant") cls = " is-enchant";
+  else if (kind === "rune") cls = " is-rune";
+  else {
+    const slot = rollSlot(roll);
+    if (slot === "prefix") cls = " is-prefix";
+    else if (slot === "suffix") cls = " is-suffix";
+  }
+  if (roll?.fractured) cls += " is-fractured";
+  return cls;
 }
 
 function overlayModText(roll) {
@@ -5791,12 +5823,18 @@ function overlayRavenHtml(log, drop) {
   return `<button type="button" class="price-overlay-raven${on ? " is-on" : ""}" data-pick-raven="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${on ? "Raven-Touched" : "Not Raven-Touched"}</button>`;
 }
 
+function overlayFracturedHtml(drop) {
+  if (!drop?.fractured && !(drop?.rolls || []).some((roll) => roll?.fractured)) return "";
+  return `<span class="price-overlay-fractured is-on">Fractured</span>`;
+}
+
 function overlayFlagsHtml(log, drop) {
   const raven = overlayRavenHtml(log, drop);
+  const fractured = overlayFracturedHtml(drop);
   const corrupt = overlayCorruptHtml(log, drop);
   const unid = overlayUnidHtml(log, drop);
-  if (!raven && !corrupt && !unid) return "";
-  return `<div class="price-overlay-flags">${raven}${corrupt}${unid}</div>`;
+  if (!raven && !fractured && !corrupt && !unid) return "";
+  return `<div class="price-overlay-flags">${raven}${fractured}${corrupt}${unid}</div>`;
 }
 
 function equipTradeKey(id) {
@@ -6119,7 +6157,7 @@ function weaponDpsRollKind(roll) {
   const t = String(roll.text || "")
     .trim()
     .toLowerCase()
-    .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune|unscalable(?: value)?)\)/gi, "")
+    .replace(/\s*\((?:augmented|unmet|implicit|enchant|fractured|(?:added )?(?:rune|augment)|unscalable(?: value)?)\)/gi, "")
     .replace(/\s+/g, " ")
     .trim();
   if (!t || /spell/.test(t)) return "";
@@ -6138,6 +6176,8 @@ function isWeaponItem(drop) {
 
 function isWeaponEleFlatRoll(roll, drop) {
   if (drop && !isWeaponItem(drop)) return false;
+  // Socketed runes stay in the mod list (RUNE tag / trade). Local weapon ele flats stay EDPS-only.
+  if (canonicalRollKind(roll?.kind) === "rune") return false;
   return weaponDpsRollKind(roll) === "eflat";
 }
 
@@ -7123,7 +7163,6 @@ function spanTicksHtml(lo, hi, tiers, steps, equal) {
 function priceOverlayHtml(log, drop) {
   const rolls = inspectRolls(drop);
   const order = ["enchant", "corrupt", "rune", "skill", "implicit", "explicit"];
-  const listed = order.flatMap((kind) => rolls.filter((roll) => canonicalRollKind(roll.kind) === kind && !isCharmSlotRoll(roll) && !isWeaponEleFlatRoll(roll, drop)));
   function affixGroups(list) {
     const out = [];
     for (const roll of list) {
@@ -7223,18 +7262,29 @@ function priceOverlayHtml(log, drop) {
     isBeltItem(drop) ? "is-belt" : "",
   ].filter(Boolean).join(" ");
   const pickHtml = overlayUniquePickHtml(log, drop);
-  const mods = pickHtml || (listed.length ? `<div class="price-overlay-mods">${modButtons(listed)}</div>` : "");
+  const listedByKind = order
+    .map((kind) => ({
+      kind,
+      rolls: rolls.filter((roll) => canonicalRollKind(roll.kind) === kind && !isCharmSlotRoll(roll) && !isWeaponEleFlatRoll(roll, drop)),
+    }))
+    .filter((group) => group.rolls.length);
+  const modsBody = listedByKind
+    .map(({ kind, rolls: list }) => {
+      const body = modButtons(list);
+      if (kind === "implicit") return `<div class="price-overlay-mod-group is-implicit">${body}</div>`;
+      return body;
+    })
+    .join("");
+  const mods = pickHtml || (modsBody ? `<div class="price-overlay-mods">${modsBody}</div>` : "");
   const props = overlayPropsHtml(log, drop);
   const offers = pickHtml ? "" : overlayOffersHtml(drop);
   const hasOffers = !!offers;
   const tradeBtns = `<span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span>`;
   const exchange = overlayExchangeHaveHtml(log, drop);
-  const footBits = [charmExtra, exchange, hasOffers ? "" : `<div class="price-overlay-row price-overlay-trade">${tradeBtns}</div>`]
-    .filter(Boolean)
-    .join("");
+  const footBits = [charmExtra, exchange].filter(Boolean).join("");
   const foot = pickHtml || !footBits ? "" : `<div class="price-overlay-foot">${footBits}</div>`;
   const side = hasOffers
-    ? `<aside class="price-overlay-side"><div class="price-overlay-side-head"><span class="price-overlay-side-label">PoE 2 trade</span>${tradeBtns}</div>${offers}</aside>`
+    ? `<aside class="price-overlay-side"><div class="price-overlay-side-head"><span class="price-overlay-side-label">PoE 2 trade</span></div>${offers}</aside>`
     : "";
   return `
     <article class="price-overlay-card item-tip-card ${esc(kindClass)}${hasOffers ? " has-offers" : ""}"${weaponDpsCardAttrs(drop)}>
@@ -7245,7 +7295,10 @@ function priceOverlayHtml(log, drop) {
           <div class="item-tip-head">
             ${dropIconHtml(drop, "lg")}
             <div class="item-tip-title">
-              <div class="item-tip-name">${esc(drop.name)}</div>
+              <div class="item-tip-name-row">
+                <div class="item-tip-name">${esc(drop.name)}</div>
+                ${pickHtml ? "" : tradeBtns}
+              </div>
               ${overlayBaseHtml(log, drop)}
               ${overlayFlagsHtml(log, drop)}
             </div>
@@ -7661,6 +7714,10 @@ function rollChipsHtml(drop, logId) {
       ? `<button type="button" class="roll-chip is-flag is-raven${drop.pickRaven !== false ? " is-on" : ""}" data-pick-raven="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${drop.pickRaven !== false ? "Searching Raven-Touched" : "Not searching Raven-Touched"}">${drop.pickRaven !== false ? "Raven-Touched" : "Not Raven-Touched"}</button>`
       : `<span class="roll-chip is-flag is-raven is-on">Raven-Touched</span>`
     : "";
+  const fracturedFlag =
+    drop && !Array.isArray(drop) && (drop.fractured || (drop.rolls || []).some((roll) => roll?.fractured))
+      ? `<span class="roll-chip is-flag is-fractured is-on">Fractured</span>`
+      : "";
   const unidFlag = drop && !Array.isArray(drop) && drop.unidentified
     ? canPick
       ? `<button type="button" class="roll-chip is-flag is-unid${searchUnidentified(drop) !== false ? " is-on" : ""}" data-pick-unid="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${searchUnidentified(drop) !== false ? "Searching unidentified" : "Searching identified"}">${searchUnidentified(drop) !== false ? "Unidentified" : "Identified"}</button>`
@@ -7679,8 +7736,8 @@ function rollChipsHtml(drop, logId) {
       ? `<button type="button" class="roll-chip is-flag${corruptOn ? " is-on" : ""}" data-pick-corrupt="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${corruptOn ? "Searching corrupted" : "Searching not corrupted"}">${corruptLabel}</button>`
       : `<span class="roll-chip is-flag${corruptOn ? " is-on" : ""}">${corruptLabel}</span>`
     : "";
-  if (!rolls.length && !flag && !ravenFlag && !unidFlag) return "";
-  return `<div class="roll-chips">${ravenFlag}${unidFlag}${flag}${rolls
+  if (!rolls.length && !flag && !ravenFlag && !fracturedFlag && !unidFlag) return "";
+  return `<div class="roll-chips">${ravenFlag}${fracturedFlag}${unidFlag}${flag}${rolls
     .map((roll, i) => {
       if (isWeaponEleFlatRoll(roll, drop)) return "";
       const label = shortRoll(roll.text);
@@ -7867,6 +7924,7 @@ function ingestClipboardItem(text, mode) {
       drop.ravenTouched = true;
       drop.pickRaven = true;
     }
+    if (parsed.fractured) drop.fractured = true;
     if (parsed.unidentified) {
       drop.unidentified = true;
       drop.pickUnid = true;
@@ -7903,6 +7961,7 @@ function ingestClipboardItem(text, mode) {
     entry.ravenTouched = true;
     entry.pickRaven = true;
   }
+  if (parsed.fractured) entry.fractured = true;
   if (parsed.props) entry.props = parsed.props;
   if (parsed.usesRemaining > 0) entry.usesRemaining = parsed.usesRemaining;
   if (parsed.runeSockets > 0 && canHaveRunes(parsed)) {

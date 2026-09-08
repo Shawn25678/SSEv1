@@ -2159,11 +2159,15 @@ button.roll-chip:hover {
 }
 
 .roll-chip.is-enchant {
-  color: #7ad0c8;
+  color: #ffffff;
 }
 
 .roll-chip.is-rune {
-  color: #c4a35a;
+  color: #ffffff;
+}
+
+.roll-chip.is-fractured {
+  color: #f05a4a;
 }
 
 .roll-chip.is-flag {
@@ -2639,6 +2643,31 @@ button.roll-chip:hover {
   min-width: 0;
 }
 
+.item-tip-name-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.item-tip-name-row .item-tip-name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.item-tip-name-row .price-overlay-trade-btns {
+  flex: none;
+  align-items: flex-start;
+  padding-top: 1px;
+}
+
+.item-tip-name-row .price-overlay-trade-btns .btn {
+  padding: 5px 10px;
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
 .item-tip-name {
   font-family: var(--font-display);
   color: var(--unique-2);
@@ -3109,6 +3138,7 @@ button.roll-chip:hover {
 
 .price-overlay-corrupt,
 .price-overlay-raven,
+.price-overlay-fractured,
 .price-overlay-unid {
   display: inline-flex;
   align-items: center;
@@ -3153,6 +3183,15 @@ button.roll-chip:hover {
   text-transform: uppercase;
 }
 
+.price-overlay-fractured.is-on {
+  color: #f05a4a;
+  font-weight: 700;
+  font-style: normal;
+  text-transform: uppercase;
+  cursor: default;
+  pointer-events: none;
+}
+
 .price-overlay-raven.is-on {
   color: #7aa2ff;
   font-weight: 700;
@@ -3164,6 +3203,12 @@ button.roll-chip:hover {
   color: #7aa2ff;
   border-color: #7aa2ff;
   background: color-mix(in srgb, #7aa2ff 16%, transparent);
+}
+
+.roll-chip.is-flag.is-fractured.is-on {
+  color: #f05a4a;
+  border-color: #f05a4a;
+  background: color-mix(in srgb, #f05a4a 16%, transparent);
 }
 
 .price-overlay-identify {
@@ -3210,6 +3255,18 @@ button.roll-chip:hover {
   gap: 0;
   padding-top: 4px;
   border-top: 1px solid var(--line);
+}
+
+.price-overlay-mod-group.is-implicit {
+  margin: 4px 0 6px;
+  padding: 2px 4px 0;
+  border: 2px solid color-mix(in srgb, #8b93a7 55%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in srgb, #8b93a7 7%, transparent);
+}
+
+.price-overlay-mod-group.is-implicit .price-overlay-mod-wrap:last-child {
+  border-bottom: 0;
 }
 
 .price-overlay-props {
@@ -3726,8 +3783,10 @@ button.roll-chip:hover {
 }
 
 .price-overlay-mod.is-enchant,
-.price-overlay-affix.is-enchant {
-  color: #d7c4ff;
+.price-overlay-affix.is-enchant,
+.price-overlay-mod.is-enchant .price-overlay-mod-text,
+.price-overlay-mod.is-enchant .price-overlay-hybrid-line {
+  color: #ffffff;
 }
 
 .price-overlay-pill.is-enchant {
@@ -3760,8 +3819,26 @@ button.roll-chip:hover {
 }
 
 .price-overlay-mod.is-rune,
-.price-overlay-affix.is-rune {
-  color: #c4a35a;
+.price-overlay-affix.is-rune,
+.price-overlay-mod.is-rune .price-overlay-mod-text,
+.price-overlay-mod.is-rune .price-overlay-hybrid-line {
+  color: #ffffff;
+}
+
+.price-overlay-mod.is-fractured,
+.price-overlay-affix.is-fractured,
+.price-overlay-mod.is-fractured .price-overlay-mod-text,
+.price-overlay-mod.is-fractured .price-overlay-hybrid-line,
+.price-overlay-mod.is-fractured .price-overlay-mod-text b,
+.price-overlay-mod.is-fractured .price-overlay-hybrid-line b,
+.roll-chip.is-fractured {
+  color: #f05a4a;
+}
+
+.price-overlay-pill.is-fractured {
+  background: transparent;
+  padding: 1px 0;
+  color: #f05a4a;
 }
 
 .price-overlay-pill.is-rune {
@@ -3791,6 +3868,11 @@ button.roll-chip:hover {
 .price-overlay-mod-wrap.is-on .price-overlay-mod-text,
 .price-overlay-mod-wrap.is-on .price-overlay-hybrid-line {
   color: var(--gold-2);
+}
+
+.price-overlay-mod-wrap.is-on .price-overlay-mod.is-fractured .price-overlay-mod-text,
+.price-overlay-mod-wrap.is-on .price-overlay-mod.is-fractured .price-overlay-hybrid-line {
+  color: #f05a4a;
 }
 
 .price-overlay-rule {
