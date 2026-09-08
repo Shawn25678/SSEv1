@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.16";
+const APP_VERSION = "1.0.17";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -873,6 +873,9 @@ function tradeFetch(name, league, bust = false, thorough = false, extra = {}) {
       rarity: extra.rarity || "",
       typeLine: extra.typeLine || "",
       category: extra.category || "",
+      exactBase: extra.exactBase !== false,
+      ilvlMin: Number.isFinite(extra.ilvlMin) ? extra.ilvlMin : undefined,
+      qualityMin: Number.isFinite(extra.qualityMin) ? extra.qualityMin : undefined,
       rolls: extra.rolls || [],
       rollsJson: JSON.stringify(extra.rolls || []),
       filters,
@@ -1016,25 +1019,73 @@ function foldKeyVariants(key) {
 }
 
 function propLineTail(raw, label) {
-  const m = String(raw || "").match(new RegExp("^" + label + "\\s*(.+)$", "im"));
+  const base = String(label || "").replace(/:$/, "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!base) return "";
+  const m = String(raw || "").match(new RegExp("^" + base + "\\s*:\\s*(.+)$", "im"));
   return m ? m[1] : "";
 }
 
-function parseAvgDamage(text) {
+function parseDamageRange(text) {
   const clean = String(text || "").replace(/\([^)]*\)/g, " ");
-  const pairs = [...clean.matchAll(/(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)/g)];
-  if (pairs.length) return pairs.reduce((sum, pair) => sum + (Number(pair[1]) + Number(pair[2])) / 2, 0);
+  const pairs = [...clean.matchAll(/(\d+(?:\.\d+)?)\s*(?:[-–—]|to)\s*(\d+(?:\.\d+)?)/gi)];
+  if (pairs.length) {
+    let lo = 0;
+    let hi = 0;
+    for (const pair of pairs) {
+      const a = Number(pair[1]);
+      const b = Number(pair[2]);
+      lo += Math.min(a, b);
+      hi += Math.max(a, b);
+    }
+    return { lo, hi, avg: (lo + hi) / 2 };
+  }
   const n = clean.replace(/,/g, "").match(/(\d+(?:\.\d+)?)/);
-  return n ? Number(n[1]) : NaN;
+  if (!n) return null;
+  const v = Number(n[1]);
+  return { lo: v, hi: v, avg: v };
+}
+
+function parseAvgDamage(text) {
+  const range = parseDamageRange(text);
+  return range ? range.avg : NaN;
+}
+
+function scaleDamageByQuality(value, fromQ, toQ) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return NaN;
+  const from = Number.isFinite(Number(fromQ)) ? Number(fromQ) : 0;
+  const to = Number.isFinite(Number(toQ)) ? Number(toQ) : from;
+  if (from === to) return n;
+  // EE2 / PoB tooltip DPS: float more-multiplier on the shown local damage.
+  return (n / (1 + from / 100)) * (1 + to / 100);
 }
 
 function parsePropNumber(raw, label) {
-  const n = String(propLineTail(raw, label)).replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
-  return n ? Number(n[0]) : NaN;
+  const tail = stripAdvancedRanges(propLineTail(raw, label));
+  const n = parseFloat(String(tail).replace(/,/g, ""));
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function parseItemQuality(raw) {
+  const t = stripClipboardMarkup(String(raw || ""));
+  const line = t.match(/^Quality\s*:\s*(.+)$/im);
+  if (line) {
+    const n = parseInt(String(line[1]).replace(/^\s*\+/, ""), 10);
+    if (Number.isFinite(n)) return n;
+  }
+  const n = parsePropNumber(t, "Quality:");
+  return Number.isFinite(n) ? Math.round(n) : NaN;
+}
+
+function parseTooltipDps(text) {
+  const m = String(text || "").match(/\(([\d.]+)\s*DPS\)/i);
+  if (!m) return NaN;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : NaN;
 }
 
 function parseLocalProps(raw) {
-  const t = String(raw || "");
+  const t = parseAffixStrings(stripClipboardMarkup(String(raw || "")));
   function num(label) {
     return parsePropNumber(t, label);
   }
@@ -1042,7 +1093,13 @@ function parseLocalProps(raw) {
     const v = parseAvgDamage(propLineTail(t, label));
     return Number.isFinite(v) && v > 0 ? v : NaN;
   }
-  const quality = num("Quality:");
+  function dmgRange(label) {
+    const range = parseDamageRange(propLineTail(t, label));
+    if (!range || !(range.avg > 0)) return null;
+    return range;
+  }
+  const quality = parseItemQuality(t);
+  const ilvl = num("Item Level:");
   const ar = num("Armour:");
   const ev = num("Evasion Rating:");
   const es = num("Energy Shield:");
@@ -1050,16 +1107,35 @@ function parseLocalProps(raw) {
   const ward = Number.isFinite(wardHit) ? wardHit : num("Ward:");
   const blockHit = num("Block chance:");
   const block = Number.isFinite(blockHit) ? blockHit : num("Block Chance:") || num("Chance to Block:");
-  const phys = dmg("Physical Damage:");
-  let ele = dmg("Elemental Damage:");
-  if (!Number.isFinite(ele)) {
-    const parts = [dmg("Fire Damage:"), dmg("Cold Damage:"), dmg("Lightning Damage:")].filter(Number.isFinite);
-    ele = parts.length ? parts.reduce((a, b) => a + b, 0) : NaN;
-  }
+  const physLine = propLineTail(t, "Physical Damage:");
+  const physRange = dmgRange("Physical Damage:");
+  const phys = physRange ? physRange.avg : NaN;
+  const physDps = parseTooltipDps(physLine);
+  const eleCombined = dmg("Elemental Damage:");
+  let eleDps = parseTooltipDps(propLineTail(t, "Elemental Damage:"));
+  if (!Number.isFinite(eleDps) || eleDps <= 0) eleDps = num("Elemental DPS:");
+  const totalDps = num("Total DPS:");
+  const fire = dmg("Fire Damage:");
+  const cold = dmg("Cold Damage:");
+  const lightning = dmg("Lightning Damage:");
+  const eleParts = [fire, cold, lightning].filter(Number.isFinite);
+  const eleSum = eleParts.length ? eleParts.reduce((a, b) => a + b, 0) : NaN;
+  let ele = NaN;
+  if (Number.isFinite(eleCombined) && Number.isFinite(eleSum)) ele = Math.max(eleCombined, eleSum);
+  else if (Number.isFinite(eleCombined)) ele = eleCombined;
+  else if (Number.isFinite(eleSum)) ele = eleSum;
   const chaos = dmg("Chaos Damage:");
   const critHit = num("Critical Hit Chance:");
   const crit = Number.isFinite(critHit) ? critHit : num("Critical Strike Chance:");
-  const aps = num("Attacks per Second:");
+  const apsLine = propLineTail(t, "Attacks per Second:");
+  let aps = parseFloat(String(apsLine).replace(/,/g, ""));
+  if (!Number.isFinite(aps)) aps = num("Attacks per Second:");
+  const apsTail = stripAdvancedRanges(apsLine);
+  const apsRange = String(apsTail).match(/(\d+(?:\.\d+)?)\s*[-–—]\s*(\d+(?:\.\d+)?)/);
+  if (apsRange && Number(apsRange[2]) > Number(apsRange[1]) && Math.abs(aps - Number(apsRange[1])) < 1e-9) {
+    aps = (Number(apsRange[1]) + Number(apsRange[2])) / 2;
+  }
+  if (Number.isFinite(aps) && aps > 0) aps = Math.round(aps * 100) / 100;
   const spirit = num("Spirit:");
   const reload = num("Reload Time:");
   return {
@@ -1072,13 +1148,22 @@ function parseLocalProps(raw) {
     aps: Number.isFinite(aps),
     accuracy: /^Accuracy Rating:/im.test(t),
     quality: Number.isFinite(quality) ? quality : undefined,
+    ilvl: Number.isFinite(ilvl) && ilvl > 0 ? ilvl : undefined,
     ar: Number.isFinite(ar) ? ar : undefined,
     ev: Number.isFinite(ev) ? ev : undefined,
     es: Number.isFinite(es) ? es : undefined,
     ward: Number.isFinite(ward) ? ward : undefined,
     blockChance: Number.isFinite(block) ? block : undefined,
     phys: Number.isFinite(phys) ? phys : undefined,
+    physLo: physRange && Number.isFinite(physRange.lo) ? physRange.lo : undefined,
+    physHi: physRange && Number.isFinite(physRange.hi) ? physRange.hi : undefined,
+    physDps: Number.isFinite(physDps) ? physDps : undefined,
     ele: Number.isFinite(ele) ? ele : undefined,
+    eleDps: Number.isFinite(eleDps) && eleDps > 0 ? eleDps : undefined,
+    totalDps: Number.isFinite(totalDps) && totalDps > 0 ? totalDps : undefined,
+    fire: Number.isFinite(fire) ? fire : undefined,
+    cold: Number.isFinite(cold) ? cold : undefined,
+    lightning: Number.isFinite(lightning) ? lightning : undefined,
     chaos: Number.isFinite(chaos) ? chaos : undefined,
     apsVal: Number.isFinite(aps) ? aps : undefined,
     critVal: Number.isFinite(crit) ? crit : undefined,
@@ -1246,7 +1331,6 @@ function parseRollHit(hit) {
     lo = hi;
     hi = swap;
   }
-  if (lo === hi) return null;
   return { value, lo, hi };
 }
 
@@ -1287,14 +1371,53 @@ function foldAffixRange(text) {
     .replace(/\(\s*-?\d+(?:\.\d+)?\s*[-–—]\s*-?\d+(?:\.\d+)?\s*\)/g, " # ")
     .replace(/[+-]?\d+(?:\.\d+)?/g, "#")
     .replace(/#to /g, "# to ")
-    .replace(/#%/g, "#%")
+    .replace(/#\s*%/g, "#%")
     .replace(/%(\S)/g, "% $1")
     .replace(/\s+/g, " ")
     .replace(/^\+/, "")
     .trim();
 }
 
+function defencePoolKey(drop) {
+  const props = drop?.props || {};
+  const ar = !!props.armour;
+  const ev = !!props.evasion;
+  const es = !!props.energyShield;
+  if (ar && ev && es) return "str_dex_int";
+  if (ar && es) return "str_int";
+  if (ar && ev) return "str_dex";
+  if (ev && es) return "dex_int";
+  if (ar) return "str";
+  if (ev) return "dex";
+  if (es) return "int";
+  return "";
+}
+
+function affixBaseTags(drop) {
+  const map = typeof window !== "undefined" ? window.AFFIX_BASE_TAGS : null;
+  if (!map) return null;
+  const names = [drop?.baseType, drop?.name].map((s) => String(s || "").trim()).filter(Boolean);
+  for (const name of names) {
+    const hit = map[name] || map[name.toLowerCase()];
+    if (Array.isArray(hit) && hit.length) return hit.slice();
+  }
+  const hay = String(drop?.name || drop?.baseType || "")
+    .trim()
+    .toLowerCase();
+  if (!hay) return null;
+  let best = "";
+  for (const key of Object.keys(map)) {
+    if (key !== key.toLowerCase()) continue;
+    if (hay === key || hay.endsWith(" " + key)) {
+      if (key.length > best.length) best = key;
+    }
+  }
+  return best && Array.isArray(map[best]) ? map[best].slice() : null;
+}
+
 function itemPoolTags(drop) {
+  const fromBase = affixBaseTags(drop);
+  if (fromBase) return fromBase;
   const cls = String(drop?.className || "").toLowerCase();
   const tags = [];
   function add(tag) {
@@ -1304,8 +1427,10 @@ function itemPoolTags(drop) {
   if (/helmets?/.test(cls)) add("helmet");
   if (/gloves/.test(cls)) add("gloves");
   if (/boots/.test(cls)) add("boots");
-  if (/bucklers?/.test(cls)) add("shield");
-  else if (/shields?/.test(cls)) add("shield");
+  if (/bucklers?/.test(cls)) {
+    add("buckler");
+    add("shield");
+  } else if (/shields?/.test(cls)) add("shield");
   if (/\bfoci\b|\bfocus\b/.test(cls)) add("focus");
   if (/quivers?/.test(cls)) add("quiver");
   if (/amulets?/.test(cls)) add("amulet");
@@ -1339,8 +1464,31 @@ function itemPoolTags(drop) {
     tags.includes("spear") ||
     tags.includes("flail") ||
     tags.includes("talisman");
-  if (two) add("two_hand_weapon");
-  if (one || (weapon && !two)) add("one_hand_weapon");
+  if (two) {
+    add("two_hand_weapon");
+    add("twohand");
+  }
+  if (one || (weapon && !two)) {
+    add("one_hand_weapon");
+    add("onehand");
+  }
+  if (/life\s*flasks?/.test(cls)) add("life_flask");
+  if (/mana\s*flasks?/.test(cls)) add("mana_flask");
+  if (/charms?/.test(cls)) add("utility_flask");
+  if (tags.includes("life_flask") || tags.includes("mana_flask") || tags.includes("utility_flask")) add("flask");
+  if (/jewels?/.test(cls)) {
+    add("jewel");
+    const jewel = String(drop?.baseType || drop?.name || "").toLowerCase();
+    if (/time-?lost/.test(jewel)) add("radius_jewel");
+    if (/ruby/.test(jewel)) add(/time-?lost/.test(jewel) ? "str_radius_jewel" : "strjewel");
+    if (/emerald/.test(jewel)) add(/time-?lost/.test(jewel) ? "dex_radius_jewel" : "dexjewel");
+    if (/sapphire/.test(jewel)) add(/time-?lost/.test(jewel) ? "int_radius_jewel" : "intjewel");
+    if (/\bdiamond\b/.test(jewel) && !/time-?lost/.test(jewel)) {
+      add("strjewel");
+      add("dexjewel");
+      add("intjewel");
+    }
+  }
   if (tags.includes("body_armour") || tags.includes("helmet") || tags.includes("gloves") || tags.includes("boots") || tags.includes("shield") || tags.includes("focus")) add("armour");
   const props = drop?.props || {};
   const ar = !!props.armour;
@@ -1418,8 +1566,6 @@ function tierPos(tiers, value) {
     const hi = list[i].hi;
     if (value + 0.01 >= lo && value - 0.01 <= hi) return { i, u: hi > lo ? (value - lo) / (hi - lo) : 1 };
   }
-  if (value > list[0].hi) return { i: 0, u: 1 };
-  if (value < list[list.length - 1].lo) return { i: list.length - 1, u: 0 };
   let best = 0;
   let bestDist = Infinity;
   for (let i = 0; i < list.length; i++) {
@@ -1451,6 +1597,41 @@ function snapRollNum(n, roll) {
   return rollUsesDecimals(roll) ? Math.round(n * 10) / 10 : Math.round(n);
 }
 
+function rollPairValues(row) {
+  const out = [];
+  const lo = Number(row?.lo);
+  const hi = Number(row?.hi);
+  const value = Number(row?.value);
+  if (Number.isFinite(lo) && Number.isFinite(hi)) out.push({ lo, hi, value: Number.isFinite(value) ? value : (lo + hi) / 2 });
+  else if (Number.isFinite(value)) out.push({ lo: value, hi: value, value });
+  for (const ex of row?.extra || []) {
+    const elo = Number(ex?.lo);
+    const ehi = Number(ex?.hi);
+    const ev = Number(ex?.value);
+    if (Number.isFinite(elo) && Number.isFinite(ehi)) out.push({ lo: elo, hi: ehi, value: Number.isFinite(ev) ? ev : (elo + ehi) / 2 });
+    else if (Number.isFinite(ev)) out.push({ lo: ev, hi: ev, value: ev });
+  }
+  return out;
+}
+
+function pairExactFit(tLo, tHi, cur) {
+  if (!cur || !Number.isFinite(tLo) || !Number.isFinite(tHi)) return false;
+  const lo = Math.min(tLo, tHi);
+  const hi = Math.max(tLo, tHi);
+  return Math.abs(Number(cur.lo) - lo) < 0.02 && Math.abs(Number(cur.hi) - hi) < 0.02;
+}
+
+function pairValueFit(tLo, tHi, cur) {
+  if (!cur || !Number.isFinite(tLo) || !Number.isFinite(tHi)) return false;
+  const lo = Math.min(tLo, tHi);
+  const hi = Math.max(tLo, tHi);
+  if (Number.isFinite(cur.lo) && Number.isFinite(cur.hi) && cur.hi - cur.lo > 0.02) {
+    if (cur.lo + 0.01 >= lo && cur.hi - 0.01 <= hi) return true;
+  }
+  const v = Number.isFinite(cur.value) ? cur.value : cur.lo;
+  return Number.isFinite(v) && v + 0.01 >= lo && v - 0.01 <= hi;
+}
+
 function lookupAffixLadder(row, ctx, siblings) {
   const ladders = typeof window !== "undefined" ? window.AFFIX_LADDERS : null;
   if (!Array.isArray(ladders) || !ladders.length) return null;
@@ -1459,8 +1640,7 @@ function lookupAffixLadder(row, ctx, siblings) {
   const sibs = (siblings && siblings.length ? siblings : [row]).map((line) => foldAffixRange(line?.text)).filter(Boolean);
   const hybrid = sibs.length > 1;
   const tags = itemPoolTags(ctx);
-  const lo = Number(row?.lo);
-  const hi = Number(row?.hi);
+  const currents = rollPairValues(row);
   let best = null;
   let bestScore = -1;
   for (const group of ladders) {
@@ -1474,38 +1654,72 @@ function lookupAffixLadder(row, ctx, siblings) {
     const counts = group.n || [];
     let offset = 0;
     for (let i = 0; i < line; i++) offset += 2 * (Number(counts[i]) || 1);
-    const pairs = Number(counts[line]) || 1;
+    const pairs = Math.max(Number(counts[line]) || 1, currents.length || 1);
     const eligible = (group.r || []).filter((tier) => spawnWeight(tier.k, tier.w, tags) > 0);
     if (!eligible.length) continue;
-    let spanLo = Infinity;
-    let spanHi = -Infinity;
-    const extra = [];
-    const brackets = [];
-    for (let p = 1; p < pairs; p++) extra.push({ lo: Infinity, hi: -Infinity });
-    let contained = false;
+    const parsed = [];
     for (const tier of eligible) {
       const a = tier.a || [];
-      const tLo = a[offset];
-      const tHi = a[offset + 1];
-      if (!Number.isFinite(tLo) || !Number.isFinite(tHi)) continue;
-      spanLo = Math.min(spanLo, tLo);
-      spanHi = Math.max(spanHi, tHi);
-      brackets.push({ lo: Math.min(tLo, tHi), hi: Math.max(tLo, tHi) });
-      if (Number.isFinite(lo) && Number.isFinite(hi) && lo + 0.01 >= tLo && hi - 0.01 <= tHi) contained = true;
-      for (let p = 1; p < pairs; p++) {
-        const eLo = a[offset + p * 2];
-        const eHi = a[offset + p * 2 + 1];
-        if (!Number.isFinite(eLo) || !Number.isFinite(eHi)) continue;
-        extra[p - 1].lo = Math.min(extra[p - 1].lo, eLo);
-        extra[p - 1].hi = Math.max(extra[p - 1].hi, eHi);
+      const slots = [];
+      for (let p = 0; p < pairs; p++) {
+        const tLo = a[offset + p * 2];
+        const tHi = a[offset + p * 2 + 1];
+        if (!Number.isFinite(tLo) || !Number.isFinite(tHi)) break;
+        slots.push({ lo: Math.min(tLo, tHi), hi: Math.max(tLo, tHi) });
       }
+      if (!slots.length) continue;
+      parsed.push(slots);
     }
-    if (!Number.isFinite(spanLo) || !Number.isFinite(spanHi) || !contained) continue;
-    const tiers = brackets.sort((a, b) => b.hi - a.hi || b.lo - a.lo);
-    const score = (contained ? 4 : 0) + (folds.length === sibs.length ? 2 : 0);
+    if (!parsed.length) continue;
+    const checkPairs = Math.min(pairs, Math.max(currents.length, 1), parsed.reduce((n, slots) => Math.max(n, slots.length), 0));
+    function fitsAll(slots, fn) {
+      for (let p = 0; p < checkPairs; p++) {
+        const slot = slots[p];
+        if (!slot) return false;
+        if (!fn(slot.lo, slot.hi, currents[p] || currents[0])) return false;
+      }
+      return checkPairs > 0;
+    }
+    const exact = parsed.filter((slots) => fitsAll(slots, pairExactFit));
+    const loose = exact.length ? exact : parsed.filter((slots) => fitsAll(slots, pairValueFit));
+    if (!loose.length) continue;
+    const pairCount = parsed.reduce((n, slots) => Math.max(n, slots.length), 0);
+    const span = [];
+    for (let p = 0; p < pairCount; p++) {
+      let spanLo = Infinity;
+      let spanHi = -Infinity;
+      for (const slots of parsed) {
+        const slot = slots[p];
+        if (!slot) continue;
+        spanLo = Math.min(spanLo, slot.lo);
+        spanHi = Math.max(spanHi, slot.hi);
+      }
+      span.push({ lo: spanLo, hi: spanHi, tiers: [] });
+    }
+    const driveAt = span.reduce((bestI, s, i) => (s.hi - s.lo > span[bestI].hi - span[bestI].lo ? i : bestI), 0);
+    const ranked = parsed
+      .slice()
+      .sort((a, b) => {
+        const da = a[driveAt] || a[a.length - 1];
+        const db = b[driveAt] || b[b.length - 1];
+        return da.hi - db.hi || da.lo - db.lo;
+      });
+    for (let p = 0; p < span.length; p++) {
+      span[p].tiers = ranked.map((slots) => slots[p]).filter(Boolean);
+    }
+    const first = span[0];
+    const score = 4 + (folds.length === sibs.length ? 2 : 0) + (checkPairs > 1 ? 1 : 0) + (exact.length ? 1 : 0);
     if (score < bestScore) continue;
     bestScore = score;
-    best = { spanLo, spanHi, extra, steps: tiers.length, tiers, contained };
+    best = {
+      spanLo: first.lo,
+      spanHi: first.hi,
+      extra: span.slice(1).map((s) => ({ lo: s.lo, hi: s.hi, tiers: s.tiers })),
+      steps: first.tiers.length,
+      tiers: first.tiers,
+      extraTiers: span.slice(1).map((s) => s.tiers),
+      contained: true,
+    };
   }
   return best;
 }
@@ -1525,14 +1739,17 @@ function expandRollSpan(row, ctx, siblings) {
       .map((ex) => {
         const elo = Number(ex?.lo);
         const ehi = Number(ex?.hi);
-        if (!Number.isFinite(elo) || !Number.isFinite(ehi) || elo === ehi) return null;
-        return {
+        if (!Number.isFinite(elo) || !Number.isFinite(ehi)) return null;
+        const next = {
           value: Number.isFinite(ex.value) ? Number(ex.value) : elo,
           lo: elo,
           hi: ehi,
-          spanLo: elo,
-          spanHi: ehi,
+          spanLo: Number.isFinite(ex.spanLo) ? Number(ex.spanLo) : elo,
+          spanHi: Number.isFinite(ex.spanHi) ? Number(ex.spanHi) : ehi,
         };
+        const extraTiers = parseSpanTiers(ex.spanTiers);
+        if (extraTiers.length) next.spanTiers = extraTiers;
+        return next;
       })
       .filter(Boolean);
   }
@@ -1542,7 +1759,7 @@ function expandRollSpan(row, ctx, siblings) {
     delete row.spanSteps;
     delete row.spanTiers;
     clipExtra();
-    return row;
+    return flattenFlatDamageRoll(row);
   }
   const hit = lookupAffixLadder(row, ctx, siblings);
   if (hit && Number.isFinite(hit.spanLo) && Number.isFinite(hit.spanHi)) {
@@ -1552,31 +1769,35 @@ function expandRollSpan(row, ctx, siblings) {
     else delete row.spanSteps;
     if (Array.isArray(hit.tiers) && hit.tiers.length) row.spanTiers = hit.tiers;
     else delete row.spanTiers;
-    if (Array.isArray(row.extra)) {
-      row.extra = row.extra
-        .map((ex, i) => {
-          const elo = Number(ex?.lo);
-          const ehi = Number(ex?.hi);
-          if (!Number.isFinite(elo) || !Number.isFinite(ehi) || elo === ehi) return null;
-          const span = hit.extra?.[i];
-          return {
-            value: Number.isFinite(ex.value) ? Number(ex.value) : elo,
-            lo: elo,
-            hi: ehi,
-            spanLo: span && Number.isFinite(span.lo) ? Math.min(span.lo, elo) : elo,
-            spanHi: span && Number.isFinite(span.hi) ? Math.max(span.hi, ehi) : ehi,
+    const prev = Array.isArray(row.extra) ? row.extra : [];
+    if (Array.isArray(hit.extra) && hit.extra.length) {
+      row.extra = hit.extra
+        .map((span, i) => {
+          const ex = prev[i] || {};
+          const elo = Number(ex.lo);
+          const ehi = Number(ex.hi);
+          const ev = Number(ex.value);
+          if (!Number.isFinite(span.lo) || !Number.isFinite(span.hi)) return null;
+          const next = {
+            value: Number.isFinite(ev) ? ev : Number.isFinite(elo) ? elo : span.lo,
+            lo: Number.isFinite(elo) ? elo : span.lo,
+            hi: Number.isFinite(ehi) ? ehi : span.hi,
+            spanLo: span.lo,
+            spanHi: span.hi,
           };
+          if (Array.isArray(span.tiers) && span.tiers.length) next.spanTiers = span.tiers;
+          return next;
         })
         .filter(Boolean);
     }
-    return row;
+    return flattenFlatDamageRoll(row);
   }
   row.spanLo = lo;
   row.spanHi = hi;
   delete row.spanSteps;
   delete row.spanTiers;
   clipExtra();
-  return row;
+  return flattenFlatDamageRoll(row);
 }
 
 function expandRollSpans(rows, ctx) {
@@ -1602,7 +1823,17 @@ function applyRollSpan(row, raw) {
       row.extra = span.extras.map((ex) => ({ value: ex.value, lo: ex.lo, hi: ex.hi }));
     }
   }
-  if (!Number.isFinite(row?.lo) || !Number.isFinite(row?.hi) || row.lo === row.hi) return row;
+  const nums = [...stripAdvancedRanges(parseAffixStrings(String(raw || row?.text || ""))).matchAll(/([+-]?\d+(?:\.\d+)?)/g)]
+    .map((m) => Number(m[1]))
+    .filter((n) => Number.isFinite(n));
+  if (nums.length >= 2 && !row.extra) {
+    row.extra = [{ value: nums[1], lo: nums[1], hi: nums[1] }];
+  }
+  if (!Number.isFinite(row.lo) && Number.isFinite(nums[0])) {
+    row.value = nums[0];
+    row.lo = nums[0];
+    row.hi = nums.length > 1 ? nums[0] : nums[0];
+  }
   if (!Number.isFinite(row.value)) row.value = firstClipboardRoll(row.text);
   if (!Number.isFinite(row.wantMin)) row.wantMin = Number.isFinite(row.value) ? row.value : row.lo;
   return row;
@@ -1618,9 +1849,11 @@ function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
     const hit = findTradeStat(index, text, kind, { preferLocal: localModApplies(foldTradeMatcher(text), extra) });
     if (!hit?.id) continue;
     const inverted = invertedTradeRoll(raw);
-    const amount = Number.isFinite(roll?.wantMin) ? Number(roll.wantMin) : firstClipboardRoll(raw, inverted);
     const row = grouped.get(hit.id) || { id: hit.id, text, n: 0, option: String(hit.id).includes("|") };
     row.n += 1;
+    const amount = Number.isFinite(roll?.wantMin)
+      ? overlayLiveValue(roll)
+      : firstClipboardRoll(raw, inverted);
     if (Number.isFinite(amount)) {
       if (inverted) {
         if (!Number.isFinite(row.max) || amount > row.max) row.max = amount;
@@ -2104,6 +2337,20 @@ function hoverVariants(name, lore) {
   return { note, lines };
 }
 
+let iconFolds = null;
+
+function iconFoldMap() {
+  if (iconFolds) return iconFolds;
+  iconFolds = new Map();
+  if (typeof ITEM_ICONS !== "undefined") {
+    for (const [key, url] of Object.entries(ITEM_ICONS)) {
+      const folded = foldKey(key);
+      if (folded && !iconFolds.has(folded)) iconFolds.set(folded, url);
+    }
+  }
+  return iconFolds;
+}
+
 function lookupIcon(name) {
   if (!name) return "";
   const priced = lookupPrice(name);
@@ -2113,14 +2360,13 @@ function lookupIcon(name) {
     if (typeof ITEM_ICONS !== "undefined" && ITEM_ICONS[key]) return ITEM_ICONS[key];
   }
   const folded = foldKey(canonicalName(name) || name);
-  if (typeof ITEM_ICONS !== "undefined") {
-    for (const [key, url] of Object.entries(ITEM_ICONS)) {
-      if (foldKey(key) === folded) return url;
-    }
-  }
+  const byFold = iconFoldMap().get(folded);
+  if (byFold) return byFold;
   for (const hit of prices.byName.values()) {
     if (hit?.icon && foldKey(hit.name) === folded) return hit.icon;
   }
+  const bare = String(name).replace(/^(Superior|Exceptional|Advanced|Expert)\s+/i, "").trim();
+  if (bare && bare !== name) return lookupIcon(bare);
   return "";
 }
 
@@ -2603,6 +2849,39 @@ function itemNameHtml(name, size) {
   return `<span class="tip-source" ${itemHoverAttr(name)}>${itemIconHtml(name, size)}<span>${esc(name)}</span></span>`;
 }
 
+function dropIconNames(drop) {
+  const unique = /^unique$/i.test(String(drop?.rarity || ""));
+  const name = isUnidentifiedLine(drop?.name) ? "" : stripItemQualityPrefix(drop?.name);
+  const base = isUnidentifiedLine(drop?.baseType) ? "" : stripItemQualityPrefix(drop?.baseType);
+  return [...new Set((unique ? [name, base] : [base, name]).filter(Boolean))];
+}
+
+function dropIcon(drop) {
+  for (const name of dropIconNames(drop)) {
+    const src = lookupIcon(name);
+    if (src) return src;
+  }
+  return "";
+}
+
+function dropIconHtml(drop, size = "") {
+  const names = dropIconNames(drop);
+  return itemIconHtml(names.find((name) => lookupIcon(name)) || names[0] || "", size, true);
+}
+
+const dropIconTried = new Set();
+
+function ensureDropIcon(drop) {
+  const names = dropIconNames(drop);
+  if (!names.length || dropIcon(drop)) return;
+  const key = names.join("|");
+  if (dropIconTried.has(key)) return;
+  dropIconTried.add(key);
+  Promise.all(names.map((name) => fetchDbIcon(name))).then((urls) => {
+    if (urls.some(Boolean)) paintPriceOverlay();
+  });
+}
+
 function currencyForAmount(divine) {
   return currencyNameForUnit(priceDisplay(divine).unit);
 }
@@ -2691,14 +2970,31 @@ function leagueName() {
 }
 
 let overlayRateShown = 0;
+let overlayRateOpen = false;
+
+function overlayRateCardHtml() {
+  if (prices.status !== "ready" || !prices.exaltedPerDivine) {
+    return `<div class="price-overlay-rate-card"><p class="muted">${
+      prices.status === "loading" ? "Checking prices…" : "Check prices in the header to fill conversions."
+    }</p></div>`;
+  }
+  const cols = allConvertUnits();
+  const rows = convertSteps("divine")
+    .map(
+      (amount) =>
+        `<tr>${cols.map((unit) => `<td>${esc(formatAmount(amountFromDivine(amount, unit), unit))}</td>`).join("")}</tr>`
+    )
+    .join("");
+  return `<div class="price-overlay-rate-card"><table class="rate-table"><thead><tr>${cols
+    .map((unit) => `<th>${esc(unitLabel(unit))}</th>`)
+    .join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
 
 function overlayBarHtml() {
   const n = Math.round(Number(prices.exaltedPerDivine) || 0);
   overlayRateShown = n;
-  const rate =
-    n > 0
-      ? `<span class="price-overlay-rate" title="${esc("1 divine → " + n + " exalted")}"><svg class="price-overlay-swap" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 5h9.6L9.8 3.2 11 2l4 4-4 4-1.2-1.2L11.6 7H2V5zm12 6H4.4l1.8 1.8L5 14l-4-4 4-4 1.2 1.2L4.4 9H14v2z"/></svg>${n}</span>`
-      : `<span class="price-overlay-rate is-empty" aria-hidden="true"></span>`;
+  const title = n > 0 ? "1 divine → " + n + " exalted" : "Conversions";
+  const rate = `<span class="price-overlay-rate-wrap"><button type="button" class="price-overlay-rate${n > 0 ? "" : " is-empty"}" data-overlay-rate title="${esc(title)}"><svg class="price-overlay-swap" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 5h9.6L9.8 3.2 11 2l4 4-4 4-1.2-1.2L11.6 7H2V5zm12 6H4.4l1.8 1.8L5 14l-4-4 4-4 1.2 1.2L4.4 9H14v2z"/></svg>${n > 0 ? n : ""}</button>${overlayRateCardHtml()}</span>`;
   return `<div class="price-overlay-bar">${rate}<span class="price-overlay-league">${esc(leagueName())}</span><button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button></div>`;
 }
 
@@ -3879,7 +4175,7 @@ function cleanItemTitleLine(line) {
 function isItemTitleLine(line) {
   const t = cleanItemTitleLine(line);
   if (!t) return false;
-  if (isItemJunkLine(t) || isUnidentifiedLine(t) || isCorruptedLine(t) || isRavenTouchedLine(t)) return false;
+  if (isItemJunkLine(t) || isUnidentifiedLine(t) || isCorruptedLine(t) || isRavenTouchedLine(t) || isSanctifiedLine(t)) return false;
   if (/^(mirrored|split|fractured item|synthesised item|foil unique)$/i.test(t)) return false;
   if (/:/.test(t) && !/^[+\-\d({]/.test(t)) return false;
   return true;
@@ -3923,6 +4219,14 @@ function isRavenTouchedLine(line) {
 
 function isCorruptedLine(line) {
   return /^(corrupted|twice corrupted|double corrupted|unmodifiable)$/i.test(foldItemFlagLine(line));
+}
+
+function isMirroredLine(line) {
+  return /^mirrored$/i.test(foldItemFlagLine(line));
+}
+
+function isSanctifiedLine(line) {
+  return /^sanctified$/i.test(foldItemFlagLine(line));
 }
 
 function isAllocatesRoll(text) {
@@ -4051,6 +4355,7 @@ function isFlavourBlock(block) {
       !isRavenTouchedLine(line) &&
       !isCorruptedLine(line) &&
       !isUnidentifiedLine(line) &&
+      !isSanctifiedLine(line) &&
       !/^(mirrored|split|fractured item|synthesised item)$/i.test(line)
   );
   if (!body.length) return false;
@@ -4125,6 +4430,9 @@ function parsePoeItem(text) {
   const corrupted =
     /^\s*(Corrupted|Twice Corrupted|Double Corrupted|Unmodifiable)\s*$/im.test(raw) ||
     /\{[^}]*Corruption Enhancement/i.test(raw);
+  const flagLines = String(raw).split("\n");
+  const mirrored = flagLines.some((line) => isMirroredLine(line));
+  const sanctified = flagLines.some((line) => isSanctifiedLine(line));
   const props = parseLocalProps(raw);
   const parsedMods = parseClipboardMods(blocks.slice(1), rarity, corrupted, name, baseType, className, props);
   const mods = parsedMods.mods;
@@ -4140,7 +4448,7 @@ function parsePoeItem(text) {
   const charmHit = raw.match(/^Charm Slots:\s*(\d+)/im);
   const charmSlots = charmHit ? Math.max(0, Number(charmHit[1]) || 0) : 0;
   const isCorrupted = corrupted || mods.some((mod) => canonicalRollKind(mod.kind) === "corrupt");
-  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, unidentified, unidentifiedTier, ravenTouched, mods, usesRemaining, runeSockets, charmSlots, props };
+  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, mirrored, sanctified, unidentified, unidentifiedTier, ravenTouched, mods, usesRemaining, runeSockets, charmSlots, props };
 }
 
 function canonicalRollKind(kind) {
@@ -4239,8 +4547,13 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         ravenTouched = true;
         continue;
       }
-      if (isCorruptedLine(rawLine) || isUnidentifiedLine(rawLine) || /^(mirrored|split|fractured item|synthesised item)$/i.test(rawLine)) {
-        if (isCorruptedLine(rawLine) || /^mirrored$/i.test(foldItemFlagLine(rawLine))) afterFooter = true;
+      if (
+        isCorruptedLine(rawLine) ||
+        isUnidentifiedLine(rawLine) ||
+        isSanctifiedLine(rawLine) ||
+        /^(mirrored|split|fractured item|synthesised item)$/i.test(rawLine)
+      ) {
+        if (isCorruptedLine(rawLine) || isMirroredLine(rawLine)) afterFooter = true;
         continue;
       }
       if (isFlavourLine(rawLine)) continue;
@@ -4369,11 +4682,17 @@ function keepRollMeta(roll, text, kind, slot, pick) {
   if (roll?.unique) row.unique = true;
   if (roll?.charm) row.charm = true;
   if (Number.isInteger(roll?.rid) && roll.rid > 0) row.rid = roll.rid;
-  if (Number.isFinite(roll?.lo) && Number.isFinite(roll?.hi) && roll.lo !== roll.hi) {
+  if (Number.isFinite(roll?.lo) && Number.isFinite(roll?.hi)) {
     row.lo = Number(roll.lo);
     row.hi = Number(roll.hi);
     row.value = Number.isFinite(roll.value) ? Number(roll.value) : firstClipboardRoll(text);
     row.wantMin = Number.isFinite(roll.wantMin) ? Number(roll.wantMin) : row.value;
+    if (Number.isFinite(roll.wantMax)) row.wantMax = Number(roll.wantMax);
+    if (roll.flatAvg) {
+      row.flatAvg = true;
+      if (Number.isFinite(roll.flatA)) row.flatA = Number(roll.flatA);
+      if (Number.isFinite(roll.flatB)) row.flatB = Number(roll.flatB);
+    }
     if (Number.isFinite(roll.spanLo)) row.spanLo = Number(roll.spanLo);
     if (Number.isFinite(roll.spanHi)) row.spanHi = Number(roll.spanHi);
     if (Number(roll.spanSteps) > 1) row.spanSteps = Number(roll.spanSteps);
@@ -4384,10 +4703,15 @@ function keepRollMeta(roll, text, kind, slot, pick) {
         .map((ex) => {
           const lo = Number(ex?.lo);
           const hi = Number(ex?.hi);
-          if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo === hi) return null;
-          const next = { lo, hi, value: Number.isFinite(ex.value) ? Number(ex.value) : lo };
+          const value = Number.isFinite(ex.value) ? Number(ex.value) : lo;
+          if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+          const next = { lo, hi, value: Number.isFinite(value) ? value : lo };
           if (Number.isFinite(ex.spanLo)) next.spanLo = Number(ex.spanLo);
           if (Number.isFinite(ex.spanHi)) next.spanHi = Number(ex.spanHi);
+          if (Number.isFinite(ex.wantMin)) next.wantMin = Number(ex.wantMin);
+          if (Number.isFinite(ex.wantMax)) next.wantMax = Number(ex.wantMax);
+          const extraTiers = parseSpanTiers(ex.spanTiers);
+          if (extraTiers.length) next.spanTiers = extraTiers;
           return next;
         })
         .filter(Boolean);
@@ -4424,6 +4748,7 @@ function cleanClipboardRolls(mods, ctx) {
     );
     if (!isUsefulRoll(text, kind, mod)) continue;
     const row = keepRollMeta(mod, text, kind, slot, false);
+    if (isWeaponEleFlatRoll(row, ctx)) row.pick = false;
     row.rid = ++rid;
     applyRollSpan(row, raw);
     out.push(row);
@@ -4481,6 +4806,7 @@ function normalizeRolls(rolls, ctx) {
     const text = stripAdvancedRanges(parseAffixStrings(raw));
     if (!isUsefulRoll(text, kind, roll)) continue;
     const row = keepRollMeta(roll, text, kind, slot, !!(roll && typeof roll === "object" && roll.pick));
+    if (isWeaponEleFlatRoll(row, ctx)) row.pick = false;
     if (!Number.isInteger(row.rid) || row.rid < 1) row.rid = ++rid;
     else if (row.rid > rid) rid = row.rid;
     applyRollSpan(row, raw);
@@ -4590,6 +4916,14 @@ function handleOverlayClick(msg) {
     closeInspect();
     return;
   }
+  if (msg.overlayRate != null) {
+    return;
+  }
+  if (msg.pickBase) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    applyDropBaseMode(log, drop, msg.pickBase);
+    return;
+  }
   if (msg.pickUnique) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
     applyUniquePick(log, drop, msg.pickUnique);
@@ -4630,9 +4964,35 @@ function handleOverlayClick(msg) {
     setDropRunePick(log, drop, msg.pickRunes);
     return;
   }
+  if (msg.pickRunesToggle != null) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    toggleDropRunePick(log, drop);
+    return;
+  }
   if (msg.pickProp) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
     togglePickProp(log, drop, msg.pickProp);
+    return;
+  }
+  if (msg.pickDpsType) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    setDropDpsType(log, drop, msg.pickDpsType);
+    return;
+  }
+  if (msg.pickSearch) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    applyDropSearchToggle(log, drop, msg.pickSearch);
+    return;
+  }
+  if (msg.qStep != null) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    if (String(msg.spanRid || "") === "ilvl") stepDropIlvl(log, drop, msg.qStep, false);
+    else stepDropQuality(log, drop, msg.qStep, false);
+    return;
+  }
+  if (msg.pickHave) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    setExchangeHave(log, drop, msg.pickHave);
     return;
   }
   if (msg.spanRid) {
@@ -4681,6 +5041,7 @@ function handleOverlayClick(msg) {
 function closeInspect() {
   ui.inspect = null;
   ui.dashRollId = null;
+  overlayRateOpen = false;
   paintPriceOverlay();
 }
 
@@ -4838,12 +5199,148 @@ function formatRollNum(n, step) {
   return String(Math.round(n));
 }
 
+function sliderDriver(roll) {
+  const selfLo = Number.isFinite(roll?.spanLo) ? Number(roll.spanLo) : Number(roll?.lo);
+  const selfHi = Number.isFinite(roll?.spanHi) ? Number(roll.spanHi) : Number(roll?.hi);
+  let best = { extra: null, lo: selfLo, hi: selfHi, tiers: parseSpanTiers(roll?.spanTiers) };
+  let width = Number.isFinite(selfHi) && Number.isFinite(selfLo) ? selfHi - selfLo : -1;
+  for (const ex of roll?.extra || []) {
+    const lo = Number.isFinite(ex.spanLo) ? Number(ex.spanLo) : Number(ex.lo);
+    const hi = Number.isFinite(ex.spanHi) ? Number(ex.spanHi) : Number(ex.hi);
+    if (!(hi > lo)) continue;
+    if (hi - lo > width + 0.01) {
+      width = hi - lo;
+      best = { extra: ex, lo, hi, tiers: parseSpanTiers(ex.spanTiers) };
+    }
+  }
+  return best;
+}
+
+function overlayDivSlot(n, pos) {
+  if (!(n > 0) || !Number.isFinite(pos)) return null;
+  if (pos <= 0) return { i: 0, u: 0 };
+  if (pos >= n) return { i: n - 1, u: 1 };
+  const i = Math.min(n - 1, Math.max(0, Math.ceil(pos) - 1));
+  return { i, u: Math.min(1, Math.max(0, pos - i)) };
+}
+
+function tiersAreFlat(tiers) {
+  const list = parseSpanTiers(tiers);
+  return list.length > 1 && list.every((t) => !(Number(t.hi) > Number(t.lo)));
+}
+
+function applyDivRange(lo, hi, u) {
+  if (u <= 0) return lo;
+  if (u >= 1) return hi;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return lo;
+  if (String(lo).includes(".") || String(hi).includes(".")) return lo + u * (hi - lo);
+  const span = hi - lo;
+  if (!(span > 0)) return lo;
+  // First/last tenth of each tier stick to lo/hi so endpoints are easy to hit while dragging.
+  const edge = 0.1;
+  if (u <= edge) return lo;
+  if (u >= 1 - edge) return hi;
+  return lo + Math.round(((u - edge) / (1 - 2 * edge)) * span);
+}
+
+function damageToDiv(tiers, dmg) {
+  const list = parseSpanTiers(tiers);
+  if (!list.length || !Number.isFinite(dmg)) return 0;
+  if (tiersAreFlat(list)) {
+    for (let i = 0; i < list.length; i++) {
+      if (Math.abs(dmg - list[i].lo) < 0.02) return i;
+    }
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const d = Math.abs(dmg - list[i].lo);
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+  const pos = tierPos(list, dmg);
+  if (!pos) return 0;
+  if (pos.u <= 0 && pos.i > 0) return pos.i + 0.0001;
+  return pos.i + pos.u;
+}
+
+function divToDamage(tiers, pos) {
+  const list = parseSpanTiers(tiers);
+  if (!list.length || !Number.isFinite(pos)) return NaN;
+  if (tiersAreFlat(list)) {
+    const i = Math.min(list.length - 1, Math.max(0, Math.round(pos)));
+    return list[i].lo;
+  }
+  const slot = overlayDivSlot(list.length, pos);
+  if (!slot) return NaN;
+  const t = list[slot.i];
+  return applyDivRange(t.lo, t.hi, slot.u);
+}
+
+function overlayDivPos(roll) {
+  const d = sliderDriver(roll);
+  const n = d.tiers.length;
+  if (!(n > 1) || !(Number(d.hi) > Number(d.lo))) return NaN;
+  const w = Number(roll?.wantMin);
+  let dmg;
+  if (d.extra) {
+    dmg = Number.isFinite(w) && w + 0.01 >= d.lo && w - 0.01 <= d.hi ? w : Number(d.extra.value);
+  } else {
+    dmg = Number.isFinite(w) && w + 0.01 >= d.lo && w - 0.01 <= d.hi ? w : Number.isFinite(roll?.value) ? Number(roll.value) : d.lo;
+  }
+  if (!Number.isFinite(dmg)) dmg = d.lo;
+  if (sliderIsTierStep(d.tiers, roll)) {
+    if (Number.isFinite(roll?.wantMax)) {
+      for (let i = 0; i < d.tiers.length; i++) {
+        if (Math.abs(d.tiers[i].lo - dmg) < 0.02 && Math.abs(d.tiers[i].hi - Number(roll.wantMax)) < 0.02) return i;
+      }
+    }
+    const hit = tierPos(d.tiers, dmg);
+    return hit ? hit.i : 0;
+  }
+  return damageToDiv(d.tiers, dmg);
+}
+function overlaySliderValue(roll) {
+  const pos = overlayDivPos(roll);
+  if (Number.isFinite(pos)) return pos;
+  const d = sliderDriver(roll);
+  const w = Number(roll?.wantMin);
+  if (d.extra) {
+    if (Number.isFinite(w) && w + 0.01 >= d.lo && w - 0.01 <= d.hi) return snapRollNum(w, roll);
+    const ev = Number(d.extra.value);
+    if (Number.isFinite(ev)) return snapRollNum(Math.min(d.hi, Math.max(d.lo, ev)), roll);
+  }
+  const lo = Number.isFinite(roll?.spanLo) ? Number(roll.spanLo) : Number(roll?.lo);
+  const hi = Number.isFinite(roll?.spanHi) ? Number(roll.spanHi) : Number(roll?.hi);
+  const v = Number.isFinite(w) ? w : Number.isFinite(roll?.value) ? Number(roll.value) : lo;
+  if (!Number.isFinite(v)) return NaN;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return snapRollNum(v, roll);
+  return snapRollNum(Math.min(hi, Math.max(lo, v)), roll);
+}
+
 function extraLiveValue(roll, extra) {
+  if (roll?.flatAvg) return overlayLiveValue(roll);
+  const extraTiers = parseSpanTiers(extra?.spanTiers);
+  const pos = overlayDivPos(roll);
+  if (Number.isFinite(pos) && extraTiers.length) {
+    const n = divToDamage(extraTiers, pos);
+    if (Number.isFinite(n)) return rollUsesDecimals(roll) ? Math.round(n * 10) / 10 : Math.round(n);
+  }
+  const d = sliderDriver(roll);
+  const slide = overlaySliderValue(roll);
+  const from = d.tiers.length ? d.tiers : parseSpanTiers(roll?.spanTiers);
+  const to = extraTiers.length ? extraTiers : from;
+  const mapped = mapByTier(from, slide, to);
+  if (Number.isFinite(mapped)) return rollUsesDecimals(roll) ? Math.round(mapped * 10) / 10 : Math.round(mapped);
+  const elo = Number.isFinite(extra?.spanLo) ? Number(extra.spanLo) : Number(extra?.lo);
+  const ehi = Number.isFinite(extra?.spanHi) ? Number(extra.spanHi) : Number(extra?.hi);
+  if (Number.isFinite(extra?.value) && !(ehi > elo)) return Number(extra.value);
   const lo = Number.isFinite(roll?.spanLo) ? Number(roll.spanLo) : Number(roll?.lo);
   const hi = Number.isFinite(roll?.spanHi) ? Number(roll.spanHi) : Number(roll?.hi);
   const v = overlayLiveValue(roll);
-  const elo = Number.isFinite(extra?.spanLo) ? Number(extra.spanLo) : Number(extra?.lo);
-  const ehi = Number.isFinite(extra?.spanHi) ? Number(extra.spanHi) : Number(extra?.hi);
   if (!Number.isFinite(v) || !(hi > lo) || !(ehi > elo)) return Number.isFinite(extra?.value) ? Number(extra.value) : elo;
   const n = elo + ((v - lo) / (hi - lo)) * (ehi - elo);
   if (String(elo).includes(".") || String(ehi).includes(".")) return Math.round(n * 10) / 10;
@@ -4851,9 +5348,26 @@ function extraLiveValue(roll, extra) {
 }
 
 function overlayLiveValue(roll) {
+  if (roll?.flatAvg) {
+    const w = Number(roll.wantMin);
+    if (Number.isFinite(w)) return snapRollNum(w, roll);
+    return snapRollNum(Number(roll.value), roll);
+  }
+  const pos = overlayDivPos(roll);
+  const first = parseSpanTiers(roll?.spanTiers);
+  if (Number.isFinite(pos) && first.length) {
+    const n = divToDamage(first, pos);
+    if (Number.isFinite(n)) return snapRollNum(n, roll);
+  }
+  const d = sliderDriver(roll);
+  const slide = overlaySliderValue(roll);
+  if (d.extra && d.tiers.length) {
+    const n = mapByTier(d.tiers, slide, roll.spanTiers);
+    if (Number.isFinite(n)) return snapRollNum(n, roll);
+  }
   const lo = Number.isFinite(roll?.spanLo) ? Number(roll.spanLo) : Number(roll?.lo);
   const hi = Number.isFinite(roll?.spanHi) ? Number(roll.spanHi) : Number(roll?.hi);
-  const v = Number.isFinite(roll?.wantMin) ? Number(roll.wantMin) : Number.isFinite(roll?.value) ? Number(roll.value) : lo;
+  const v = Number.isFinite(slide) ? slide : Number.isFinite(roll?.value) ? Number(roll.value) : lo;
   if (!Number.isFinite(v)) return NaN;
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return snapRollNum(v, roll);
   return snapRollNum(Math.min(hi, Math.max(lo, v)), roll);
@@ -4861,8 +5375,27 @@ function overlayLiveValue(roll) {
 
 function overlayModTextHtml(roll) {
   const text = overlayModText(roll);
+  if (roll?.flatAvg) {
+    const n = overlayLiveValue(roll);
+    if (!Number.isFinite(n)) return esc(text);
+    const rid = Number.isInteger(roll.rid) && roll.rid > 0 ? String(roll.rid) : "";
+    const shown = formatRollNum(n, rollUsesDecimals(roll) ? "0.1" : "1");
+    const re = /\d+(?:\.\d+)?/g;
+    let out = "";
+    let last = 0;
+    let i = 0;
+    let hit;
+    while (i < 2 && (hit = re.exec(text))) {
+      out += esc(text.slice(last, hit.index));
+      out += "<b data-roll-live=\"" + esc(rid) + "\">" + esc(shown) + "</b>";
+      last = hit.index + hit[0].length;
+      i += 1;
+    }
+    return out + esc(text.slice(last));
+  }
   const n = overlayLiveValue(roll);
-  if (!Number.isFinite(n) || !Number.isFinite(roll?.lo) || roll.lo === roll.hi) return esc(text);
+  const d = sliderDriver(roll);
+  if (!Number.isFinite(n) || (!(Number(d.hi) > Number(d.lo)) && (!Number.isFinite(roll?.lo) || roll.lo === roll.hi))) return esc(text);
   const extras = Array.isArray(roll.extra) ? roll.extra : [];
   const values = [n, ...extras.map((ex) => extraLiveValue(roll, ex))];
   const rid = Number.isInteger(roll.rid) && roll.rid > 0 ? String(roll.rid) : "";
@@ -4880,12 +5413,13 @@ function overlayModTextHtml(roll) {
       const tiers = encodeSpanTiers(parseSpanTiers(roll.spanTiers));
       const tierAttr = tiers ? ` data-span-tiers="${esc(tiers)}"` : "";
       out += `<b data-roll-live="${esc(rid)}" data-span-lo="${lo}" data-span-hi="${hi}"${tierAttr}>${esc(shown)}</b>`;
-    }
-    else {
+    } else {
       const ex = extras[i - 1];
       const elo = Number.isFinite(ex?.spanLo) ? Number(ex.spanLo) : Number(ex?.lo);
       const ehi = Number.isFinite(ex?.spanHi) ? Number(ex.spanHi) : Number(ex?.hi);
-      out += `<b data-roll-extra="${esc(rid)}" data-extra-lo="${elo}" data-extra-hi="${ehi}">${esc(shown)}</b>`;
+      const tiers = encodeSpanTiers(parseSpanTiers(ex?.spanTiers));
+      const tierAttr = tiers ? ` data-span-tiers="${esc(tiers)}"` : "";
+      out += `<b data-roll-extra="${esc(rid)}" data-extra-lo="${elo}" data-extra-hi="${ehi}"${tierAttr}>${esc(shown)}</b>`;
     }
     last = hit.index + hit[0].length;
     i += 1;
@@ -4900,13 +5434,23 @@ function rollTierWidth(roll) {
 }
 
 function rollTierAtValue(roll, value) {
-  const tiers = parseSpanTiers(roll?.spanTiers);
-  if (tiers.length && Number.isFinite(value)) {
-    for (let i = 0; i < tiers.length; i++) {
-      if (value + 0.01 >= tiers[i].lo && value - 0.01 <= tiers[i].hi) return i + 1;
+  const d = sliderDriver(roll);
+  const tiers = d.tiers.length ? d.tiers : parseSpanTiers(roll?.spanTiers);
+  const n = tiers.length;
+  if (n > 1) {
+    let pos = Number.isFinite(value) ? value : overlayDivPos(roll);
+    if (Number.isFinite(pos)) {
+      if (tiersAreFlat(tiers)) {
+        const i = Math.min(n - 1, Math.max(0, Math.round(pos)));
+        return n - i;
+      }
+      if (pos >= 0 && pos <= n + 0.001) {
+        const slot = overlayDivSlot(n, pos);
+        if (slot) return n - slot.i;
+      }
+      const hit = tierPos(tiers, pos);
+      if (hit) return n - hit.i;
     }
-    if (value > tiers[0].hi) return 1;
-    return tiers.length;
   }
   const t0 = Number(roll?.tier);
   if (!(t0 > 0) || !Number.isFinite(value)) return 0;
@@ -4944,10 +5488,14 @@ function charmSlotBounds(drop) {
   return { roll, value, lo: Math.max(1, lo), hi: Math.max(Math.max(1, lo), hi) };
 }
 
-function setDropRunePick(log, drop, value) {
+function setDropRunePick(log, drop, value, live) {
   if (!drop) return;
-  if (value == null || value === "" || value === "any") drop.pickRunes = null;
-  else drop.pickRunes = Math.max(0, Math.min(4, Number(value) || 0));
+  if (value == null || value === "" || value === "any" || value === "off") drop.pickRunes = null;
+  else {
+    drop.pickRunes = Math.max(0, Math.min(6, Math.round(Number(value) || 0)));
+    drop.wantRunes = drop.pickRunes;
+  }
+  if (live) return;
   drop.quoteTried = false;
   delete drop.quote;
   if (log?.id) save();
@@ -4955,17 +5503,23 @@ function setDropRunePick(log, drop, value) {
   else render();
 }
 
+function toggleDropRunePick(log, drop) {
+  if (!drop) return;
+  if (Number.isInteger(drop.pickRunes)) {
+    setDropRunePick(log, drop, null);
+    return;
+  }
+  const n = Number.isInteger(drop.runeSockets) ? drop.runeSockets : 0;
+  setDropRunePick(log, drop, Math.max(0, Math.min(6, n)));
+}
+
 function overlayRuneHtml(log, drop) {
   if (!canHaveRunes(drop)) return "";
-  const selected = Number.isInteger(drop.pickRunes) ? drop.pickRunes : null;
-  const chips = ["any", 0, 1, 2, 3, 4]
-    .map((n) => {
-      const on = n === "any" ? (selected == null ? " is-on" : "") : selected === n ? " is-on" : "";
-      const label = n === "any" ? "Any" : String(n);
-      return `<button type="button" class="price-overlay-flag${on}" data-pick-runes="${n}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${label}</button>`;
-    })
-    .join("");
-  return `<div class="price-overlay-rune"><span>Sockets</span>${chips}</div>`;
+  const on = Number.isInteger(drop.pickRunes);
+  const itemN = Number.isInteger(drop.runeSockets) ? drop.runeSockets : 0;
+  const shown = on ? drop.pickRunes : itemN;
+  const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
+  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-sockets${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-runes-toggle ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>Sockets</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${esc(String(shown))}" data-span-rid="runes" ${mark} /></span></div>`;
 }
 
 function overlayCharmHtml(log, drop) {
@@ -4976,7 +5530,7 @@ function overlayCharmHtml(log, drop) {
   const clamped = Math.min(hi, Math.max(lo, want));
   const pct = hi > lo ? (((clamped - lo) / (hi - lo)) * 100).toFixed(2) : "0";
   const rid = roll?.rid || "charm";
-  return `<div class="price-overlay-rune price-overlay-charms"><span>Charm slots</span><div class="price-overlay-span"><span>${esc(String(lo))}</span><div class="price-overlay-span-bar"><input type="range" min="${lo}" max="${hi}" step="1" value="${clamped}" style="--fill:${pct}%" data-span-rid="${rid}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" /></div><span>${esc(String(hi))}</span></div><em>${esc(String(clamped))}</em></div>`;
+  return `<div class="price-overlay-rune price-overlay-charms"><span>Charm slots</span><div class="price-overlay-span"><span>${esc(String(lo))}</span><div class="price-overlay-span-bar"><input type="range" min="${lo}" max="${hi}" step="1" value="${clamped}" style="--fill:${pct}" data-span-rid="${rid}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" /></div><span>${esc(String(hi))}</span></div><em>${esc(String(clamped))}</em></div>`;
 }
 
 function overlayCorruptHtml(log, drop) {
@@ -5025,35 +5579,726 @@ function equipTradeKey(id) {
   );
 }
 
+// Base on/off, ilvl caps and Q20 damage follow Exiled Exchange 2 (MIT).
+function canRelaxBase(drop) {
+  if (/^unique$/i.test(String(drop?.rarity || ""))) return false;
+  return !!tradeBaseType(drop) && !!tradeCategory(drop?.className);
+}
+
+function searchExactBase(drop) {
+  if (!canRelaxBase(drop)) return true;
+  return drop?.pickExactBase !== false;
+}
+
+function maxUsefulItemLevel(category) {
+  return (
+    {
+      "weapon.wand": 81,
+      "weapon.staff": 81,
+      "sanctum.relic": 80,
+      "map.tablet": 1,
+      "map.waystone": 1,
+      "map.fragment": 1,
+      jewel: 1,
+    }[category] || 82
+  );
+}
+
+function ilvlFilterState(drop) {
+  const raw = Number(drop?.props?.ilvl);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  if (/^unique$/i.test(String(drop?.rarity || ""))) return null;
+  const cap = maxUsefulItemLevel(tradeCategory(drop?.className));
+  if (cap <= 1) return null;
+  const value = Math.min(raw, cap);
+  const want = Number(drop?.wantIlvl);
+  return { value, cap, min: Number.isFinite(want) ? Math.min(cap, Math.max(1, want)) : value, on: drop?.pickIlvl === true };
+}
+
+function qualityCap(drop) {
+  const q = Math.round(Number(drop?.props?.quality) || 0);
+  return Math.max(30, q);
+}
+
+function hasWantQuality(drop) {
+  return drop != null && Object.prototype.hasOwnProperty.call(drop, "wantQuality") && Number.isFinite(Number(drop.wantQuality));
+}
+
+function qualityFilterState(drop) {
+  const cat = tradeCategory(drop?.className);
+  if (!/^weapon\.|^armour\.|^flask$|^flask\./.test(String(cat || ""))) return null;
+  const q = Number.isFinite(Number(drop?.props?.quality)) ? Math.round(Number(drop.props.quality)) : 0;
+  const cap = qualityCap(drop);
+  let on = false;
+  if (cat === "flask.charm") on = q >= 10;
+  else if (cat === "flask") on = q > 20;
+  else if (q > 20) on = !/^rare$/i.test(String(drop?.rarity || ""));
+  else if (q >= 20 && /^(rare|magic)$/i.test(String(drop?.rarity || ""))) on = true;
+  if (typeof drop?.pickQuality === "boolean") on = drop.pickQuality;
+  const min = hasWantQuality(drop) ? Math.min(cap, Math.max(0, Math.round(Number(drop.wantQuality)))) : q;
+  return { value: q, cap, min, on };
+}
+
+function qualityForDps(drop) {
+  const quality = qualityFilterState(drop);
+  if (quality?.on) return quality.min;
+  return dpsDisplayQuality(drop);
+}
+
+function physAtQuality(drop, qAt) {
+  const itemQ = Number.isFinite(Number(drop?.props?.quality)) ? Number(drop.props.quality) : 0;
+  const want = Number.isFinite(Number(qAt)) ? Number(qAt) : itemQ;
+  const lo = Number(drop?.props?.physLo);
+  const hi = Number(drop?.props?.physHi);
+  const phys = Number(drop?.props?.phys);
+  if (Number.isFinite(lo) && Number.isFinite(hi) && hi > 0) {
+    if (itemQ === want) return (lo + hi) / 2;
+    return (scaleDamageByQuality(lo, itemQ, want) + scaleDamageByQuality(hi, itemQ, want)) / 2;
+  }
+  if (!Number.isFinite(phys) || phys <= 0) return NaN;
+  if (itemQ === want) return phys;
+  return scaleDamageByQuality(phys, itemQ, want);
+}
+
+function overlayAps(drop) {
+  const aps = Number(drop?.props?.apsVal);
+  if (!Number.isFinite(aps) || aps <= 0) return NaN;
+  return Math.round(aps * 100) / 100;
+}
+
+function overlayPhysDps(drop, qAt) {
+  const q = Number.isFinite(Number(drop?.props?.quality)) ? Number(drop.props.quality) : 0;
+  const clip = Number(drop?.props?.physDps);
+  const want = Number.isFinite(Number(qAt)) ? Number(qAt) : q;
+  if (Number.isFinite(clip) && clip > 0 && want === q) return clip;
+  const physAt = physAtQuality(drop, want);
+  const aps = overlayAps(drop);
+  if (!Number.isFinite(physAt) || !Number.isFinite(aps)) return NaN;
+  return physAt * aps;
+}
+
+function isSliderPropId(id) {
+  return ["item.armour", "item.evasion_rating", "item.energy_shield", "item.runic_ward"].includes(String(id || ""));
+}
+
+function propSliderState(drop, id, value) {
+  if (!isSliderPropId(id)) return null;
+  const hi = Math.round(Number(value));
+  if (!Number.isFinite(hi) || hi <= 1) return null;
+  const want = Number(drop?.wantProps?.[id]);
+  return { lo: 1, hi, min: Number.isFinite(want) ? Math.min(hi, Math.max(1, Math.round(want))) : hi, on: !!drop?.pickProps?.[id] };
+}
+
+function isDpsPropId(id) {
+  return ["item.total_dps", "item.physical_dps", "item.elemental_dps"].includes(String(id || ""));
+}
+
+function isTypedPropId(id) {
+  return (
+    isDpsPropId(id) ||
+    [
+      "item.aps",
+      "item.crit",
+      "item.spirit",
+      "item.armour",
+      "item.evasion_rating",
+      "item.energy_shield",
+      "item.runic_ward",
+      "item.block",
+    ].includes(String(id || ""))
+  );
+}
+
+function dpsDisplayQuality(drop) {
+  const itemQ = Number.isFinite(Number(drop?.props?.quality)) ? Number(drop.props.quality) : 0;
+  if (!dropIsModifiable(drop)) return itemQ;
+  return Math.max(20, itemQ);
+}
+
+function dpsSearchSlack(drop) {
+  return /^unique$/i.test(String(drop?.rarity || "")) ? 2 : 10;
+}
+
+function percentRollMin(value, pct) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.floor(n - (Math.abs(n) * pct) / 100 + Number.EPSILON);
+}
+
+function snapTypedProp(id, n) {
+  if (id === "item.aps" || id === "item.crit") return Math.round(n * 100) / 100;
+  return Math.round(n);
+}
+
+function propNumState(drop, id, value) {
+  if (!isTypedPropId(id)) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  let hi = 99999;
+  if (id === "item.aps") hi = 99;
+  else if (id === "item.crit") hi = 100;
+  else if (!isDpsPropId(id)) hi = Math.max(1, Math.round(n));
+  const want = Number(drop?.wantProps?.[id]);
+  const slack = n - (Math.abs(n) * dpsSearchSlack(drop)) / 100;
+  const raw = id === "item.aps" || id === "item.crit" ? n : slack;
+  const seed = Number.isFinite(want) ? snapTypedProp(id, want) : snapTypedProp(id, raw);
+  return { lo: 0, hi, value: Math.min(hi, Math.max(0, seed)) };
+}
+
+function dpsDefaultOn() {
+  return false;
+}
+
+function propPicked(drop, id, fallback) {
+  if (drop?.pickProps && Object.prototype.hasOwnProperty.call(drop.pickProps, id)) return !!drop.pickProps[id];
+  return !!fallback;
+}
+
+function dpsTypeLabel(tag) {
+  return { physical: "Physical", any: "Any", fire: "Fire", cold: "Cold", lightning: "Lightning" }[String(tag || "")] || "";
+}
+
+function dpsTypeRowLabel(tag) {
+  if (tag === "physical") return "Physical DPS";
+  if (tag === "fire") return "Fire DPS";
+  if (tag === "cold") return "Cold DPS";
+  if (tag === "lightning") return "Lightning DPS";
+  return "Elemental DPS";
+}
+
+function dpsTypeTradeId(tag) {
+  return tag === "physical" ? "item.physical_dps" : "item.elemental_dps";
+}
+
+function pickedDpsType(drop, tags) {
+  const want = String(drop?.dpsType || "");
+  if (tags.includes(want)) return want;
+  return tags.includes("any") ? "any" : tags[0] || "";
+}
+
+function dropIsModifiable(drop) {
+  return drop?.corrupted !== true && drop?.mirrored !== true && drop?.sanctified !== true;
+}
+
+function formatDpsShown(n) {
+  if (!Number.isFinite(n)) return "";
+  // Match PoB / in-game tooltip: one decimal, truncate (44.25 → 44.2).
+  return String(Math.trunc(n * 10 + Number.EPSILON) / 10);
+}
+
 function formatOverlayProp(value, kind) {
   if (!Number.isFinite(value)) return "";
   if (kind === "pct") return "+" + Math.round(value) + "%";
   if (kind === "aps") return (Math.round(value * 100) / 100).toFixed(2);
   if (kind === "crit") return (Math.round(value * 100) / 100).toFixed(2) + "%";
   if (kind === "block") return Math.round(value) + "%";
+  if (kind === "dps") return formatDpsShown(value);
   return String(Math.round(value));
+}
+
+function eleAvgByTypeFromLocalAdds(drop) {
+  const out = { fire: 0, cold: 0, lightning: 0 };
+  let hit = false;
+  const rows = Array.isArray(drop?.rolls) ? drop.rolls : Array.isArray(drop?.mods) ? drop.mods : [];
+  for (const row of rows) {
+    const text = String(row?.text || row?.name || row?.fold || "");
+    if (/spell/i.test(text)) continue;
+    const m = text.match(/adds\s+(\d+(?:\.\d+)?)\s+to\s+(\d+(?:\.\d+)?)\s+(fire|cold|lightning)\s+damage/i);
+    if (!m) continue;
+    out[m[3].toLowerCase()] += (Number(m[1]) + Number(m[2])) / 2;
+    hit = true;
+  }
+  return hit ? out : null;
+}
+
+function eleAvgFromLocalAdds(drop) {
+  const parts = eleAvgByTypeFromLocalAdds(drop);
+  return parts ? parts.fire + parts.cold + parts.lightning : NaN;
+}
+
+function weaponDpsRollKind(roll) {
+  if (!roll || roll.ghost) return "";
+  const t = String(roll.text || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune|unscalable(?: value)?)\)/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!t || /spell/.test(t)) return "";
+  if (/^adds \d+(?:\.\d+)? to \d+(?:\.\d+)? physical damage$/.test(t)) return "pflat";
+  if (/^adds \d+(?:\.\d+)? to \d+(?:\.\d+)? (?:fire|cold|lightning) damage$/.test(t)) return "eflat";
+  if (/^\d+(?:\.\d+)?% increased physical damage$/.test(t)) return "pincr";
+  if (/^\d+(?:\.\d+)?% increased attack speed$/.test(t)) return "asincr";
+  return "";
+}
+
+function isWeaponItem(drop) {
+  const cls = String(drop?.className || "").toLowerCase();
+  if (/weapon|sword|axe|mace|bow|wand|staff|warstaff|quarterstaff|spear|flail|claw|dagger|sceptre|talisman|crossbow|trap/.test(cls)) return true;
+  return itemPoolTags(drop).includes("weapon");
+}
+
+function isWeaponEleFlatRoll(roll, drop) {
+  if (drop && !isWeaponItem(drop)) return false;
+  return weaponDpsRollKind(roll) === "eflat";
+}
+
+function isFlatDamageRoll(roll) {
+  const t = String(roll?.text || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  return /^adds -?\d+(?:\.\d+)? to -?\d+(?:\.\d+)? (?:physical|fire|cold|lightning|chaos) damage(?: to (?:attacks|spells(?: and attacks)?))?$/.test(
+    stripAdvancedRanges(parseAffixStrings(t))
+  );
+}
+
+function flatDamagePairFromText(text) {
+  const t = stripAdvancedRanges(parseAffixStrings(String(text || "")))
+    .trim()
+    .replace(/\s+/g, " ");
+  const m = t.match(
+    /^adds\s+(-?\d+(?:\.\d+)?)\s+to\s+(-?\d+(?:\.\d+)?)\s+(?:physical|fire|cold|lightning|chaos)\s+damage(?:\s+to\s+(?:attacks|spells(?:\s+and\s+attacks)?))?$/i
+  );
+  if (!m) return null;
+  return { a: Number(m[1]), b: Number(m[2]) };
+}
+
+function flatDamageAvg(roll) {
+  const pair = flatDamagePairFromText(roll?.text);
+  if (pair && Number.isFinite(pair.a) && Number.isFinite(pair.b)) {
+    const avg = (pair.a + pair.b) / 2;
+    return Number.isInteger(pair.a) && Number.isInteger(pair.b) ? Math.round(avg) : Math.round(avg * 10) / 10;
+  }
+  const a = Number.isFinite(Number(roll?.value))
+    ? Number(roll.value)
+    : Number.isFinite(Number(roll?.lo))
+      ? Number(roll.lo)
+      : NaN;
+  const ex = Array.isArray(roll?.extra) ? roll.extra[0] : null;
+  const b = Number.isFinite(Number(ex?.value))
+    ? Number(ex.value)
+    : Number.isFinite(Number(ex?.lo))
+      ? Number(ex.lo)
+      : Number(roll?.hi);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return NaN;
+  const avg = (a + b) / 2;
+  return Number.isInteger(a) && Number.isInteger(b) ? Math.round(avg) : Math.round(avg * 10) / 10;
+}
+
+// EE2: trade filters flat "# to #" damage as the average of the two rolls.
+function flattenFlatDamageRoll(row) {
+  if (!row || !isFlatDamageRoll(row) || isWeaponEleFlatRoll(row)) return row;
+  const pair = flatDamagePairFromText(row.text);
+  if (!pair || !Number.isFinite(pair.a) || !Number.isFinite(pair.b)) return row;
+  const a = pair.a;
+  const b = pair.b;
+  const avg = (a + b) / 2;
+  const snapped = Number.isInteger(a) && Number.isInteger(b) ? Math.round(avg) : Math.round(avg * 10) / 10;
+  const prevWant = Number(row.wantMin);
+  const firstPass = !row.flatAvg;
+  row.flatAvg = true;
+  row.flatA = a;
+  row.flatB = b;
+  row.value = snapped;
+  row.lo = snapped;
+  row.hi = snapped;
+  row.spanLo = snapped;
+  row.spanHi = snapped;
+  delete row.spanSteps;
+  delete row.spanTiers;
+  row.extra = [{ value: snapped, lo: snapped, hi: snapped }];
+  if (
+    firstPass ||
+    !Number.isFinite(prevWant) ||
+    Math.abs(prevWant - a) < 0.02 ||
+    Math.abs(prevWant - b) < 0.02
+  ) {
+    row.wantMin = snapped;
+  }
+  return row;
+}
+
+function rollUsesTierSnap(roll, drop) {
+  if (!isWeaponEleFlatRoll(roll, drop)) return false;
+  const tiers = sliderDriver(roll).tiers;
+  return parseSpanTiers(tiers).length > 1;
+}
+
+function sliderIsTierStep(tiers) {
+  return tiersAreFlat(tiers);
+}
+
+function selectedTierIndex(roll) {
+  const d = sliderDriver(roll);
+  const list = d.tiers.length ? d.tiers : parseSpanTiers(roll?.spanTiers);
+  if (!list.length) return 0;
+  if (sliderIsTierStep(list, roll)) {
+    const pos = overlayDivPos(roll);
+    if (Number.isFinite(pos)) return Math.min(list.length - 1, Math.max(0, Math.round(pos)));
+  }
+  const pos = overlayDivPos(roll);
+  if (Number.isFinite(pos)) {
+    const slot = overlayDivSlot(list.length, pos);
+    if (slot) return slot.i;
+  }
+  const hit = tierPos(list, Number(roll?.wantMin));
+  return hit ? hit.i : 0;
+}
+
+function formatTierRange(lo, hi) {
+  if (!(Number(hi) > Number(lo))) return String(lo);
+  return lo + "—" + hi;
+}
+
+function overlayTierSnapText(roll) {
+  const d = sliderDriver(roll);
+  const i = selectedTierIndex(roll);
+  const minTiers = parseSpanTiers(roll?.spanTiers);
+  const maxTiers = d.extra ? parseSpanTiers(d.extra.spanTiers) : parseSpanTiers(roll?.extra?.[0]?.spanTiers);
+  const a = minTiers[i] || minTiers[0];
+  const b = maxTiers[i] || d.tiers[i] || a;
+  const type = weaponDpsRollEle(roll) || "Elemental";
+  if (!a || !b) return overlayModText(roll);
+  const n = Math.max(minTiers.length, maxTiers.length, d.tiers.length);
+  const t = n > 0 ? "T" + (n - i) + " " : "";
+  return (
+    t +
+    "Adds (" +
+    formatTierRange(a.lo, a.hi) +
+    ") to (" +
+    formatTierRange(b.lo, b.hi) +
+    ") " +
+    type.charAt(0).toUpperCase() +
+    type.slice(1) +
+    " Damage"
+  );
+}
+
+function applyTierSnapWant(row, pos) {
+  const d = sliderDriver(row);
+  const list = d.tiers;
+  if (!list.length) return;
+  const i = Math.min(list.length - 1, Math.max(0, Math.round(Number(pos))));
+  const t = list[i];
+  row.wantMin = t.lo;
+  row.wantMax = t.hi;
+  if (d.extra) {
+    d.extra.wantMin = t.lo;
+    d.extra.wantMax = t.hi;
+  }
+}
+
+function ensureTierSnapWant(row) {
+  if (!rollUsesTierSnap(row)) return;
+  const d = sliderDriver(row);
+  if (!d.tiers.length) return;
+  if (Number.isFinite(row.wantMin) && Number.isFinite(row.wantMax)) {
+    for (let i = 0; i < d.tiers.length; i++) {
+      if (Math.abs(d.tiers[i].lo - row.wantMin) < 0.02 && Math.abs(d.tiers[i].hi - row.wantMax) < 0.02) return;
+    }
+  }
+  const pos = overlayDivPos(row);
+  applyTierSnapWant(row, Number.isFinite(pos) ? pos : 0);
+}
+
+
+// Baseline = clipboard numbers from the mod text. Live = slider-mapped.
+function weaponDpsRollNums(roll, live) {
+  const nums = String(roll?.text || "")
+    .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune|unscalable(?: value)?)\)/gi, "")
+    .match(/\d+(?:\.\d+)?/g) || [];
+  const a0 = Number(nums[0]);
+  const b0 = Number(nums[1]);
+  const extra = Array.isArray(roll?.extra) ? roll.extra[0] : null;
+  if (!live) {
+    // Always prefer the numbers in the mod text for the item as-is.
+    if (Number.isFinite(a0) && Number.isFinite(b0)) return { a: a0, b: b0 };
+    const a = Number.isFinite(Number(roll?.value)) ? Number(roll.value) : a0;
+    const b = extra && Number.isFinite(Number(extra.value)) ? Number(extra.value) : b0;
+    return { a, b };
+  }
+  if (!Number.isFinite(Number(roll?.lo)) || !Number.isFinite(Number(roll?.hi)) || roll.lo === roll.hi) {
+    return { a: a0, b: b0 };
+  }
+  const a = overlayLiveValue(roll);
+  return {
+    a: Number.isFinite(a) ? a : a0,
+    b: extra ? extraLiveValue(roll, extra) : b0,
+  };
+}
+
+function weaponDpsRollsTouched(drop) {
+  const m = weaponDpsModel(drop);
+  if (!m) return false;
+  // Weapon ele flats are hidden (not slidable). Only phys flats / %phys / AS rebuild DPS.
+  const keys = ["flatLo", "flatHi", "incr", "asIncr"];
+  for (const key of keys) {
+    if (Math.abs((Number(m.now[key]) || 0) - (Number(m.base[key]) || 0)) > 0.02) return true;
+  }
+  return false;
+}
+
+function weaponDpsRollEle(roll) {
+  const t = String(roll?.text || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s*\((?:augmented|unmet|implicit|enchant|rune|unscalable(?: value)?)\)/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const m = t.match(/^adds \d+(?:\.\d+)? to \d+(?:\.\d+)? (fire|cold|lightning) damage$/i);
+  return m ? m[1].toLowerCase() : "";
+}
+
+function weaponDpsSums(rolls, live) {
+  const out = { flatLo: 0, flatHi: 0, incr: 0, asIncr: 0, ele: 0, fire: 0, cold: 0, lightning: 0 };
+  for (const roll of rolls || []) {
+    const kind = weaponDpsRollKind(roll);
+    if (!kind) continue;
+    const { a, b } = weaponDpsRollNums(roll, live);
+    if (kind === "pincr" || kind === "asincr") {
+      if (Number.isFinite(a)) {
+        if (kind === "pincr") out.incr += a;
+        else out.asIncr += a;
+      }
+      continue;
+    }
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    if (kind === "pflat") {
+      out.flatLo += a;
+      out.flatHi += b;
+    } else {
+      const avg = (a + b) / 2;
+      out.ele += avg;
+      const type = weaponDpsRollEle(roll);
+      if (type) out[type] += avg;
+    }
+  }
+  return out;
+}
+
+function weaponDpsModel(drop) {
+  const p = drop?.props || {};
+  const aps = Number(p.apsVal);
+  if (!Number.isFinite(aps) || aps <= 0) return null;
+  const rolls = inspectRolls(drop);
+  const base = weaponDpsSums(rolls, false);
+  function shownEle(clip, added) {
+    const n = Number(clip);
+    if (Number.isFinite(n) && n > 0) return n;
+    return added > 0 ? added : NaN;
+  }
+  return {
+    aps,
+    itemQ: Number.isFinite(Number(p.quality)) ? Number(p.quality) : 0,
+    qAt: qualityForDps(drop),
+    physLo: Number(p.physLo),
+    physHi: Number(p.physHi),
+    phys: Number(p.phys),
+    chaos: Number(p.chaos),
+    ele: shownEle(p.ele, base.ele),
+    fire: shownEle(p.fire, base.fire),
+    cold: shownEle(p.cold, base.cold),
+    lightning: shownEle(p.lightning, base.lightning),
+    physDps: Number(p.physDps),
+    eleDps: Number(p.eleDps),
+    totalDps: Number(p.totalDps),
+    base,
+    now: weaponDpsSums(rolls, true),
+  };
+}
+
+// EE2 calc-q20: strip the item's own flat/increased/quality off the shown damage, then reapply the slider's.
+// Rune locals are in the roll list (and already baked into clipboard phys/ele/aps when untouched).
+function weaponDamageAt(m, sums, qAt) {
+  const q = Number.isFinite(Number(qAt)) ? Number(qAt) : m.itemQ;
+  const inc0 = 1 + m.base.incr / 100;
+  const inc1 = 1 + sums.incr / 100;
+  const more = 1 + q / 100;
+  function at(shown, f0, f1) {
+    if (f0 === f1 && inc0 === inc1) return scaleDamageByQuality(shown, m.itemQ, q);
+    const base = Math.max(0, shown / (1 + m.itemQ / 100) / inc0 - f0);
+    return (base + f1) * inc1 * more;
+  }
+  let physAvg = NaN;
+  if (Number.isFinite(m.physLo) && Number.isFinite(m.physHi) && m.physHi > 0) {
+    physAvg = (at(m.physLo, m.base.flatLo, sums.flatLo) + at(m.physHi, m.base.flatHi, sums.flatHi)) / 2;
+  } else if (Number.isFinite(m.phys) && m.phys > 0) {
+    const raw = Math.max(0, m.phys / (1 + m.itemQ / 100) / inc0 - (m.base.flatLo + m.base.flatHi) / 2);
+    physAvg = (raw + (sums.flatLo + sums.flatHi) / 2) * inc1 * more;
+  }
+  function eleAt(type) {
+    return Number.isFinite(m[type]) ? Math.max(0, m[type] - m.base[type] + sums[type]) : NaN;
+  }
+  const as0 = 1 + (m.base.asIncr || 0) / 100;
+  const as1 = 1 + (sums.asIncr || 0) / 100;
+  let aps = m.aps;
+  if (as0 > 0 && Number.isFinite(aps)) {
+    if (as0 !== as1) aps = (aps / as0) * as1;
+    aps = Math.round(aps * 100) / 100;
+  }
+  return { physAvg, ele: eleAt("ele"), fire: eleAt("fire"), cold: eleAt("cold"), lightning: eleAt("lightning"), aps };
+}
+
+function weaponDpsCardAttrs(drop) {
+  const m = weaponDpsModel(drop);
+  if (!m) return "";
+  function attr(name, value) {
+    return Number.isFinite(value) ? ` data-dps-${name}="${value}"` : "";
+  }
+  const qAt = qualityForDps(drop);
+  return (
+    attr("aps", m.aps) +
+    attr("item-q", m.itemQ) +
+    attr("q", qAt) +
+    attr("show-q", qAt) +
+    attr("phys-lo", m.physLo) +
+    attr("phys-hi", m.physHi) +
+    attr("phys", m.phys) +
+    attr("chaos", m.chaos) +
+    attr("ele", m.ele) +
+    attr("fire", m.fire) +
+    attr("cold", m.cold) +
+    attr("lightning", m.lightning) +
+    attr("flat-lo", m.base.flatLo) +
+    attr("flat-hi", m.base.flatHi) +
+    attr("incr", m.base.incr) +
+    attr("as-incr", m.base.asIncr) +
+    attr("ele-add", m.base.ele) +
+    attr("fire-add", m.base.fire) +
+    attr("cold-add", m.base.cold) +
+    attr("lightning-add", m.base.lightning)
+  );
+}
+
+function weaponDpsLineAttrs(roll) {
+  const kind = weaponDpsRollKind(roll);
+  if (!kind) return "";
+  const { a, b } = weaponDpsRollNums(roll, false);
+  const first = Number.isFinite(a) ? ` data-dps-a="${a}"` : "";
+  const second = kind === "pincr" || kind === "asincr" ? "" : Number.isFinite(b) ? ` data-dps-b="${b}"` : "";
+  const type = weaponDpsRollEle(roll);
+  return ` data-dps-kind="${kind}"${type ? ` data-dps-ele="${type}"` : ""}${first}${second}`;
 }
 
 function dropPropRows(drop) {
   const p = drop?.props || {};
-  const aps = Number(p.apsVal);
-  const phys = Number(p.phys);
-  const ele = Number(p.ele);
-  const chaos = Number(p.chaos);
-  const pdps = Number.isFinite(aps) && Number.isFinite(phys) ? aps * phys : NaN;
-  const edps = Number.isFinite(aps) && Number.isFinite(ele) ? aps * ele : NaN;
-  const cdps = Number.isFinite(aps) && Number.isFinite(chaos) ? aps * chaos : NaN;
-  const dps = [pdps, edps, cdps].filter(Number.isFinite).reduce((a, b) => a + b, 0);
-  const rows = [];
-  function add(id, label, value, kind) {
-    if (!Number.isFinite(value) || value <= 0) return;
-    rows.push({ id: id || "", label, value, kind: kind || "", shown: formatOverlayProp(value, kind) });
+  const q = Number.isFinite(Number(p.quality)) ? Math.round(Number(p.quality)) : 0;
+  const qAt = Math.round(Number(qualityForDps(drop)) || 0);
+  const atItemQ = qAt === q;
+  const rollsLive = weaponDpsRollsTouched(drop);
+  const m = weaponDpsModel(drop);
+  // Quality does not change elemental. Only rebuild from moved damage/AS rolls or a Q change on phys.
+  const live = m && (!atItemQ || rollsLive) ? weaponDamageAt(m, rollsLive ? m.now : m.base, qAt) : null;
+  const apsClip = Number.isFinite(overlayAps(drop)) ? overlayAps(drop) : Number(p.apsVal);
+  const aps = rollsLive && live && Number.isFinite(live.aps) ? live.aps : apsClip;
+  // Elemental is not quality-scaled and weapon ele flats aren't on sliders — clipboard / local adds only.
+  let ele = Number(p.ele);
+  const fromAdds = eleAvgFromLocalAdds(drop);
+  if (Number.isFinite(fromAdds) && fromAdds > 0) {
+    ele = Number.isFinite(ele) && ele > 0 ? Math.max(ele, fromAdds) : fromAdds;
   }
-  add("", "Quality", Number(p.quality), "pct");
-  add("item.physical_dps", "PDPS", pdps);
-  add("item.elemental_dps", "EDPS", edps);
-  if ((pdps > 0 && edps > 0) || cdps > 0) add("item.total_dps", "DPS", dps);
-  add("item.aps", "APS", aps, "aps");
+  const chaos = Number(p.chaos);
+  const clipPdps = Number(p.physDps);
+  const clipEdps = Number(p.eleDps);
+  const clipTotal = Number(p.totalDps);
+  // Clipboard damage already includes quality + runes. Only rebuild phys when Q or a phys roll moved.
+  let pdps = NaN;
+  if (atItemQ && !rollsLive && Number.isFinite(clipPdps) && clipPdps > 0) pdps = clipPdps;
+  else if (atItemQ && !rollsLive) {
+    const physAvg = physAtQuality(drop, q);
+    if (Number.isFinite(physAvg) && Number.isFinite(apsClip)) pdps = physAvg * apsClip;
+  } else if (live && Number.isFinite(live.physAvg) && Number.isFinite(aps)) pdps = live.physAvg * aps;
+  else pdps = overlayPhysDps(drop, qAt);
+  let edps = NaN;
+  if (Number.isFinite(clipEdps) && clipEdps > 0) edps = clipEdps;
+  else if (Number.isFinite(apsClip) && Number.isFinite(ele) && ele > 0) edps = apsClip * ele;
+  const localAdds = eleAvgByTypeFromLocalAdds(drop);
+  const eleDps = {};
+  for (const type of ["fire", "cold", "lightning"]) {
+    let avg = Number(p[type]);
+    if (!Number.isFinite(avg) || avg <= 0) avg = localAdds ? localAdds[type] : NaN;
+    eleDps[type] = Number.isFinite(apsClip) && Number.isFinite(avg) && avg > 0 ? apsClip * avg : NaN;
+  }
+  const cdps = Number.isFinite(apsClip) && Number.isFinite(chaos) && chaos > 0 ? apsClip * chaos : NaN;
+  const hasPhys = Number.isFinite(pdps) && pdps > 0;
+  const hasEle = Number.isFinite(edps) && edps > 0;
+  const hasChaos = Number.isFinite(cdps) && cdps > 0;
+  let dps = NaN;
+  if (atItemQ && !rollsLive && Number.isFinite(clipTotal) && clipTotal > 0) dps = clipTotal;
+  else {
+    const physAvg = live && Number.isFinite(live.physAvg) ? live.physAvg : physAtQuality(drop, atItemQ ? q : qAt);
+    const useAps = rollsLive && live && Number.isFinite(live.aps) ? live.aps : apsClip;
+    const parts = [];
+    if (Number.isFinite(physAvg) && Number.isFinite(useAps) && physAvg > 0) parts.push(physAvg * useAps);
+    if (Number.isFinite(ele) && Number.isFinite(apsClip) && ele > 0) parts.push(apsClip * ele);
+    if (Number.isFinite(cdps) && cdps > 0) parts.push(cdps);
+    dps = parts.length ? parts.reduce((a, b) => a + b, 0) : [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+  }
+  const rows = [];
+  function add(id, label, value, kind, tag) {
+    if (!Number.isFinite(value) || value <= 0) return null;
+    const row = { id: id || "", label, value, kind: kind || "", tag: tag || "", shown: formatOverlayProp(value, kind) };
+    const num = propNumState(drop, row.id, value);
+    if (num) row.numInput = num;
+    rows.push(row);
+    return row;
+  }
+  const quality = qualityFilterState(drop);
+  if (quality) {
+    rows.push({
+      id: "",
+      pick: "quality",
+      label: "Quality",
+      value: quality.value,
+      kind: "pct",
+      tag: "",
+      on: quality.on,
+      shown: String(quality.value),
+      qInput: { lo: 0, hi: quality.cap, value: quality.min, rid: "quality", steps: false },
+    });
+  } else if (q > 0) add("", "Quality", q, "pct");
+  const ilvl = ilvlFilterState(drop);
+  if (ilvl) {
+    rows.push({
+      id: "",
+      pick: "ilvl",
+      label: "Item level",
+      value: ilvl.value,
+      kind: "",
+      tag: "",
+      on: ilvl.on,
+      shown: String(ilvl.value),
+      qInput: { lo: 1, hi: ilvl.cap, value: ilvl.min, rid: "ilvl", steps: false },
+    });
+  }
+  // EE2: Total, Elemental DPS (+ type tags), Physical DPS below
+  if (hasEle || (hasPhys && hasChaos)) add("item.total_dps", "Total DPS", dps, "dps");
+  if (hasEle) {
+    const eleTags = ["any"];
+    for (const type of ["fire", "cold", "lightning"]) if (Number.isFinite(eleDps[type]) && eleDps[type] > 0) eleTags.push(type);
+    const type = pickedDpsType(drop, eleTags);
+    const value = type === "any" ? edps : eleDps[type];
+    const row = add(dpsTypeTradeId(type), dpsTypeRowLabel(type), value, "dps");
+    if (row) {
+      row.dpsType = type;
+      if (eleTags.length > 1) row.dpsTags = eleTags;
+    }
+  }
+  if (hasPhys) {
+    const row = add("item.physical_dps", "Physical DPS", pdps, "dps");
+    if (row) {
+      row.q20 = dropIsModifiable(drop) && qAt !== q && qAt >= 20;
+      if (row.q20) row.q20Label = "Q " + Math.round(qAt) + "%";
+    }
+  }
+  if (hasChaos && !hasPhys && !hasEle) add("item.total_dps", "Total DPS", dps, "dps");
+  const totalRow = rows.find((row) => row.id === "item.total_dps");
+  if (totalRow) {
+    totalRow.q20 = dropIsModifiable(drop) && qAt !== q && qAt >= 20;
+    if (totalRow.q20) totalRow.q20Label = "Q " + Math.round(qAt) + "%";
+  }
+  add("item.aps", "APS", Number.isFinite(aps) ? aps : Number(p.apsVal), "aps");
   add("item.crit", "Crit", Number(p.critVal), "crit");
   add("", "Reload", Number(p.reload), "aps");
   add("item.spirit", "Spirit", Number(p.spirit));
@@ -5062,15 +6307,21 @@ function dropPropRows(drop) {
   add("item.energy_shield", "Energy Shield", Number(p.es));
   add("item.runic_ward", "Ward", Number(p.ward));
   add("item.block", "Block", Number(p.blockChance), "block");
+  for (const row of rows) {
+    if (!isTypedPropId(row.id)) continue;
+    row.dpsDefaultOn = dpsDefaultOn(drop, row.id, row.value, dps);
+    row.on = propPicked(drop, row.id, row.dpsDefaultOn);
+  }
   return rows;
 }
 
 function pickedPropFilters(drop) {
   return dropPropRows(drop)
-    .filter((row) => row.id && drop?.pickProps?.[row.id])
+    .filter((row) => row.id && propPicked(drop, row.id, row.dpsDefaultOn))
     .map((row) => {
       const next = { id: row.id };
-      if (Number.isFinite(row.value)) next.min = row.value;
+      const min = row.numInput ? row.numInput.value : row.slider ? row.slider.min : row.value;
+      if (Number.isFinite(min)) next.min = min;
       return next;
     });
 }
@@ -5078,23 +6329,239 @@ function pickedPropFilters(drop) {
 function togglePickProp(log, drop, id) {
   if (!drop || !id || !equipTradeKey(id)) return;
   drop.pickProps = drop.pickProps && typeof drop.pickProps === "object" ? drop.pickProps : {};
-  if (drop.pickProps[id]) delete drop.pickProps[id];
-  else drop.pickProps[id] = true;
+  const row = dropPropRows(drop).find((item) => item.id === id);
+  const on = propPicked(drop, id, row?.dpsDefaultOn);
+  drop.pickProps[id] = !on;
   drop.quoteTried = false;
   delete drop.quote;
   if (log?.id) save();
   paintPriceOverlay();
+  if (isTypedPropId(id)) quoteRolledDrop(log, drop, true);
+}
+
+function applyDropSearchToggle(log, drop, what) {
+  if (!drop) return;
+  if (what === "exact") drop.pickExactBase = !searchExactBase(drop);
+  else if (what === "ilvl") {
+    const next = !ilvlFilterState(drop)?.on;
+    drop.pickIlvl = next;
+    if (next && !Number.isFinite(Number(drop.wantIlvl))) {
+      const raw = Number(drop?.props?.ilvl);
+      if (Number.isFinite(raw) && raw > 0) drop.wantIlvl = Math.round(raw);
+    }
+  } else if (what === "quality") {
+    const next = !qualityFilterState(drop)?.on;
+    drop.pickQuality = next;
+    if (next && !hasWantQuality(drop)) {
+      drop.wantQuality = Math.round(Number(drop.props?.quality) || 0);
+    }
+  } else return;
+  drop.quoteTried = false;
+  delete drop.quote;
+  delete drop.quoting;
+  if (log?.id) save();
+  if (ui.inspect) paintPriceOverlay();
+  else render();
+  quoteRolledDrop(log, drop, true);
+}
+
+function applyDropBaseMode(log, drop, mode) {
+  if (!drop || !canRelaxBase(drop)) return;
+  const exact = String(mode || "") !== "any";
+  if (searchExactBase(drop) === exact) return;
+  drop.pickExactBase = exact;
+  drop.quoteTried = false;
+  delete drop.quote;
+  delete drop.quoting;
+  if (log?.id) save();
+  paintPriceOverlay();
+  quoteRolledDrop(log, drop, true);
+}
+
+function commitDropSliderMin(log, drop) {
+  drop.quoteTried = false;
+  delete drop.quote;
+  delete drop.quoting;
+  if (log?.id) save();
+  paintPriceOverlay();
+  quoteRolledDrop(log, drop, true);
+}
+
+function setDropIlvlMin(log, drop, raw, live) {
+  const state = ilvlFilterState(drop);
+  if (!drop || !state) return;
+  if (String(raw).trim() === "") return;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return;
+  drop.wantIlvl = Math.min(state.cap, Math.max(1, Math.round(n)));
+  drop.pickIlvl = true;
+  if (live) return;
+  commitDropSliderMin(log, drop);
+}
+
+function setDropQualityMin(log, drop, raw, live) {
+  const state = qualityFilterState(drop);
+  if (!drop || !state) return;
+  if (String(raw).trim() === "") return;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return;
+  drop.wantQuality = Math.min(state.cap, Math.max(0, Math.round(n)));
+  drop.pickQuality = true;
+  if (live) return;
+  if (log?.id) save();
+  paintPriceOverlay();
+  quoteRolledDrop(log, drop, true);
+}
+
+function stepDropQuality(log, drop, delta, live) {
+  const state = qualityFilterState(drop);
+  if (!drop || !state) return;
+  const cur = hasWantQuality(drop) ? Number(drop.wantQuality) : state.value;
+  setDropQualityMin(log, drop, cur + Number(delta || 0), live);
+}
+
+function stepDropIlvl(log, drop, delta, live) {
+  const state = ilvlFilterState(drop);
+  if (!drop || !state) return;
+  const cur = Number.isFinite(Number(drop.wantIlvl)) ? Number(drop.wantIlvl) : state.value;
+  setDropIlvlMin(log, drop, cur + Number(delta || 0), live);
+}
+
+function setDropPropMin(log, drop, id, raw, live) {
+  if (!drop || !isTypedPropId(id) && !isSliderPropId(id)) return;
+  if (String(raw).trim() === "") return;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return;
+  const row = dropPropRows(drop).find((item) => item.id === id);
+  const bounds = row?.slider || row?.numInput;
+  if (!bounds) return;
+  drop.wantProps = drop.wantProps && typeof drop.wantProps === "object" ? drop.wantProps : {};
+  drop.wantProps[id] = Math.min(bounds.hi, Math.max(bounds.lo, snapTypedProp(id, n)));
+  drop.pickProps = drop.pickProps && typeof drop.pickProps === "object" ? drop.pickProps : {};
+  drop.pickProps[id] = true;
+  if (live) return;
+  commitDropSliderMin(log, drop);
+}
+
+function setDropDpsType(log, drop, tag) {
+  const next = String(tag || "").toLowerCase();
+  if (!drop || !dpsTypeLabel(next) || next === "physical") return;
+  const rows = dropPropRows(drop);
+  const prev = rows.find((row) => row.dpsType);
+  if ((prev?.dpsType || "") === next) return;
+  const wasOn = propPicked(drop, "item.elemental_dps", prev?.dpsDefaultOn);
+  drop.dpsType = next;
+  if (drop.wantProps) delete drop.wantProps["item.elemental_dps"];
+  drop.pickProps = drop.pickProps && typeof drop.pickProps === "object" ? drop.pickProps : {};
+  drop.pickProps["item.elemental_dps"] = wasOn;
+  drop.quoteTried = false;
+  delete drop.quote;
+  delete drop.quoting;
+  if (log?.id) save();
+  if (ui.inspect) paintPriceOverlay();
+  else render();
+  if (wasOn) quoteRolledDrop(log, drop, true);
+}
+
+function overlayBaseHtml(log, drop) {
+  const base = drop.baseType || drop.className || "";
+  if (!canRelaxBase(drop)) return `<div class="item-tip-base">${esc(base)}</div>`;
+  const on = searchExactBase(drop);
+  const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
+  return `<div class="price-overlay-base-row"><div class="item-tip-base">${esc(base)}</div><span class="price-overlay-base-modes"><button type="button" class="price-overlay-base-mode${on ? " is-on" : ""}" data-pick-base="exact" ${mark}>Base</button><button type="button" class="price-overlay-base-mode${on ? "" : " is-on"}" data-pick-base="any" ${mark}>Any</button></span></div>`;
+}
+
+function overlayPropSliderHtml(log, drop, opt) {
+  const lo = Math.round(Number(opt?.lo));
+  const hi = Math.round(Number(opt?.hi));
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi < lo) return "";
+  const clamped = Math.min(hi, Math.max(lo, Math.round(Number(opt.value))));
+  const pct = hi > lo ? (((clamped - lo) / (hi - lo)) * 100).toFixed(2) : "0";
+  return `<div class="price-overlay-rune price-overlay-charms"><span>${esc(opt.label)}</span><div class="price-overlay-span"><span>${lo}</span><div class="price-overlay-span-bar"><input type="range" min="${lo}" max="${hi}" step="1" value="${clamped}" style="--fill:${pct}" data-span-rid="${esc(opt.rid)}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" /></div><span>${hi}</span></div><em>${clamped}</em></div>`;
+}
+
+function overlayPropSlidersHtml(log, drop, rows) {
+  const out = [];
+  for (const row of rows) {
+    if (!row.slider?.on) continue;
+    out.push(overlayPropSliderHtml(log, drop, { rid: row.id, label: row.label, lo: row.slider.lo, hi: row.slider.hi, value: row.slider.min }));
+  }
+  return out.join("");
+}
+
+function sanitizeOverlayMinInput(el) {
+  if (!el) return;
+  const raw = String(el.value || "");
+  let next = raw;
+  if (el.dataset.spanDec) {
+    next = raw.replace(/[^\d.]/g, "");
+    const i = next.indexOf(".");
+    if (i >= 0) next = next.slice(0, i + 1) + next.slice(i + 1).replace(/\./g, "");
+  } else {
+    next = raw.replace(/\D/g, "");
+  }
+  if (next !== raw) el.value = next;
+}
+
+function overlayMinFilterHtml(log, drop, row, compact = false) {
+  const q = row.qInput;
+  if (!q) return "";
+  const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
+  const rid = q.rid || row.pick;
+  const minus = q.steps ? `<button type="button" class="price-overlay-q-step" data-q-step="-1" data-span-rid="${esc(rid)}" ${mark} aria-label="Decrease">−</button>` : "";
+  const plus = q.steps ? `<button type="button" class="price-overlay-q-step" data-q-step="1" data-span-rid="${esc(rid)}" ${mark} aria-label="Increase">+</button>` : "";
+  const label = compact
+    ? row.pick === "quality"
+      ? "Quality"
+      : row.pick === "ilvl"
+        ? "Item level"
+        : row.label
+    : row.label;
+  return `<div class="price-overlay-prop price-overlay-prop-num${compact ? " is-meta" : ""}${row.pick === "quality" ? " is-quality" : ""}${row.pick === "ilvl" ? " is-ilvl" : ""}${row.on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-search="${esc(row.pick)}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(label)}</span>${compact ? "" : `<b>${esc(row.shown)}</b>`}</button><span class="price-overlay-q-edit">${minus}<input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${q.lo}" max="${q.hi}" value="${q.value}" data-span-rid="${esc(rid)}" ${mark} />${plus}</span></div>`;
 }
 
 function overlayPropsHtml(log, drop) {
   const rows = dropPropRows(drop);
-  if (!rows.length) return "";
-  return `<div class="price-overlay-props">${rows
+  const quality = rows.find((row) => row.qInput && row.pick === "quality");
+  const ilvl = rows.find((row) => row.qInput && row.pick === "ilvl");
+  const rest = rows.filter((row) => row !== quality && row !== ilvl);
+  const rune = overlayRuneHtml(log, drop);
+  const metaBits = [
+    quality ? overlayMinFilterHtml(log, drop, quality, true) : "",
+    ilvl ? overlayMinFilterHtml(log, drop, ilvl, true) : "",
+    rune,
+  ].filter(Boolean);
+  const meta = metaBits.length ? `<div class="price-overlay-meta">${metaBits.join("")}</div>` : "";
+  if (!rest.length) return meta;
+  return `${meta}<div class="price-overlay-props">${rest
     .map((row) => {
-      const shown = `<span>${esc(row.label)}</span><b>${esc(row.shown)}</b>`;
+      const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
+      if (row.qInput) return overlayMinFilterHtml(log, drop, row);
+      const live =
+        row.dpsType
+          ? ` data-live-typed-dps="${esc(row.dpsType)}"`
+          : row.id === "item.physical_dps"
+            ? " data-live-pdps"
+            : row.id === "item.elemental_dps"
+              ? " data-live-edps"
+              : row.id === "item.total_dps"
+                ? " data-live-dps"
+                : "";
+      if (row.numInput) {
+        const n = row.numInput;
+        const on = row.on ? " is-on" : "";
+        const tags = (row.dpsTags || [])
+          .map((tag) => `<button type="button" class="price-overlay-dps-tag is-${esc(tag)}${tag === row.dpsType ? " is-on" : ""}" data-pick-dps-type="${esc(tag)}" ${mark}>${esc(dpsTypeLabel(tag))}</button>`)
+          .join("");
+        const dec = row.kind === "aps" || row.kind === "crit" ? ` data-span-dec="1" step="0.1"` : "";
+        const typed = row.kind === "aps" || row.kind === "crit" ? Number(n.value).toFixed(2) : n.value;
+        return `<div class="price-overlay-prop price-overlay-prop-num${on}"><button type="button" class="price-overlay-q-toggle" data-pick-prop="${esc(row.id)}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(row.label)}: </span><b${live}>${esc(row.shown)}</b>${row.q20 ? `<em class="price-overlay-q20">${esc(row.q20Label || "Q 20%")}</em>` : ""}</button><span class="price-overlay-q-edit"><input type="text" inputmode="decimal" pattern="[0-9.]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${n.lo}" max="${n.hi}" value="${typed}" data-span-rid="${esc(row.id)}"${dec} ${mark} /></span></div>${tags ? `<div class="price-overlay-dps-tags">${tags}</div>` : ""}`;
+      }
+      const shown = `<span>${esc(row.label)}</span><b${live}>${esc(row.shown)}</b>`;
+      if (row.pick) return `<button type="button" class="price-overlay-prop${row.on ? " is-on" : ""}" data-pick-search="${esc(row.pick)}" ${mark}>${shown}</button>`;
       if (!row.id) return `<div class="price-overlay-prop is-static">${shown}</div>`;
       const on = drop.pickProps?.[row.id] ? " is-on" : "";
-      return `<button type="button" class="price-overlay-prop${on}" data-pick-prop="${esc(row.id)}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${shown}</button>`;
+      return `<button type="button" class="price-overlay-prop${on}" data-pick-prop="${esc(row.id)}" ${mark}>${shown}</button>`;
     })
     .join("")}</div>`;
 }
@@ -5137,12 +6604,49 @@ function exchangeWantTag(drop) {
   return folded.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-function exchangeHaveCurrencies(drop) {
+function exchangeHaveOptions(drop) {
   const want = exchangeWantTag(drop);
+  return ["exalted", "chaos", "divine"].filter((tag) => tag !== want);
+}
+
+function exchangeHavePick(drop) {
+  const options = exchangeHaveOptions(drop);
+  if (!options.length) return convertMain() || "exalted";
+  const picked = String(drop?.exchangeHave || "").toLowerCase();
+  if (options.includes(picked)) return picked;
   const main = convertMain();
-  const all = ["exalted", "chaos", "divine"].filter((tag) => tag !== want);
-  if (all.includes(main)) return [main, ...all.filter((tag) => tag !== main)];
-  return all;
+  if (options.includes(main)) return main;
+  return options[0];
+}
+
+function exchangeHaveCurrencies(drop) {
+  return [exchangeHavePick(drop)];
+}
+
+function setExchangeHave(log, drop, tag) {
+  if (!drop) return;
+  const next = String(tag || "").toLowerCase();
+  if (!exchangeHaveOptions(drop).includes(next)) return;
+  drop.exchangeHave = next;
+  drop.quoteTried = false;
+  delete drop.quote;
+  delete drop.quoting;
+  if (log?.id) save();
+  paintPriceOverlay();
+  quoteRolledDrop(log, drop, true);
+}
+
+function overlayExchangeHaveHtml(log, drop) {
+  if (!overlayUsesExchange(drop)) return "";
+  const picked = exchangeHavePick(drop);
+  const chips = exchangeHaveOptions(drop)
+    .map((tag) => {
+      const label = tag === "exalted" ? "Exalt" : tag === "divine" ? "Divine" : "Chaos";
+      return `<button type="button" class="price-overlay-prop${picked === tag ? " is-on" : ""}" data-pick-have="${esc(tag)}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${esc(label)}</button>`;
+    })
+    .join("");
+  if (!chips) return "";
+  return `<div class="price-overlay-flags"><span class="price-overlay-sec-label">Pay with</span>${chips}</div>`;
 }
 
 function tradeSiteQuery(drop, filters) {
@@ -5178,11 +6682,15 @@ function tradeSiteQuery(drop, filters) {
     filters: {},
   };
   if (unique && drop?.name && !isUnidentifiedLine(drop.name) && !(searchUnidentified(drop) && namesMatch(drop.name, typeLine))) query.name = drop.name;
-  if (typeLine) query.type = typeLine;
+  if (typeLine && searchExactBase(drop)) query.type = typeLine;
   const typeBag = {};
   if (category) typeBag.category = { option: category };
   if (unique) typeBag.rarity = { option: "unique" };
   else if (/^(rare|magic|normal)$/i.test(rarity)) typeBag.rarity = { option: "nonunique" };
+  const ilvl = ilvlFilterState(drop);
+  if (ilvl?.on) typeBag.ilvl = { min: ilvl.min };
+  const quality = qualityFilterState(drop);
+  if (quality?.on) typeBag.quality = { min: quality.min };
   if (Object.keys(typeBag).length) query.filters.type_filters = { filters: typeBag };
   const misc = {};
   if (typeof searchCorrupted(drop) === "boolean") misc.corrupted = { option: searchCorrupted(drop) ? "true" : "false" };
@@ -5211,7 +6719,7 @@ function tradeSiteQuery(drop, filters) {
 async function tradeSiteUrl(drop) {
   const league = leagueId();
   if (!league) return "";
-  if (drop?.quote?.url) return drop.quote.url;
+  // Always build from current toggles — never reuse a stale quote.url.
   if (overlayUsesExchange(drop)) {
     const want = exchangeWantTag(drop);
     if (!want) return "";
@@ -5287,10 +6795,42 @@ function overlayOffersHtml(drop) {
   return `<div class="price-overlay-offers">${rows}</div>`;
 }
 
+function spanTickPercents(lo, hi, tiers, steps, equal) {
+  const span = Number(hi) - Number(lo);
+  if (!(span > 0)) return [];
+  const seen = new Set();
+  const out = [];
+  function add(v) {
+    const at = ((Number(v) - Number(lo)) / span) * 100;
+    if (!(at > 0.4 && at < 99.6)) return;
+    const key = at.toFixed(2);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(key);
+  }
+  if (equal && Number(steps) > 1) {
+    for (let i = 1; i < Number(steps); i++) out.push(((100 * i) / Number(steps)).toFixed(2));
+    return out;
+  }
+  const list = parseSpanTiers(tiers);
+  if (list.length > 1) {
+    for (const t of list) add(t.lo);
+  } else if (Number(steps) > 2) {
+    for (let i = 1; i < Number(steps); i++) add(Number(lo) + (span * i) / Number(steps));
+  }
+  return out;
+}
+
+function spanTicksHtml(lo, hi, tiers, steps, equal) {
+  const ticks = spanTickPercents(lo, hi, tiers, steps, equal);
+  if (!ticks.length) return "";
+  return `<div class="price-overlay-span-ticks">${ticks.map((at) => `<i style="--at:${at}"></i>`).join("")}</div>`;
+}
+
 function priceOverlayHtml(log, drop) {
   const rolls = inspectRolls(drop);
   const order = ["enchant", "corrupt", "rune", "skill", "implicit", "explicit"];
-  const listed = order.flatMap((kind) => rolls.filter((roll) => canonicalRollKind(roll.kind) === kind && !isCharmSlotRoll(roll)));
+  const listed = order.flatMap((kind) => rolls.filter((roll) => canonicalRollKind(roll.kind) === kind && !isCharmSlotRoll(roll) && !isWeaponEleFlatRoll(roll, drop)));
   function affixGroups(list) {
     const out = [];
     for (const roll of list) {
@@ -5316,42 +6856,49 @@ function priceOverlayHtml(log, drop) {
       : "";
     return `<span class="price-overlay-pill${kind}"${live}>${esc(tag)}</span>`;
   }
+  function rollFlatAvgInputHtml(roll) {
+    if (!roll?.flatAvg) return "";
+    const avg = Number.isFinite(Number(roll.value)) ? Number(roll.value) : flatDamageAvg(roll);
+    const want = Number.isFinite(Number(roll.wantMin)) ? Number(roll.wantMin) : avg;
+    const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
+    const shown = formatRollNum(want, rollUsesDecimals(roll) ? "0.1" : "1");
+    return `<span class="price-overlay-q-edit"><input type="text" inputmode="decimal" pattern="[0-9.]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="99999" value="${esc(shown)}" data-span-rid="${roll.rid}" data-span-dec="${rollUsesDecimals(roll) ? "1" : "0"}" ${mark} /></span>`;
+  }
   function rollSpanHtml(roll) {
-    if (!Number.isFinite(roll?.lo) || !Number.isFinite(roll?.hi) || roll.lo === roll.hi) return "";
-    const lo = Number.isFinite(roll.spanLo) ? Number(roll.spanLo) : Number(roll.lo);
-    const hi = Number.isFinite(roll.spanHi) ? Number(roll.spanHi) : Number(roll.hi);
-    if (!(hi > lo)) return "";
-    const clamped = overlayLiveValue(roll);
-    const step = String(lo).includes(".") || String(hi).includes(".") || String(clamped).includes(".") ? "0.1" : "1";
-    const w = rollTierWidth(roll);
-    const tiers = parseSpanTiers(roll.spanTiers);
-    const steps = tiers.length > 1 ? tiers.length : Number(roll.spanSteps) > 1 ? Number(roll.spanSteps) : 0;
-    let ticks = "";
-    if (tiers.length > 2) {
-      ticks = `<div class="price-overlay-span-ticks">`;
-      for (let i = 0; i < tiers.length - 1; i++) {
-        const at = ((tiers[i].lo - lo) / (hi - lo)) * 100;
-        if (at > 0 && at < 100) ticks += `<i style="left:${at.toFixed(2)}%"></i>`;
-      }
-      ticks += `</div>`;
-    } else if (steps > 2) {
-      ticks = `<div class="price-overlay-span-ticks">`;
-      for (let i = 1; i < steps; i++) ticks += `<i style="left:${((i / steps) * 100).toFixed(2)}%"></i>`;
-      ticks += `</div>`;
-    }
+    if (roll?.flatAvg) return "";
+    const d = sliderDriver(roll);
+    const lo = d.lo;
+    const hi = d.hi;
+    if (!(Number(hi) > Number(lo))) return "";
+    const tiers = d.tiers;
+    const n = tiers.length;
+    const divs = n > 1;
+    const flat = divs && tiersAreFlat(tiers);
+    const clamped = overlaySliderValue(roll);
+    const inMin = divs ? 0 : lo;
+    const inMax = divs ? (flat ? n - 1 : n) : hi;
+    const inVal = Number.isFinite(clamped) ? clamped : divs ? 0 : lo;
+    const step = flat ? "1" : divs ? "0.01" : String(lo).includes(".") || String(hi).includes(".") || String(inVal).includes(".") ? "0.1" : "1";
+    const w = Number(hi) - Number(lo) > 0 ? Number(hi) - Number(lo) : 1;
+    const steps = divs ? inMax - inMin : Number(roll.spanSteps) > 1 ? Number(roll.spanSteps) : 0;
+    const ticks = spanTicksHtml(inMin, inMax, divs ? [] : tiers, steps, divs);
     const t0 = rollHasAffixTiers(roll) && Number(roll.tier) > 0 ? Number(roll.tier) : "";
-    const v0 = Number.isFinite(roll.value) ? Number(roll.value) : clamped;
-    const pct = hi > lo ? (((clamped - lo) / (hi - lo)) * 100).toFixed(2) : "0";
+    const v0 = Number.isFinite(inVal) ? inVal : Number.isFinite(roll.value) ? Number(roll.value) : lo;
+    const pct = inMax > inMin ? (((inVal - inMin) / (inMax - inMin)) * 100).toFixed(2) : "0";
     const tierAttr = tiers.length ? ` data-span-tiers="${esc(encodeSpanTiers(tiers))}"` : "";
-    return `<div class="price-overlay-span"><span>${esc(String(lo))}</span><div class="price-overlay-span-bar">${ticks}<input type="range" min="${lo}" max="${hi}" step="${step}" value="${clamped}" style="--fill:${pct}%" data-span-rid="${roll.rid}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" data-tier0="${t0}" data-value0="${v0}" data-tier-w="${w}"${tierAttr} /></div><span>${esc(String(hi))}</span></div>`;
+    const divAttr = divs ? ` data-span-divs="${n}"` : "";
+    const flatAttr = flat ? ` data-span-flat="1"` : "";
+    return `<div class="price-overlay-span"><span>${esc(String(lo))}</span><div class="price-overlay-span-bar">${ticks}<input type="range" min="${inMin}" max="${inMax}" step="${step}" value="${inVal}" style="--fill:${pct}" data-span-rid="${roll.rid}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" data-tier0="${t0}" data-value0="${v0}" data-tier-w="${w}"${tierAttr}${divAttr}${flatAttr} /></div><span>${esc(String(hi))}</span></div>`;
   }
   function oneModButton(roll, tag) {
     const on = roll.pick ? " is-on" : "";
     const kind = rollKindClass(roll);
     const ghost = roll.ghost ? " is-ghost" : "";
     const hint = roll.ghost ? "Typical implicit · F8 this item to capture the real roll · " : tag ? tag + " · " : "";
-    const live = rollHasAffixTiers(roll) && Number(roll.tier) > 0 ? rollKindLabel(roll, rollTierAtValue(roll, overlayLiveValue(roll))) : tag;
-    return `<div class="price-overlay-mod-wrap${on}${ghost}"><button type="button" class="price-overlay-mod${kind}" ${pickAttrs(roll)} title="${esc(hint + roll.text)}"><span class="price-overlay-mod-main"><span class="price-overlay-mod-text">${overlayModTextHtml(roll)}</span>${pillHtml(live, kind, roll)}</span></button>${rollSpanHtml(roll)}</div>`;
+    const live = rollHasAffixTiers(roll) && Number(roll.tier) > 0
+      ? rollKindLabel(roll, rollTierAtValue(roll, overlaySliderValue(roll)))
+      : tag;
+    return `<div class="price-overlay-mod-wrap${on}${ghost}"><div class="price-overlay-mod-line"><button type="button" class="price-overlay-q-toggle" ${pickAttrs(roll)} title="${esc(hint + roll.text)}"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod${kind}"><span class="price-overlay-mod-main"><span class="price-overlay-mod-text"${weaponDpsLineAttrs(roll)}>${overlayModTextHtml(roll)}</span>${pillHtml(live, kind, roll)}</span>${rollFlatAvgInputHtml(roll)}</div></div>${rollSpanHtml(roll)}</div>`;
   }
   function modButtons(list) {
     return affixGroups(list)
@@ -5363,14 +6910,19 @@ function priceOverlayHtml(log, drop) {
         const on = group.rolls.some((roll) => roll.pick) ? " is-on" : "";
         const kind = rollKindClass(sample);
         const hint = (tag ? tag + " · " : "") + group.rolls.map((roll) => roll.text).join(" / ");
-        const liveTag = rollHasAffixTiers(sample) && Number(sample.tier) > 0 ? rollKindLabel({ ...sample, hybrid: true }, rollTierAtValue(sample, overlayLiveValue(sample))) : tag;
-        const driver = group.rolls.find((roll) => Number.isFinite(roll.lo) && Number.isFinite(roll.hi) && roll.lo !== roll.hi) || sample;
-        const lines = group.rolls.map((roll) => `<span class="price-overlay-hybrid-line">${overlayModTextHtml(roll)}</span>`).join("");
-        return `<div class="price-overlay-mod-wrap${on}"><button type="button" class="price-overlay-affix is-hybrid${kind}" ${pickAttrs(sample)} title="${esc(hint)}"><span class="price-overlay-mod-main"><span class="price-overlay-hybrid-lines">${lines}</span>${pillHtml(liveTag, kind, sample)}</span></button>${rollSpanHtml(driver)}</div>`;
+        const liveTag = rollHasAffixTiers(sample) && Number(sample.tier) > 0
+          ? rollKindLabel({ ...sample, hybrid: true }, rollTierAtValue(sample, overlaySliderValue(sample)))
+          : tag;
+        const rows = group.rolls
+          .map((roll) => {
+            const span = rollSpanHtml(roll);
+            return `<div class="price-overlay-hybrid-row" data-hybrid-rid="${esc(String(roll.rid || ""))}"><span class="price-overlay-hybrid-line"${weaponDpsLineAttrs(roll)}>${overlayModTextHtml(roll)}</span>${span}</div>`;
+          })
+          .join("");
+        return `<div class="price-overlay-mod-wrap${on}"><div class="price-overlay-mod-line"><button type="button" class="price-overlay-q-toggle" ${pickAttrs(sample)} title="${esc(hint)}"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod is-hybrid${kind}"><span class="price-overlay-mod-main"><div class="price-overlay-hybrid-rows">${rows}</div>${pillHtml(liveTag, kind, sample)}</span></div></div></div>`;
       })
       .join("");
   }
-  const runeExtra = overlayRuneHtml(log, drop);
   const charmExtra = overlayCharmHtml(log, drop);
   const kindClass = [
     String(drop.rarity || "unique").toLowerCase().replace(/\s+/g, "-") || "unique",
@@ -5384,19 +6936,19 @@ function priceOverlayHtml(log, drop) {
     ? ""
     : `<div class="price-overlay-foot">
         ${charmExtra}
-        ${runeExtra}
+        ${overlayExchangeHaveHtml(log, drop)}
         <div class="price-overlay-row"><span>PoE 2 trade</span><span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span></div>
         ${overlayOffersHtml(drop)}
       </div>`;
   return `
-    <article class="price-overlay-card item-tip-card ${esc(kindClass)}">
+    <article class="price-overlay-card item-tip-card ${esc(kindClass)}"${weaponDpsCardAttrs(drop)}>
       ${overlayBarHtml()}
       <div class="price-overlay-body">
       <div class="item-tip-head">
-        ${itemIconHtml(drop.name, "lg")}
+        ${dropIconHtml(drop, "lg")}
         <div>
           <div class="item-tip-name">${esc(drop.name)}</div>
-          <div class="item-tip-base">${esc(drop.baseType || drop.className || "")}</div>
+          ${overlayBaseHtml(log, drop)}
         </div>
         ${overlayFlagsHtml(log, drop)}
       </div>
@@ -5443,6 +6995,7 @@ function paintPriceOverlay(forceInApp = false, fresh = false) {
   }
   const root = document.getElementById("price-overlay");
   const target = inspectTarget();
+  if (target) ensureDropIcon(target.drop);
   const html = target ? priceOverlayHtml(target.log, target.drop) : "";
   if (!forceInApp && pushNativeOverlay(html, "", fresh)) {
     if (root) {
@@ -5529,21 +7082,157 @@ function overlayLiveEl(wrap, rid, extra) {
   return matched[0] || nodes[0] || null;
 }
 
+function formatDpsLive(n) {
+  return formatDpsShown(n);
+}
+
+function paintLiveDps(card) {
+  const d = card?.dataset;
+  const baseAps = Number(d?.dpsAps);
+  if (!Number.isFinite(baseAps) || baseAps <= 0) return;
+  const itemQ = Number(d.dpsItemQ) || 0;
+  const q = Number.isFinite(Number(d.dpsShowQ)) ? Number(d.dpsShowQ) : Number(d.dpsQ) || 0;
+  let flatLo = 0;
+  let flatHi = 0;
+  let incr = 0;
+  let asIncr = 0;
+  let eleAdd = 0;
+  let hasEflat = false;
+  let hasPflat = false;
+  const eleAddBy = { fire: 0, cold: 0, lightning: 0 };
+  for (const el of card.querySelectorAll("[data-dps-kind]")) {
+    const liveEl = el.querySelector("[data-roll-live]");
+    const extraEl = el.querySelector("[data-roll-extra]");
+    const a = liveEl ? Number(liveEl.textContent) : Number(el.dataset.dpsA);
+    const b = extraEl ? Number(extraEl.textContent) : Number(el.dataset.dpsB);
+    if (el.dataset.dpsKind === "pincr") {
+      if (Number.isFinite(a)) incr += a;
+      continue;
+    }
+    if (el.dataset.dpsKind === "asincr") {
+      if (Number.isFinite(a)) asIncr += a;
+      continue;
+    }
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    if (el.dataset.dpsKind === "pflat") {
+      hasPflat = true;
+      flatLo += a;
+      flatHi += b;
+    } else if (el.dataset.dpsKind === "eflat") {
+      hasEflat = true;
+      const type = el.dataset.dpsEle;
+      eleAdd += (a + b) / 2;
+      if (type && eleAddBy[type] != null) eleAddBy[type] += (a + b) / 2;
+    }
+  }
+  const as0 = 1 + (Number(d.dpsAsIncr) || 0) / 100;
+  const as1 = 1 + asIncr / 100;
+  let aps = baseAps;
+  if (as0 > 0 && as0 !== as1) aps = Math.round((baseAps / as0) * as1 * 100) / 100;
+  const inc0 = 1 + (Number(d.dpsIncr) || 0) / 100;
+  const inc1 = 1 + incr / 100;
+  const more = 1 + q / 100;
+  const f0Lo = Number(d.dpsFlatLo) || 0;
+  const f0Hi = Number(d.dpsFlatHi) || 0;
+  function at(shown, f0, f1) {
+    if (f0 === f1 && inc0 === inc1) return scaleDamageByQuality(shown, itemQ, q);
+    const base = Math.max(0, shown / (1 + itemQ / 100) / inc0 - f0);
+    return (base + f1) * inc1 * more;
+  }
+  const physLo = Number(d.dpsPhysLo);
+  const physHi = Number(d.dpsPhysHi);
+  const phys = Number(d.dpsPhys);
+  let physAt = NaN;
+  if (Number.isFinite(physLo) && Number.isFinite(physHi) && physHi > 0) {
+    // Only strip/reapply flats when those rolls are on the card. Dataset flats alone
+    // (with hidden or missing DOM nodes) were zeroing live flats and eating PDPS.
+    const useFlat = hasPflat;
+    physAt = (at(physLo, useFlat ? f0Lo : 0, useFlat ? flatLo : 0) + at(physHi, useFlat ? f0Hi : 0, useFlat ? flatHi : 0)) / 2;
+  } else if (Number.isFinite(phys) && phys > 0) {
+    if (hasPflat) {
+      physAt = (Math.max(0, phys / (1 + itemQ / 100) / inc0 - (f0Lo + f0Hi) / 2) + (flatLo + flatHi) / 2) * inc1 * more;
+    } else if (f0Lo === flatLo && f0Hi === flatHi && inc0 === inc1) {
+      physAt = scaleDamageByQuality(phys, itemQ, q);
+    } else {
+      physAt = (Math.max(0, phys / (1 + itemQ / 100) / inc0 - (f0Lo + f0Hi) / 2) + (flatLo + flatHi) / 2) * inc1 * more;
+    }
+  }
+  const clipEle = Number(d.dpsEle);
+  const eleParts = [Number(d.dpsFire), Number(d.dpsCold), Number(d.dpsLightning)].filter((n) => Number.isFinite(n) && n > 0);
+  const eleFromParts = eleParts.length ? eleParts.reduce((a, b) => a + b, 0) : NaN;
+  const eleBase = Number(d.dpsEleAdd) || 0;
+  const eleClip = Number.isFinite(eleFromParts) && eleFromParts > 0 ? eleFromParts : clipEle;
+  const eleAt = Number.isFinite(eleClip)
+    ? hasEflat
+      ? Math.max(0, eleClip - eleBase + eleAdd)
+      : eleClip
+    : NaN;
+  const chaos = Number(d.dpsChaos);
+  const pdps = Number.isFinite(physAt) ? aps * physAt : NaN;
+  const edps = Number.isFinite(eleAt) ? aps * eleAt : NaN;
+  const cdps = Number.isFinite(chaos) ? aps * chaos : NaN;
+  const dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+  const pdpsEl = card.querySelector("[data-live-pdps]");
+  if (pdpsEl && Number.isFinite(pdps)) pdpsEl.textContent = formatDpsLive(pdps);
+  const edpsEl = card.querySelector("[data-live-edps]");
+  if (edpsEl && Number.isFinite(edps)) edpsEl.textContent = formatDpsLive(edps);
+  const dpsEl = card.querySelector("[data-live-dps]");
+  if (dpsEl && dps > 0) dpsEl.textContent = formatDpsLive(dps);
+  const typedEl = card.querySelector("[data-live-typed-dps]");
+  if (!typedEl) return;
+  const type = typedEl.getAttribute("data-live-typed-dps");
+  function partDps(name) {
+    const clip = Number(name === "fire" ? d.dpsFire : name === "cold" ? d.dpsCold : d.dpsLightning);
+    const was = Number(name === "fire" ? d.dpsFireAdd : name === "cold" ? d.dpsColdAdd : d.dpsLightningAdd) || 0;
+    if (!Number.isFinite(clip)) return NaN;
+    if (!hasEflat) return aps * clip;
+    return aps * Math.max(0, clip - was + eleAddBy[name]);
+  }
+  const typed = type === "physical" ? pdps : type === "any" ? edps : partDps(type);
+  if (Number.isFinite(typed) && typed > 0) typedEl.textContent = formatDpsLive(typed);
+}
+
 function paintOverlaySpanLive(input) {
   if (!input) return;
   const value = Number(input.value);
   if (!Number.isFinite(value)) return;
+  const rid = String(input.dataset.spanRid || "");
+  if (rid === "quality" || rid === "ilvl" || rid === "runes") {
+    input.closest(".price-overlay-prop-num")?.classList.add("is-on");
+    return;
+  }
+  if (isTypedPropId(rid)) {
+    input.closest(".price-overlay-prop-num")?.classList.add("is-on");
+    return;
+  }
+  if (input.classList?.contains("price-overlay-q-input")) {
+    const wrap = input.closest(".price-overlay-mod-wrap");
+    if (wrap) {
+      wrap.classList.add("is-on");
+      const shownLive = input.dataset.spanDec === "1" ? String(Math.round(value * 10) / 10) : String(Math.round(value));
+      for (const el of wrap.querySelectorAll('[data-roll-live="' + rid.replace(/"/g, "") + '"]')) {
+        el.textContent = shownLive;
+      }
+    }
+    return;
+  }
   const min = Number(input.min);
   const max = Number(input.max);
   const pct = Number.isFinite(min) && Number.isFinite(max) && max > min ? ((value - min) / (max - min)) * 100 : 0;
-  input.style.setProperty("--fill", pct + "%");
+  input.style.setProperty("--fill", String(pct));
   const wrap = input.closest(".price-overlay-mod-wrap");
   const host = wrap || input.closest(".price-overlay-charms");
   if (!host) return;
+  const hybridRow = input.closest(".price-overlay-hybrid-row");
+  if (wrap) {
+    for (const row of wrap.querySelectorAll(".price-overlay-hybrid-row.is-sliding")) row.classList.remove("is-sliding");
+    if (hybridRow) hybridRow.classList.add("is-sliding");
+  }
+  const scope = hybridRow || wrap;
   const step = input.step === "0.1" ? "0.1" : "1";
   const shown = step === "0.1" ? String(Math.round(value * 10) / 10) : String(Math.round(value));
-  const rid = String(input.dataset.spanRid || "");
   const driverTiers = parseSpanTiers(input.dataset.spanTiers);
+  const divs = Number(input.dataset.spanDivs);
   const u = Number.isFinite(min) && Number.isFinite(max) && max > min ? (value - min) / (max - min) : 0;
   function showAt(n, lo, hi) {
     if (String(lo).includes(".") || String(hi).includes(".")) return String(Math.round(n * 10) / 10);
@@ -5551,30 +7240,34 @@ function paintOverlaySpanLive(input) {
   }
   function mapped(el, elo, ehi) {
     const lineTiers = parseSpanTiers(el.dataset.spanTiers);
+    if (divs > 1 && lineTiers.length) {
+      const n = divToDamage(lineTiers, value);
+      if (Number.isFinite(n)) return showAt(n, elo, ehi);
+    }
     const n = mapByTier(driverTiers, value, lineTiers);
     if (Number.isFinite(n)) return showAt(n, elo, ehi);
     if (ehi > elo) return showAt(elo + u * (ehi - elo), elo, ehi);
     return "";
   }
-  for (const el of wrap ? wrap.querySelectorAll("[data-roll-live]") : []) {
+  for (const el of scope ? scope.querySelectorAll("[data-roll-live]") : []) {
     const elo = Number(el.dataset.spanLo);
     const ehi = Number(el.dataset.spanHi);
     const text = mapped(el, elo, ehi);
     if (text) el.textContent = text;
     else if (el.getAttribute("data-roll-live") === rid) el.textContent = shown;
   }
-  for (const el of overlayLiveEl(wrap, "", true)) {
+  for (const el of overlayLiveEl(scope, "", true)) {
     const elo = Number(el.dataset.extraLo);
     const ehi = Number(el.dataset.extraHi);
-    if (!(ehi > elo)) continue;
-    el.textContent = showAt(elo + u * (ehi - elo), elo, ehi);
+    const text = mapped(el, elo, ehi);
+    if (text) el.textContent = text;
+    else if (ehi > elo) el.textContent = showAt(elo + u * (ehi - elo), elo, ehi);
   }
   const em = host.querySelector("em");
   if (em) em.textContent = shown;
   const pill = wrap?.querySelector("[data-roll-tier]");
   const t0 = Number(input.dataset.tier0);
   const v0 = Number(input.dataset.value0);
-  const w = Number(input.dataset.tierW) || 1;
   const base = String(pill?.dataset.pillBase || "").trim();
   if (pill && t0 > 0 && base) {
     const tier = rollTierAtValue({ spanTiers: input.dataset.spanTiers, tier: t0, value: v0, lo: Number(input.min), hi: Number(input.max) }, value);
@@ -5583,35 +7276,45 @@ function paintOverlaySpanLive(input) {
   }
 }
 
-function scaleLinkedRolls(drop, row, want) {
-  const lo = Number.isFinite(row?.spanLo) ? Number(row.spanLo) : Number(row?.lo);
-  const hi = Number.isFinite(row?.spanHi) ? Number(row.spanHi) : Number(row?.hi);
-  if (!(hi > lo) || !Number.isFinite(want)) return;
-  const u = (want - lo) / (hi - lo);
-  for (const sib of drop?.rolls || []) {
-    if (sib === row) continue;
-    if (!(row.hybrid && row.affix && sib.affix === row.affix)) continue;
-    const slo = Number.isFinite(sib.spanLo) ? Number(sib.spanLo) : Number(sib.lo);
-    const shi = Number.isFinite(sib.spanHi) ? Number(sib.spanHi) : Number(sib.hi);
-    if (!(shi > slo)) continue;
-    const mapped = mapByTier(row.spanTiers, want, sib.spanTiers);
-    sib.wantMin = snapRollNum(Number.isFinite(mapped) ? mapped : slo + u * (shi - slo), sib);
-  }
+function scaleLinkedRolls() {
+  // Hybrid lines each have their own slider; do not force-link rolls.
 }
 
 function setRollWantMin(log, drop, rid, raw, live) {
   if (!drop) return;
+  if (String(rid) === "ilvl") {
+    setDropIlvlMin(log, drop, raw, live);
+    return;
+  }
+  if (String(rid) === "quality") {
+    setDropQualityMin(log, drop, raw, live);
+    return;
+  }
+  if (String(rid) === "runes") {
+    setDropRunePick(log, drop, raw, live);
+    return;
+  }
+  if (isSliderPropId(rid) || isTypedPropId(rid)) {
+    setDropPropMin(log, drop, String(rid), raw, live);
+    return;
+  }
   drop.rolls = normalizeRolls(drop.rolls, drop);
   let row = drop.rolls.find((roll) => String(roll.rid) === String(rid));
   if (!row && (String(rid) === "charm" || isBeltItem(drop))) row = ensureCharmSlotRoll(drop);
   if (!row) return;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return;
-  const lo = Number.isFinite(row.spanLo) ? Number(row.spanLo) : Number(row.lo);
-  const hi = Number.isFinite(row.spanHi) ? Number(row.spanHi) : Number(row.hi);
+  const n0 = Number(raw);
+  if (!Number.isFinite(n0)) return;
+  const d = sliderDriver(row);
+  const lo = Number(d.lo);
+  const hi = Number(d.hi);
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+  const divs = d.tiers.length;
+  let n = n0;
+  if (divs > 1 && n0 >= 0 && n0 <= divs + 0.001) n = divToDamage(d.tiers, n0);
+  if (!Number.isFinite(n)) n = n0;
   row.wantMin = snapRollNum(Math.min(hi, Math.max(lo, n)), row);
-  scaleLinkedRolls(drop, row, row.wantMin);
+  if (d.extra) d.extra.wantMin = row.wantMin;
+  scaleLinkedRolls(drop, row, overlayLiveValue(row));
   if (live) return;
   if (isCharmSlotRoll(row)) row.pick = true;
   drop.quoteTried = false;
@@ -5645,6 +7348,7 @@ function rollChipsHtml(drop, logId) {
   if (!rolls.length && !flag && !ravenFlag && !unidFlag) return "";
   return `<div class="roll-chips">${ravenFlag}${unidFlag}${flag}${rolls
     .map((roll, i) => {
+      if (isWeaponEleFlatRoll(roll, drop)) return "";
       const label = shortRoll(roll.text);
       if (!label) return "";
       const kind = rollKindClass(roll);
@@ -5697,7 +7401,7 @@ async function quoteRolledDrop(log, drop, force = false) {
     };
     if (overlayUsesExchange(drop)) {
       extra.exchange = true;
-      extra.have = convertMain();
+      extra.have = exchangeHavePick(drop);
     } else {
       const index = await ensureTradeStats();
       const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
@@ -5709,6 +7413,11 @@ async function quoteRolledDrop(log, drop, force = false) {
       }
       extra.rolls = picked.map((roll) => roll.text);
       extra.filters = filters.concat(pickedPropFilters(drop));
+      extra.exactBase = searchExactBase(drop);
+      const ilvl = ilvlFilterState(drop);
+      if (ilvl?.on) extra.ilvlMin = ilvl.min;
+      const quality = qualityFilterState(drop);
+      if (quality?.on) extra.qualityMin = quality.min;
       if (typeof searchCorrupted(drop) === "boolean") extra.corrupted = searchCorrupted(drop);
       if (searchUnidentified(drop)) {
         extra.unidentified = true;
@@ -5818,6 +7527,8 @@ function ingestClipboardItem(text, mode) {
       className: parsed.className || "",
       corrupted: !!parsed.corrupted,
     };
+    if (parsed.mirrored) drop.mirrored = true;
+    if (parsed.sanctified) drop.sanctified = true;
     if (parsed.ravenTouched) {
       drop.ravenTouched = true;
       drop.pickRaven = true;
@@ -5852,6 +7563,8 @@ function ingestClipboardItem(text, mode) {
     className: parsed.className || "",
     corrupted: !!parsed.corrupted,
   };
+  if (parsed.mirrored) entry.mirrored = true;
+  if (parsed.sanctified) entry.sanctified = true;
   if (parsed.ravenTouched) {
     entry.ravenTouched = true;
     entry.pickRaven = true;
@@ -7352,6 +9065,14 @@ function render() {
 }
 
 function onClick(event) {
+  if (event.target.closest("[data-win-min]")) {
+    chrome.webview?.postMessage({ type: "window-min" });
+    return;
+  }
+  if (event.target.closest("[data-win-max]")) {
+    chrome.webview?.postMessage({ type: "window-max" });
+    return;
+  }
   if (event.target.closest("[data-title-quit]")) {
     quitApp();
     return;
@@ -7437,12 +9158,67 @@ function onClick(event) {
     setDropRunePick(log, drop, pickRunes.dataset.pickRunes);
     return;
   }
+  const pickRunesToggle = event.target.closest("[data-pick-runes-toggle]");
+  if (pickRunesToggle) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickRunesToggle.dataset.pickLog, pickRunesToggle.dataset.pickDrop);
+    toggleDropRunePick(log, drop);
+    return;
+  }
   const pickProp = event.target.closest("[data-pick-prop]");
   if (pickProp) {
     event.preventDefault();
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickProp.dataset.pickLog, pickProp.dataset.pickDrop);
     togglePickProp(log, drop, pickProp.dataset.pickProp);
+    return;
+  }
+  const pickDpsType = event.target.closest("[data-pick-dps-type]");
+  if (pickDpsType) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickDpsType.dataset.pickLog, pickDpsType.dataset.pickDrop);
+    setDropDpsType(log, drop, pickDpsType.dataset.pickDpsType);
+    return;
+  }
+  const pickSearch = event.target.closest("[data-pick-search]");
+  if (pickSearch) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickSearch.dataset.pickLog, pickSearch.dataset.pickDrop);
+    applyDropSearchToggle(log, drop, pickSearch.dataset.pickSearch);
+    return;
+  }
+  const pickBase = event.target.closest("[data-pick-base]");
+  if (pickBase) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickBase.dataset.pickLog, pickBase.dataset.pickDrop);
+    applyDropBaseMode(log, drop, pickBase.dataset.pickBase);
+    return;
+  }
+  const overlayRate = event.target.closest("[data-overlay-rate]");
+  if (overlayRate) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  const qStep = event.target.closest("[data-q-step]");
+  if (qStep) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(qStep.dataset.pickLog, qStep.dataset.pickDrop);
+    if (String(qStep.dataset.spanRid || "") === "ilvl") stepDropIlvl(log, drop, qStep.dataset.qStep, false);
+    else stepDropQuality(log, drop, qStep.dataset.qStep, false);
+    return;
+  }
+  const pickHave = event.target.closest("[data-pick-have]");
+  if (pickHave) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickHave.dataset.pickLog, pickHave.dataset.pickDrop);
+    setExchangeHave(log, drop, pickHave.dataset.pickHave);
     return;
   }
   const pickText = event.target.closest("[data-pick-text]");
@@ -7777,11 +9553,22 @@ function onChange(event) {
 }
 
 document.addEventListener("click", onClick);
+document.addEventListener("mousedown", (event) => {
+  if (!event.target.closest("[data-win-drag]")) return;
+  if (event.button !== 0) return;
+  event.preventDefault();
+  chrome.webview?.postMessage({ type: "window-drag" });
+});
 document.addEventListener("contextmenu", (event) => event.preventDefault());
 document.addEventListener("change", onChange);
 document.addEventListener("input", (event) => {
   const span = event.target.closest("[data-span-rid]");
   if (span) {
+    if (span.classList?.contains("price-overlay-q-input")) {
+      sanitizeOverlayMinInput(span);
+      span.closest(".price-overlay-prop-num")?.classList.add("is-on");
+      return;
+    }
     paintOverlaySpanLive(span);
     const { log, drop } = overlayLogDrop(span.dataset.pickLog, span.dataset.pickDrop);
     setRollWantMin(log, drop, span.dataset.spanRid, span.value, true);
@@ -7796,6 +9583,30 @@ document.addEventListener("input", (event) => {
     onChange(event);
   }
 });
+
+document.addEventListener(
+  "wheel",
+  (event) => {
+    const t = event.target.closest(".price-overlay-q-input, input[data-span-rid='quality']");
+    if (!t) return;
+    event.preventDefault();
+    const min = Number(t.min);
+    const max = Number(t.max);
+    const cur = Number(t.value);
+    if (!Number.isFinite(cur)) return;
+    const step = t.dataset.spanDec ? 0.1 : 1;
+    const next = Math.min(
+      Number.isFinite(max) ? max : cur + step,
+      Math.max(Number.isFinite(min) ? min : cur - step, Math.round((cur + (event.deltaY < 0 ? step : -step)) * 100) / 100)
+    );
+    if (next === cur) return;
+    t.value = String(next);
+    paintOverlaySpanLive(t);
+    const { log, drop } = overlayLogDrop(t.dataset.pickLog, t.dataset.pickDrop);
+    setRollWantMin(log, drop, t.dataset.spanRid, t.value, true);
+  },
+  { passive: false }
+);
 
 document.addEventListener("submit", (event) => {
   if (event.target.id === "loot-form") {

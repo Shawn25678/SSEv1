@@ -8,15 +8,18 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <aside class="app-menu" id="app-menu">
-      <div class="menu-head">
-        <div class="menu-brand">
-          <img class="sigil tiny" src="still-sane-sigil.png" alt="" />
-          <div>
-            <strong>Still Sane, Exile?</strong>
-          </div>
-        </div>
+    <div class="win-chrome">
+      <button class="win-drag" type="button" data-win-drag title="Still Sane, Exile?">
+        <img class="sigil tiny" src="still-sane-sigil.png" alt="" />
+        <strong>Still Sane, Exile?</strong>
+      </button>
+      <div class="win-btns">
+        <button type="button" class="win-btn" data-win-min aria-label="Minimize">─</button>
+        <button type="button" class="win-btn" data-win-max aria-label="Maximize">□</button>
+        <button type="button" class="win-btn win-close" data-title-quit aria-label="Close">×</button>
       </div>
+    </div>
+    <aside class="app-menu" id="app-menu">
       <nav class="menu-nav" aria-label="Menu">
         <button class="menu-link is-active" data-view="dash" type="button">
           <span class="menu-link-title">Dashboard</span>

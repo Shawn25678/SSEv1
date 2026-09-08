@@ -14,5 +14,11 @@ dist/supabase.public.json
 desktop/supabase.json
 desktop/feedback-hook.txt
 /dont repo/
+/poe2 builder/
+/poe2builder/
 /tools/ModItem.lua
+/tools/_poe2db*
+/tools/_ModsView.js
+/tools/_peek-mods.js
+/tools/_poe2db_cache/
 /_reliquary.xlsx

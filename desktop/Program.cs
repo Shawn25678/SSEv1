@@ -69,6 +69,7 @@ sealed class TrackerWindow : Form
         {
             /* keep the default window icon */
         }
+        FormBorderStyle = FormBorderStyle.None;
         Width = 1320;
         Height = 860;
         MinimumSize = new Size(900, 640);
@@ -83,14 +84,100 @@ sealed class TrackerWindow : Form
         };
     }
 
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            cp.Style &= ~0x00C00000; // WS_CAPTION (title bar)
+            cp.Style &= ~0x00080000; // WS_SYSMENU
+            cp.Style |= 0x00040000; // WS_THICKFRAME — keep resize when borderless
+            return cp;
+        }
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        ApplyDarkChrome();
+    }
+
+    [DllImport("dwmapi.dll")]
+    static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+    [DllImport("user32.dll")]
+    static extern bool ReleaseCapture();
+
+    [DllImport("user32.dll")]
+    static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    void ApplyDarkChrome()
+    {
+        if (!IsHandleCreated) return;
+        try
+        {
+            var dark = 1;
+            _ = DwmSetWindowAttribute(Handle, 20, ref dark, sizeof(int));
+            _ = DwmSetWindowAttribute(Handle, 19, ref dark, sizeof(int));
+            var caption = 0x00080A0C;
+            var border = 0x00080A0C;
+            var text = 0x00D8EAF3;
+            _ = DwmSetWindowAttribute(Handle, 35, ref caption, sizeof(int));
+            _ = DwmSetWindowAttribute(Handle, 34, ref border, sizeof(int));
+            _ = DwmSetWindowAttribute(Handle, 36, ref text, sizeof(int));
+        }
+        catch
+        {
+            /* older Windows keeps the default caption */
+        }
+    }
+
+    void DragWindow()
+    {
+        ReleaseCapture();
+        SendMessage(Handle, 0xA1, (IntPtr)2, IntPtr.Zero); // WM_NCLBUTTONDOWN, HTCAPTION
+    }
+
     protected override void WndProc(ref Message m)
     {
+        const int wmNcHitTest = 0x84;
+        const int htClient = 1;
+        const int htLeft = 10;
+        const int htRight = 11;
+        const int htTop = 12;
+        const int htTopLeft = 13;
+        const int htTopRight = 14;
+        const int htBottom = 15;
+        const int htBottomLeft = 16;
+        const int htBottomRight = 17;
         if (m.Msg == WmHotkey)
         {
             var id = m.WParam.ToInt32();
             if (id == HotLogId) BeginInvoke(() => CaptureClipboardItem("log-item"));
             else if (id == HotPriceId) BeginInvoke(() => CaptureClipboardItem("price-item"));
             else if (id == HotNextId) BeginInvoke(() => PushHotkey("next-kill"));
+        }
+        if (m.Msg == wmNcHitTest && WindowState != FormWindowState.Maximized)
+        {
+            base.WndProc(ref m);
+            if (m.Result == (IntPtr)htClient)
+            {
+                var pt = PointToClient(Cursor.Position);
+                const int grip = 8;
+                var left = pt.X <= grip;
+                var right = pt.X >= ClientSize.Width - grip;
+                var top = pt.Y <= grip;
+                var bottom = pt.Y >= ClientSize.Height - grip;
+                if (top && left) m.Result = (IntPtr)htTopLeft;
+                else if (top && right) m.Result = (IntPtr)htTopRight;
+                else if (bottom && left) m.Result = (IntPtr)htBottomLeft;
+                else if (bottom && right) m.Result = (IntPtr)htBottomRight;
+                else if (left) m.Result = (IntPtr)htLeft;
+                else if (right) m.Result = (IntPtr)htRight;
+                else if (top) m.Result = (IntPtr)htTop;
+                else if (bottom) m.Result = (IntPtr)htBottom;
+            }
+            return;
         }
         base.WndProc(ref m);
     }
@@ -527,7 +614,7 @@ sealed class TrackerWindow : Form
         }
     }
 
-    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool exchange = false, string havePref = "", bool? unidentified = null, int? unidentifiedTier = null)
+    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool exchange = false, string havePref = "", bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null)
     {
         name = (name ?? "").Trim();
         league = (league ?? "").Trim();
@@ -568,6 +655,9 @@ sealed class TrackerWindow : Form
         extra += ":st:" + (useExchange ? TradeExchangeLive : TradeLive);
         extra += ":" + rarity.ToLowerInvariant();
         extra += typeLine.Length > 0 ? ":t:" + typeLine.ToLowerInvariant() : "";
+        extra += exactBase ? "" : ":xb0";
+        extra += ilvlMin is int il && il > 0 ? ":il" + il : "";
+        extra += qualityMin is int ql && ql > 0 ? ":ql" + ql : "";
         extra += category.Length > 0 ? ":k:" + category.ToLowerInvariant() : "";
         extra += useExchange ? ":xchg:" + havePref : "";
         var cacheKey = "trade:" + league + ":" + name.ToLowerInvariant() + extra;
@@ -588,7 +678,7 @@ sealed class TrackerWindow : Form
             if (useExchange)
                 payload = await LookupExchangeListing(league, name, typeLine, havePref);
             if (payload is null || (payload.Json is null && !payload.RateLimited && !payload.Forbidden))
-                payload = await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier);
+                payload = await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin);
             if (payload is { RateLimited: true })
             {
                 Reply(id, false, 429, "{\"error\":\"rate limited\"}");
@@ -948,7 +1038,7 @@ sealed class TrackerWindow : Form
         return n;
     }
 
-    static IEnumerable<string> RolledQueries(string name, string typeLine, IReadOnlyList<RollFilter> filters, bool relax = false, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool? unidentified = null, int? unidentifiedTier = null)
+    static IEnumerable<string> RolledQueries(string name, string typeLine, IReadOnlyList<RollFilter> filters, bool relax = false, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null)
     {
         JsonArray FilterArray()
         {
@@ -1029,6 +1119,10 @@ sealed class TrackerWindow : Form
                      rarity.Equals("Magic", StringComparison.OrdinalIgnoreCase) ||
                      rarity.Equals("Normal", StringComparison.OrdinalIgnoreCase))
                 bag["rarity"] = new JsonObject { ["option"] = "nonunique" };
+            if (ilvlMin is int il && il > 0)
+                bag["ilvl"] = new JsonObject { ["min"] = il };
+            if (qualityMin is int ql && ql > 0)
+                bag["quality"] = new JsonObject { ["min"] = ql };
             return bag;
         }
 
@@ -1079,17 +1173,17 @@ sealed class TrackerWindow : Form
             };
         }
 
-        var hasType = !string.IsNullOrWhiteSpace(typeLine);
         var hasCat = !string.IsNullOrWhiteSpace(category);
+        var hasType = !string.IsNullOrWhiteSpace(typeLine) && (exactBase || !hasCat);
         if (hasType)
             yield return Body(true, hasCat).ToJsonString();
-        if (hasCat)
+        if (hasCat && !(hasType && exactBase))
             yield return Body(false, true).ToJsonString();
         if (!hasType && !hasCat)
             yield return Body(false, false).ToJsonString();
     }
 
-    async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool? unidentified = null, int? unidentifiedTier = null)
+    async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null)
     {
         var searchUri = "https://www.pathofexile.com/api/trade2/search/poe2/" + Uri.EscapeDataString(league);
         string? lastId = null;
@@ -1132,7 +1226,7 @@ sealed class TrackerWindow : Form
             }
         }
 
-        foreach (var body in RolledQueries(name, typeLine, filters, false, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier))
+        foreach (var body in RolledQueries(name, typeLine, filters, false, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin))
         {
             var got = await Run(body);
             if (got is { RateLimited: true } or { Forbidden: true }) return got;
@@ -1141,7 +1235,7 @@ sealed class TrackerWindow : Form
         }
         if (filters.Count > 0 && lastTotal == 0)
         {
-            foreach (var body in RolledQueries(name, typeLine, filters, true, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier).Take(1))
+            foreach (var body in RolledQueries(name, typeLine, filters, true, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin).Take(1))
             {
                 var got = await Run(body);
                 if (got is { RateLimited: true } or { Forbidden: true }) return got;
@@ -1164,8 +1258,7 @@ sealed class TrackerWindow : Form
         if (string.IsNullOrWhiteSpace(tag)) return new TradeLookup();
         var have = ExchangeHave.Where(h => !h.Equals(tag, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (have.Length == 0) have = ["exalted", "chaos"];
-        if (!string.IsNullOrWhiteSpace(havePref) && have.Contains(havePref) && have[0] != havePref)
-            have = new[] { havePref }.Concat(have.Where(h => h != havePref)).ToArray();
+        have = !string.IsNullOrWhiteSpace(havePref) ? [havePref] : [have[0]];
         var body = JsonSerializer.Serialize(new
         {
             engine = "new",
@@ -1507,18 +1600,18 @@ sealed class TrackerWindow : Form
     static List<OfferRow> ReadOfferRows(string fetchJson, string fallbackName)
     {
         var rows = new List<OfferRow>();
-        using var fetched = JsonDocument.Parse(fetchJson);
-        if (!fetched.RootElement.TryGetProperty("result", out var listings) || listings.ValueKind != JsonValueKind.Array)
+            using var fetched = JsonDocument.Parse(fetchJson);
+            if (!fetched.RootElement.TryGetProperty("result", out var listings) || listings.ValueKind != JsonValueKind.Array)
             return rows;
-        foreach (var row in listings.EnumerateArray())
-        {
-            if (!row.TryGetProperty("listing", out var listing) ||
-                !listing.TryGetProperty("price", out var price) ||
-                price.ValueKind != JsonValueKind.Object)
-                continue;
+            foreach (var row in listings.EnumerateArray())
+            {
+                if (!row.TryGetProperty("listing", out var listing) ||
+                    !listing.TryGetProperty("price", out var price) ||
+                    price.ValueKind != JsonValueKind.Object)
+                    continue;
             var amount = price.TryGetProperty("amount", out var amountEl) && JsonDouble(amountEl, out var n) ? n : double.NaN;
             var currency = price.TryGetProperty("currency", out var curEl) ? JsonString(curEl) : "";
-            if (!NumberIsPositive(amount) || string.IsNullOrWhiteSpace(currency)) continue;
+                if (!NumberIsPositive(amount) || string.IsNullOrWhiteSpace(currency)) continue;
             var ign = ListingIgn(listing);
             var instant = listing.TryGetProperty("fee", out var feeEl) && feeEl.ValueKind is JsonValueKind.Number or JsonValueKind.String;
             rows.Add(new OfferRow(ign, amount, currency, instant, ItemDisplayName(row, fallbackName)));
@@ -1654,6 +1747,26 @@ sealed class TrackerWindow : Form
             if (type == "quit")
             {
                 BeginInvoke(Close);
+                return;
+            }
+            if (type == "window-drag")
+            {
+                BeginInvoke(DragWindow);
+                return;
+            }
+            if (type == "window-min")
+            {
+                BeginInvoke(() => WindowState = FormWindowState.Minimized);
+                return;
+            }
+            if (type == "window-max")
+            {
+                BeginInvoke(() =>
+                {
+                    WindowState = WindowState == FormWindowState.Maximized
+                        ? FormWindowState.Normal
+                        : FormWindowState.Maximized;
+                });
                 return;
             }
             if (type == "hotkeys-pause")
@@ -1872,7 +1985,14 @@ sealed class TrackerWindow : Form
                 int? unidentifiedTier = null;
                 if (root.TryGetProperty("unidentifiedTier", out var unidTierEl) && JsonInt(unidTierEl, out var unidTier) && unidTier > 0)
                     unidentifiedTier = unidTier;
-                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets, category, ravenTouched, exchange, havePref, unidentified, unidentifiedTier);
+                var exactBase = !(root.TryGetProperty("exactBase", out var exactEl) && exactEl.ValueKind == JsonValueKind.False);
+                int? ilvlMin = null;
+                if (root.TryGetProperty("ilvlMin", out var ilvlEl) && JsonInt(ilvlEl, out var ilvlN) && ilvlN is > 0 and <= 100)
+                    ilvlMin = ilvlN;
+                int? qualityMin = null;
+                if (root.TryGetProperty("qualityMin", out var qualEl) && JsonInt(qualEl, out var qualN) && qualN is > 0 and <= 100)
+                    qualityMin = qualN;
+                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets, category, ravenTouched, exchange, havePref, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin);
                 return;
             }
             if (type == "backup-info")
@@ -2175,19 +2295,19 @@ sealed class TrackerWindow : Form
     static string? CustomBackupFolder()
     {
         foreach (var file in new[] { LastBackupFolderFile(), Path.Combine(AppDataDir(), "last-backup-folder.txt") })
+    {
+        try
         {
-            try
-            {
                 if (!File.Exists(file)) continue;
                 var saved = File.ReadAllText(file).Trim();
                 if (string.IsNullOrWhiteSpace(saved) || !Directory.Exists(saved)) continue;
                 if (IsOldDefaultFolder(saved)) continue;
                 return saved;
-            }
-            catch
-            {
+        }
+        catch
+        {
                 /* try the next settings file */
-            }
+        }
         }
         return null;
     }
@@ -2264,11 +2384,11 @@ sealed class TrackerWindow : Form
         try
         {
             var folder = PickBackupFolder();
-            if (folder is null)
-            {
-                Reply(id, true, 200, PlacesJson(cancelled: true));
-                return;
-            }
+                if (folder is null)
+                {
+                    Reply(id, true, 200, PlacesJson(cancelled: true));
+                    return;
+                }
             Directory.CreateDirectory(folder);
             RememberFolder(folder);
             Reply(id, true, 200, PlacesJson());
@@ -2754,9 +2874,11 @@ sealed class PriceOverlayForm : Form
     {
         Dock = DockStyle.Fill,
         DefaultBackgroundColor = Color.FromArgb(18, 14, 10),
+        TabStop = true,
     };
     readonly Action<string> _forward;
     bool _ready;
+    bool _allowActivate;
     int _cssW = 428;
     int _cssH = 220;
     string? _pendingKind;
@@ -2774,17 +2896,21 @@ sealed class PriceOverlayForm : Form
         Width = 428;
         Height = 220;
         BackColor = Color.FromArgb(18, 14, 10);
-        KeyPreview = true;
         Controls.Add(_web);
-        KeyDown += (_, e) =>
-        {
-            if (e.KeyCode != Keys.Escape) return;
-            HideOverlay();
-            _forward("""{"type":"overlay-click","closeInspect":""}""");
-        };
     }
 
-    protected override bool ShowWithoutActivation => true;
+    protected override bool ShowWithoutActivation => !_allowActivate;
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == Keys.Escape)
+        {
+            HideOverlay();
+            _forward("""{"type":"overlay-click","closeInspect":""}""");
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
 
     protected override CreateParams CreateParams
     {
@@ -2792,9 +2918,22 @@ sealed class PriceOverlayForm : Form
         {
             var cp = base.CreateParams;
             cp.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW
-            cp.ExStyle |= 0x08000000; // WS_EX_NOACTIVATE
             return cp;
         }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        const int wmMouseActivate = 0x0021;
+        if (m.Msg == wmMouseActivate)
+        {
+            _allowActivate = true;
+            base.WndProc(ref m);
+            if (GetForegroundWindow() != Handle || !_web.ContainsFocus)
+                BeginInvoke(ForceForeground);
+            return;
+        }
+        base.WndProc(ref m);
     }
 
     [DllImport("user32.dll")]
@@ -2802,6 +2941,21 @@ sealed class PriceOverlayForm : Form
 
     [DllImport("user32.dll")]
     static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll")]
+    static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+
+    [DllImport("user32.dll")]
+    static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("kernel32.dll")]
+    static extern uint GetCurrentThreadId();
 
     [StructLayout(LayoutKind.Sequential)]
     struct NativePoint
@@ -2815,6 +2969,27 @@ sealed class PriceOverlayForm : Form
     const uint SwpShowWindow = 0x0040;
     const uint SwpNoSize = 0x0001;
     const uint SwpNoMove = 0x0002;
+
+    void ForceForeground()
+    {
+        if (!IsHandleCreated || !Visible) return;
+        if (GetForegroundWindow() == Handle && _web.ContainsFocus) return;
+        var fg = GetForegroundWindow();
+        var ourThread = GetCurrentThreadId();
+        var fgThread = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, IntPtr.Zero) : 0u;
+        var attached = fgThread != 0 && fgThread != ourThread && AttachThreadInput(fgThread, ourThread, true);
+        try
+        {
+            BringToFront();
+            Activate();
+            SetForegroundWindow(Handle);
+            _web.Focus();
+        }
+        finally
+        {
+            if (attached) AttachThreadInput(fgThread, ourThread, false);
+        }
+    }
 
     public async Task EnsureAsync(CoreWebView2Environment? env, string page)
     {
@@ -2860,6 +3035,7 @@ sealed class PriceOverlayForm : Form
     public void HideOverlay()
     {
         _pendingKind = null;
+        _allowActivate = false;
         Hide();
     }
 
@@ -2875,8 +3051,11 @@ sealed class PriceOverlayForm : Form
     void Peek()
     {
         Show();
-        SetWindowPos(Handle, HwndTopmost, 0, 0, 0, 0, SwpNoActivate | SwpShowWindow | SwpNoMove | SwpNoSize);
+        var flags = SwpShowWindow | SwpNoMove | SwpNoSize;
+        if (!_allowActivate) flags |= SwpNoActivate;
+        SetWindowPos(Handle, HwndTopmost, 0, 0, 0, 0, flags);
         TopMost = true;
+        if (_allowActivate) ForceForeground();
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
@@ -2939,6 +3118,18 @@ sealed class PriceOverlayForm : Form
                 }
                 if (InvokeRequired) BeginInvoke(Move);
                 else Move();
+                return;
+            }
+            if (type == "overlay-activate")
+            {
+                void FocusOverlay()
+                {
+                    if (!Visible) return;
+                    _allowActivate = true;
+                    ForceForeground();
+                }
+                if (InvokeRequired) BeginInvoke(FocusOverlay);
+                else FocusOverlay();
                 return;
             }
             if (type == "overlay-click")

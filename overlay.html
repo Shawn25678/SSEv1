@@ -12,6 +12,9 @@
         display: block;
         background: #120e0a;
         overflow: hidden;
+        font-size: 17px;
+        -webkit-user-select: none;
+        user-select: none;
       }
       #root {
         margin: 0;
@@ -23,7 +26,7 @@
         max-width: 100%;
         max-height: none;
         margin: 0;
-        overflow-x: hidden;
+        overflow: visible;
         box-shadow: none;
         cursor: grab;
       }
@@ -39,6 +42,11 @@
       }
       .price-overlay-card :is(button, a, input, .price-overlay-offers, .price-overlay-mods, .price-overlay-span, .price-overlay-prop) {
         cursor: pointer;
+      }
+      .price-overlay-q-input {
+        cursor: text !important;
+        -webkit-user-select: text;
+        user-select: text;
       }
       .price-overlay-offers,
       .price-overlay-offer {
@@ -66,10 +74,18 @@
         const card = root.querySelector(".price-overlay-card") || root.firstElementChild;
         if (!card || !window.chrome?.webview) return;
         const r = card.getBoundingClientRect();
+        let w = r.width;
+        let h = r.height;
+        const extra = card.querySelector(".price-overlay-rate-card");
+        if (extra && getComputedStyle(extra).display !== "none") {
+          const er = extra.getBoundingClientRect();
+          w = Math.max(w, er.right - r.left);
+          h = Math.max(h, er.bottom - r.top);
+        }
         chrome.webview.postMessage({
           type: "overlay-size",
-          w: Math.max(280, Math.ceil(r.width) + 4),
-          h: Math.max(90, Math.ceil(r.height) + 4),
+          w: Math.max(280, Math.ceil(w) + 4),
+          h: Math.max(90, Math.ceil(h) + 4),
         });
       }
 
@@ -77,6 +93,13 @@
       window.addEventListener("resize", () => {
         clearTimeout(fitTimer);
         fitTimer = setTimeout(fit, 120);
+      });
+      document.addEventListener("mouseover", (event) => {
+        if (event.target.closest(".price-overlay-rate-wrap")) requestAnimationFrame(fit);
+      });
+      document.addEventListener("mouseout", (event) => {
+        const wrap = event.target.closest(".price-overlay-rate-wrap");
+        if (wrap && !wrap.contains(event.relatedTarget)) requestAnimationFrame(() => requestAnimationFrame(fit));
       });
 
       chrome.webview.addEventListener("message", (event) => {
@@ -108,10 +131,22 @@
       });
 
       document.addEventListener("contextmenu", (event) => event.preventDefault());
+      document.addEventListener("selectstart", (event) => {
+        if (event.target.closest("input, textarea")) return;
+        event.preventDefault();
+      });
+      document.addEventListener("mousedown", (event) => {
+        if (event.detail > 1 && !event.target.closest("input, textarea")) event.preventDefault();
+      });
 
       document.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
-        if (event.target.closest("button, a, input, textarea, .price-overlay-offers, .price-overlay-mods, .price-overlay-span")) return;
+        if (event.target.closest("button, a, input, textarea, select, .price-overlay-offers, .price-overlay-mods, .price-overlay-span, .price-overlay-prop-quality, .price-overlay-prop-num, .price-overlay-q-edit, .price-overlay-rate-wrap")) {
+          if (event.target.closest("input, textarea, .price-overlay-q-edit, .price-overlay-prop-quality, .price-overlay-prop-num")) {
+            chrome.webview?.postMessage({ type: "overlay-activate" });
+          }
+          return;
+        }
         const card = event.target.closest(".price-overlay-card");
         if (!card || !window.chrome?.webview) return;
         drag = { x: event.screenX, y: event.screenY, moved: false, id: event.pointerId };
@@ -156,19 +191,162 @@
         true
       );
 
+      function paintLiveDps(card) {
+        const d = card?.dataset;
+        const baseAps = Number(d?.dpsAps);
+        if (!Number.isFinite(baseAps) || baseAps <= 0) return;
+        const itemQ = Number(d.dpsItemQ) || 0;
+        const q = Number.isFinite(Number(d.dpsShowQ)) ? Number(d.dpsShowQ) : Number(d.dpsQ) || 0;
+        let flatLo = 0;
+        let flatHi = 0;
+        let incr = 0;
+        let asIncr = 0;
+        let eleAdd = 0;
+        let hasEflat = false;
+        let hasPflat = false;
+        const eleAddBy = { fire: 0, cold: 0, lightning: 0 };
+        for (const el of card.querySelectorAll("[data-dps-kind]")) {
+          const liveEl = el.querySelector("[data-roll-live]");
+          const extraEl = el.querySelector("[data-roll-extra]");
+          const a = liveEl ? Number(liveEl.textContent) : Number(el.dataset.dpsA);
+          const b = extraEl ? Number(extraEl.textContent) : Number(el.dataset.dpsB);
+          if (el.dataset.dpsKind === "pincr") {
+            if (Number.isFinite(a)) incr += a;
+            continue;
+          }
+          if (el.dataset.dpsKind === "asincr") {
+            if (Number.isFinite(a)) asIncr += a;
+            continue;
+          }
+          if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+          if (el.dataset.dpsKind === "pflat") {
+            hasPflat = true;
+            flatLo += a;
+            flatHi += b;
+          } else if (el.dataset.dpsKind === "eflat") {
+            hasEflat = true;
+            const type = el.dataset.dpsEle;
+            eleAdd += (a + b) / 2;
+            if (type && eleAddBy[type] != null) eleAddBy[type] += (a + b) / 2;
+          }
+        }
+        const as0 = 1 + (Number(d.dpsAsIncr) || 0) / 100;
+        const as1 = 1 + asIncr / 100;
+        let aps = baseAps;
+        if (as0 > 0 && as0 !== as1) aps = Math.round((baseAps / as0) * as1 * 100) / 100;
+        const inc0 = 1 + (Number(d.dpsIncr) || 0) / 100;
+        const inc1 = 1 + incr / 100;
+        const more = 1 + q / 100;
+        const f0Lo = Number(d.dpsFlatLo) || 0;
+        const f0Hi = Number(d.dpsFlatHi) || 0;
+        function scaleDmg(n, toQ) {
+          if (itemQ === toQ) return n;
+          return (n / (1 + itemQ / 100)) * (1 + toQ / 100);
+        }
+        function at(shown, f0, f1) {
+          if (f0 === f1 && inc0 === inc1) return scaleDmg(shown, q);
+          const base = Math.max(0, shown / (1 + itemQ / 100) / inc0 - f0);
+          return (base + f1) * inc1 * more;
+        }
+        const physLo = Number(d.dpsPhysLo);
+        const physHi = Number(d.dpsPhysHi);
+        const phys = Number(d.dpsPhys);
+        let physAt = NaN;
+        if (Number.isFinite(physLo) && Number.isFinite(physHi) && physHi > 0) {
+          const useFlat = hasPflat;
+          physAt = (at(physLo, useFlat ? f0Lo : 0, useFlat ? flatLo : 0) + at(physHi, useFlat ? f0Hi : 0, useFlat ? flatHi : 0)) / 2;
+        } else if (Number.isFinite(phys) && phys > 0) {
+          if (hasPflat) {
+            physAt = (Math.max(0, phys / (1 + itemQ / 100) / inc0 - (f0Lo + f0Hi) / 2) + (flatLo + flatHi) / 2) * inc1 * more;
+          } else if (itemQ === q && inc0 === inc1) {
+            physAt = phys;
+          } else {
+            physAt = (Math.max(0, phys / (1 + itemQ / 100) / inc0 - (f0Lo + f0Hi) / 2) + (flatLo + flatHi) / 2) * inc1 * more;
+          }
+        }
+        const clipEle = Number(d.dpsEle);
+        const eleParts = [Number(d.dpsFire), Number(d.dpsCold), Number(d.dpsLightning)].filter((n) => Number.isFinite(n) && n > 0);
+        const eleFromParts = eleParts.length ? eleParts.reduce((a, b) => a + b, 0) : NaN;
+        const eleBase = Number(d.dpsEleAdd) || 0;
+        const eleClip = Number.isFinite(eleFromParts) && eleFromParts > 0 ? eleFromParts : clipEle;
+        const eleAt = Number.isFinite(eleClip) ? (hasEflat ? Math.max(0, eleClip - eleBase + eleAdd) : eleClip) : NaN;
+        const chaos = Number(d.dpsChaos);
+        const pdps = Number.isFinite(physAt) ? aps * physAt : NaN;
+        const edps = Number.isFinite(eleAt) ? aps * eleAt : NaN;
+        const cdps = Number.isFinite(chaos) ? aps * chaos : NaN;
+        const dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+        const show = (n) => String(Math.trunc(n * 10 + Number.EPSILON) / 10);
+        const pdpsEl = card.querySelector("[data-live-pdps]");
+        if (pdpsEl && Number.isFinite(pdps)) pdpsEl.textContent = show(pdps);
+        const edpsEl = card.querySelector("[data-live-edps]");
+        if (edpsEl && Number.isFinite(edps)) edpsEl.textContent = show(edps);
+        const dpsEl = card.querySelector("[data-live-dps]");
+        if (dpsEl && dps > 0) dpsEl.textContent = show(dps);
+        const typedEl = card.querySelector("[data-live-typed-dps]");
+        if (!typedEl) return;
+        const type = typedEl.getAttribute("data-live-typed-dps");
+        function partDps(name) {
+          const clip = Number(name === "fire" ? d.dpsFire : name === "cold" ? d.dpsCold : d.dpsLightning);
+          const was = Number(name === "fire" ? d.dpsFireAdd : name === "cold" ? d.dpsColdAdd : d.dpsLightningAdd) || 0;
+          if (!Number.isFinite(clip)) return NaN;
+          if (!hasEflat) return aps * clip;
+          return aps * Math.max(0, clip - was + eleAddBy[name]);
+        }
+        const typed = type === "physical" ? pdps : type === "any" ? edps : partDps(type);
+        if (Number.isFinite(typed) && typed > 0) typedEl.textContent = show(typed);
+      }
+
+      function sanitizeBox(t) {
+        const raw = String(t.value || "");
+        let next = raw;
+        if (t.dataset.spanDec) {
+          next = raw.replace(/[^\d.]/g, "");
+          const i = next.indexOf(".");
+          if (i >= 0) next = next.slice(0, i + 1) + next.slice(i + 1).replace(/\./g, "");
+        } else {
+          next = raw.replace(/\D/g, "");
+        }
+        if (next !== raw) t.value = next;
+      }
+
       function paintSpan(t) {
+        const rid = String(t.dataset.spanRid || "");
+        const box = t.classList?.contains("price-overlay-q-input");
+        if (box) sanitizeBox(t);
         const value = Number(t.value);
         if (!Number.isFinite(value)) return;
+        if (rid === "quality" || rid === "ilvl" || rid === "runes") {
+          t.closest(".price-overlay-prop-num")?.classList.add("is-on");
+          return;
+        }
+        if (box) {
+          sanitizeBox(t);
+          t.closest(".price-overlay-prop-num")?.classList.add("is-on");
+          const wrap = t.closest(".price-overlay-mod-wrap");
+          if (wrap) {
+            wrap.classList.add("is-on");
+            const shownLive = t.dataset.spanDec === "1" ? String(Math.round(value * 10) / 10) : String(Math.round(value));
+            for (const el of wrap.querySelectorAll('[data-roll-live="' + rid.replace(/"/g, "") + '"]')) {
+              if (Number.isFinite(value)) el.textContent = shownLive;
+            }
+          }
+          return;
+        }
         const min = Number(t.min);
         const max = Number(t.max);
         const pct = Number.isFinite(min) && Number.isFinite(max) && max > min ? ((value - min) / (max - min)) * 100 : 0;
-        t.style.setProperty("--fill", pct + "%");
+        t.style.setProperty("--fill", String(pct));
         const wrap = t.closest(".price-overlay-mod-wrap");
         const host = wrap || t.closest(".price-overlay-charms");
         if (!host) return;
+        const hybridRow = t.closest(".price-overlay-hybrid-row");
+        if (wrap) {
+          for (const row of wrap.querySelectorAll(".price-overlay-hybrid-row.is-sliding")) row.classList.remove("is-sliding");
+          if (hybridRow) hybridRow.classList.add("is-sliding");
+        }
+        const scope = hybridRow || wrap;
         const step = t.step === "0.1" ? "0.1" : "1";
         const shown = step === "0.1" ? String(Math.round(value * 10) / 10) : String(Math.round(value));
-        const rid = String(t.dataset.spanRid || "");
         const u = Number.isFinite(min) && Number.isFinite(max) && max > min ? (value - min) / (max - min) : 0;
         function parseTiers(spec) {
           return String(spec || "")
@@ -195,25 +373,84 @@
           if (String(lo).includes(".") || String(hi).includes(".")) return String(Math.round(n * 10) / 10);
           return String(Math.round(n));
         }
+        function atDiv(parts, pos) {
+          const n = parts.length;
+          if (!n || !Number.isFinite(pos)) return NaN;
+          const flat = parts.every((p) => !(p.hi > p.lo));
+          if (flat) {
+            const i = Math.min(n - 1, Math.max(0, Math.round(pos)));
+            return parts[i].lo;
+          }
+          let i;
+          let frac;
+          if (pos >= n) {
+            i = n - 1;
+            frac = 1;
+          } else if (pos <= 0) {
+            i = 0;
+            frac = 0;
+          } else {
+            i = Math.min(n - 1, Math.max(0, Math.ceil(pos) - 1));
+            frac = Math.min(1, Math.max(0, pos - i));
+          }
+          const part = parts[i];
+          if (frac <= 0) return part.lo;
+          if (frac >= 1) return part.hi;
+          if (String(part.lo).includes(".") || String(part.hi).includes(".")) return part.lo + frac * (part.hi - part.lo);
+          const span = part.hi - part.lo;
+          if (!(span > 0)) return part.lo;
+          const edge = 0.1;
+          if (frac <= edge) return part.lo;
+          if (frac >= 1 - edge) return part.hi;
+          return part.lo + Math.round(((frac - edge) / (1 - 2 * edge)) * span);
+        }
         const driverTiers = parseTiers(t.dataset.spanTiers);
-        const liveNodes = wrap ? [...wrap.querySelectorAll("[data-roll-live]")] : [];
-        for (const el of liveNodes) {
+        const divs = Number(t.dataset.spanDivs);
+        if (t.dataset.spanTierSnap === "1") {
+          const i = Math.min(Math.max(0, Math.round(value)), Math.max(0, driverTiers.length - 1));
+          const minParts = parseTiers(t.dataset.spanMinTiers);
+          const maxParts = parseTiers(t.dataset.spanMaxTiers);
+          const a = minParts[i] || minParts[0];
+          const b = maxParts[i] || driverTiers[i] || a;
+          function rng(p) {
+            if (!p) return "";
+            return p.hi > p.lo ? p.lo + "—" + p.hi : String(p.lo);
+          }
+          const eleRaw = String(t.dataset.spanEle || "Elemental");
+          const ele = eleRaw.charAt(0).toUpperCase() + eleRaw.slice(1);
+          const nTiers = Math.max(minParts.length, maxParts.length, driverTiers.length);
+          const tLabel = nTiers > 0 ? "T" + (nTiers - i) + " " : "";
+          const label = a && b ? tLabel + "Adds (" + rng(a) + ") to (" + rng(b) + ") " + ele + " Damage" : "";
+          for (const el of scope ? scope.querySelectorAll("[data-tier-snap-live]") : []) {
+            if (label) el.textContent = label;
+          }
+        }
+        for (const el of scope ? scope.querySelectorAll("[data-roll-live]") : []) {
           const elo = Number(el.dataset.spanLo);
           const ehi = Number(el.dataset.spanHi);
           const lineTiers = parseTiers(el.dataset.spanTiers);
-          const pos = posInTiers(driverTiers, value);
           let n = NaN;
-          if (pos && lineTiers[pos.i]) n = lineTiers[pos.i].lo + pos.u * (lineTiers[pos.i].hi - lineTiers[pos.i].lo);
-          else if (ehi > elo) n = elo + u * (ehi - elo);
+          if (divs > 1 && lineTiers.length) n = atDiv(lineTiers, value);
+          else {
+            const pos = posInTiers(driverTiers, value);
+            if (pos && lineTiers[pos.i]) n = lineTiers[pos.i].lo + pos.u * (lineTiers[pos.i].hi - lineTiers[pos.i].lo);
+            else if (ehi > elo) n = elo + u * (ehi - elo);
+          }
           if (Number.isFinite(n)) el.textContent = showAt(n, elo, ehi);
           else if (el.getAttribute("data-roll-live") === rid) el.textContent = shown;
         }
-        const extraNodes = wrap ? [...wrap.querySelectorAll("[data-roll-extra]")] : [];
-        for (const el of extraNodes) {
+        for (const el of scope ? scope.querySelectorAll("[data-roll-extra]") : []) {
           const elo = Number(el.dataset.extraLo);
           const ehi = Number(el.dataset.extraHi);
-          if (!(ehi > elo)) continue;
-          el.textContent = showAt(elo + u * (ehi - elo), elo, ehi);
+          const extraTiers = parseTiers(el.dataset.spanTiers);
+          let n = NaN;
+          if (divs > 1 && extraTiers.length) n = atDiv(extraTiers, value);
+          else {
+            const pos = posInTiers(driverTiers, value);
+            if (pos && extraTiers[pos.i]) n = extraTiers[pos.i].lo + pos.u * (extraTiers[pos.i].hi - extraTiers[pos.i].lo);
+            else if (ehi > elo) n = elo + u * (ehi - elo);
+          }
+          if (Number.isFinite(n)) el.textContent = showAt(n, elo, ehi);
         }
         const em = host.querySelector("em");
         if (em) em.textContent = shown;
@@ -233,23 +470,38 @@
               return { lo: Math.min(a, b), hi: Math.max(a, b) };
             }).filter((p) => Number.isFinite(p.lo) && Number.isFinite(p.hi));
             if (parts.length) {
-              tier = parts.length;
-              for (let i = 0; i < parts.length; i++) {
-                if (value + 0.01 >= parts[i].lo && value - 0.01 <= parts[i].hi) {
-                  tier = i + 1;
-                  break;
+              const n = parts.length;
+              const flat = t.dataset.spanFlat === "1" || parts.every((p) => !(p.hi > p.lo));
+              if (divs > 1 && value >= 0 && (flat ? value <= n - 1 + 0.001 : value <= n + 0.001)) {
+                const i = flat
+                  ? Math.min(n - 1, Math.max(0, Math.round(value)))
+                  : value <= 0
+                    ? 0
+                    : value >= n
+                      ? n - 1
+                      : Math.min(n - 1, Math.max(0, Math.ceil(value) - 1));
+                tier = n - i;
+              } else {
+                tier = n;
+                for (let i = 0; i < n; i++) {
+                  if (value + 0.01 >= parts[i].lo && value - 0.01 <= parts[i].hi) {
+                    tier = n - i;
+                    break;
+                  }
                 }
               }
-              if (value > parts[0].hi) tier = 1;
             }
           }
           const hyb = /hyb/i.test(pill.textContent) ? " · hyb" : "";
           pill.textContent = base + " T" + tier + hyb;
         }
+        const card = t.closest(".price-overlay-card");
+        if (card) paintLiveDps(card);
       }
 
       function postSpan(t, live) {
         if (!window.chrome?.webview) return;
+        if (live && String(t.value || "").trim() === "") return;
         const payload = { type: "overlay-click" };
         for (const a of t.attributes) {
           if (a.name.startsWith("data-")) payload[camel(a.name)] = a.value;
@@ -262,6 +514,11 @@
       document.addEventListener("input", (event) => {
         const t = event.target.closest("[data-span-rid]");
         if (!t) return;
+        if (t.classList?.contains("price-overlay-q-input")) {
+          sanitizeBox(t);
+          t.closest(".price-overlay-prop-num")?.classList.add("is-on");
+          return;
+        }
         paintSpan(t);
         postSpan(t, true);
       });
@@ -273,10 +530,57 @@
         postSpan(t, false);
       });
 
+      document.addEventListener(
+        "wheel",
+        (event) => {
+          const t = event.target.closest(".price-overlay-q-input, input[data-span-rid='quality']");
+          if (!t) return;
+          event.preventDefault();
+          const min = Number(t.min);
+          const max = Number(t.max);
+          const cur = Number(t.value);
+          if (!Number.isFinite(cur)) return;
+          const step = t.dataset.spanDec ? 0.1 : 1;
+          const next = Math.min(
+            Number.isFinite(max) ? max : cur + step,
+            Math.max(Number.isFinite(min) ? min : cur - step, Math.round((cur + (event.deltaY < 0 ? step : -step)) * 100) / 100)
+          );
+          if (next === cur) return;
+          t.value = String(next);
+          paintSpan(t);
+          postSpan(t, true);
+        },
+        { passive: false }
+      );
+
       document.addEventListener("click", (event) => {
         if (event.target.closest("[data-span-rid]")) return;
+        const step = event.target.closest("[data-q-step]");
+        if (step && window.chrome?.webview) {
+          event.preventDefault();
+          const input = step.parentElement?.querySelector("[data-span-rid]");
+          const delta = Number(step.dataset.qStep);
+          if (input && Number.isFinite(delta)) {
+            const min = Number(input.min);
+            const max = Number(input.max);
+            const cur = Number(input.value);
+            const base = Number.isFinite(cur) ? cur : 0;
+            const next = Math.min(
+              Number.isFinite(max) ? max : base + delta,
+              Math.max(Number.isFinite(min) ? min : base + delta, base + delta)
+            );
+            input.value = String(next);
+            paintSpan(input);
+          }
+          const payload = { type: "overlay-click" };
+          for (const a of step.attributes) {
+            if (a.name.startsWith("data-")) payload[camel(a.name)] = a.value;
+          }
+          chrome.webview.postMessage(payload);
+          return;
+        }
         const t = event.target.closest(
-          "[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-runes],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
+          "[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-dps-type],[data-pick-search],[data-pick-base],[data-pick-have],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-runes],[data-pick-runes-toggle],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
         );
         if (!t || !window.chrome?.webview) return;
         event.preventDefault();
@@ -288,6 +592,17 @@
       });
 
       document.addEventListener("keydown", (event) => {
+        if (event.target.closest(".price-overlay-q-input")) {
+          if (event.key === "Escape") return;
+          if (event.key === "Enter") {
+            event.target.blur();
+            return;
+          }
+          if (event.key.length === 1 && !/[0-9]/.test(event.key) && !(event.target.dataset.spanDec && event.key === ".") && !event.ctrlKey && !event.metaKey && !event.altKey) {
+            event.preventDefault();
+          }
+          return;
+        }
         if (event.key === "Escape" && window.chrome?.webview) {
           chrome.webview.postMessage({ type: "overlay-click", closeInspect: "" });
         }
