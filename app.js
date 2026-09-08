@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.24";
+const APP_VERSION = "1.0.25";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -10028,8 +10028,14 @@ function isCurrencyTipNoise(text) {
   const t = String(text || "").trim();
   if (!t) return true;
   if (/you've found .+ pin!?$/i.test(t)) return true;
+  if (/^pin:?\s/i.test(t) || /^you've found an?\b/i.test(t)) return true;
   if (/while this item is active/i.test(t)) return true;
   if (/^shift click to unstack\.?$/i.test(t)) return true;
+  if (/requires completing/i.test(t)) return true;
+  if (/eastern enigma chamber|\bchamber\b/i.test(t)) return true;
+  if (/^applies to level\b/i.test(t)) return true;
+  if (/^genesis:/i.test(t)) return true;
+  if (/^mastery:/i.test(t)) return true;
   return false;
 }
 
