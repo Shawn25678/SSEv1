@@ -1,11 +1,20 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.26";
+const APP_VERSION = "1.0.27";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
   ["all", "All"],
   ["pinnacle", "Pinnacle"],
   ["citadel", "Citadels"],
+];
+
+/** Cumulative tracked boss kills → rank. Elemental ranks for now. */
+const BOSS_RANKS = [
+  { id: "crystalline", name: "Crystalline", kills: 0 },
+  { id: "prismatic", name: "Prismatic", kills: 20 },
+  { id: "refracted", name: "Refracted", kills: 50 },
+  { id: "lucent", name: "Lucent", kills: 100 },
+  { id: "spirecrystal", name: "Spirecrystal", kills: 200 },
 ];
 
 const ui = {
@@ -639,6 +648,964 @@ function killCount(bossId) {
   return logsFor(bossId).length;
 }
 
+function totalBossKills() {
+  return state.logs.length;
+}
+
+function bossRankProgress(kills = totalBossKills()) {
+  let idx = 0;
+  for (let i = 0; i < BOSS_RANKS.length; i++) {
+    if (kills >= BOSS_RANKS[i].kills) idx = i;
+    else break;
+  }
+  const current = BOSS_RANKS[idx];
+  const next = BOSS_RANKS[idx + 1] || null;
+  const floor = current.kills;
+  const ceil = next ? next.kills : floor;
+  const span = Math.max(1, ceil - floor);
+  const into = next ? Math.min(span, Math.max(0, kills - floor)) : span;
+  const pct = next ? Math.round((into / span) * 100) : 100;
+  return { kills, current, next, idx, pct, into, span };
+}
+
+/** Elemental living ranks — ice: metal ring → crystallizing ring → crack → Absolute break later. */
+const RANK_ELEMENTAL = {
+  crystalline: { element: "ice", art: "art/rank-elemental/crystalline-egg.png?v=1", power: 1 },
+  prismatic: { element: "ice", art: "art/rank-elemental/prismatic-hatch.png?v=5", power: 1.35 },
+  refracted: { element: "ice", art: "art/rank-elemental/refracted-free.png?v=8", power: 1.65 },
+  lucent: { element: "ice", art: "art/rank-elemental/lucent-ice.png?v=1", power: 1.7 },
+  spirecrystal: { element: "ice", art: "art/rank-elemental/spirecrystal.png?v=4", power: 1.85 },
+};
+
+function rankIconHtml(rankId, className = "rank-icon", alt = "", tier = null) {
+  const elemental = RANK_ELEMENTAL[rankId];
+  const src = elemental
+    ? elemental.art
+    : "art/rank-" + encodeURIComponent(rankId) + ".png";
+  const sm = /\bsm\b/.test(className);
+  const w = elemental ? (sm ? 120 : 168) : sm ? 120 : 188;
+  const h = elemental ? (sm ? 120 : 168) : sm ? 100 : 158;
+  const rankAttr = rankId ? ` data-rank="${esc(rankId)}"` : "";
+  const tierAttr =
+    tier != null && Number.isFinite(tier) ? ` data-tier="${Math.max(0, Math.floor(tier))}"` : "";
+  const elAttr = elemental ? ` data-element="${esc(elemental.element)}"` : "";
+  const hideClass = elemental ? ` ${className} is-elemental-base` : className;
+  return `<img class="${esc(hideClass.trim())}" src="${esc(src)}" alt="${esc(alt)}" width="${w}" height="${h}"${rankAttr}${tierAttr}${elAttr} loading="lazy" />`;
+}
+
+let rankLottieAnim = null;
+let rankLiveRaf = 0;
+let rankLiveAlive = false;
+let rankFrameTimer = 0;
+
+function destroyRankLottie() {
+  if (!rankLottieAnim) return;
+  try {
+    rankLottieAnim.destroy();
+  } catch (_) {}
+  rankLottieAnim = null;
+}
+
+function destroyRankLive() {
+  rankLiveAlive = false;
+  if (rankLiveRaf) {
+    cancelAnimationFrame(rankLiveRaf);
+    rankLiveRaf = 0;
+  }
+}
+
+function destroyRankFrameAnim() {
+  if (rankFrameTimer) {
+    clearInterval(rankFrameTimer);
+    rankFrameTimer = 0;
+  }
+}
+
+function destroyRankFx() {
+  destroyRankLottie();
+  destroyRankLive();
+  destroyRankFrameAnim();
+}
+
+function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
+  const ctx = canvas.getContext("2d", { alpha: true });
+  if (!ctx) return;
+  const pwr = Math.max(1, Math.min(2.2, Number(power) || 1));
+
+  const fx = document.createElement("canvas");
+  const fxCtx = fx.getContext("2d", { alpha: true });
+
+  const fit = () => {
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const w = stage.clientWidth || 200;
+    const h = stage.clientHeight || 168;
+    canvas.width = Math.max(1, Math.floor(w * dpr));
+    canvas.height = Math.max(1, Math.floor(h * dpr));
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    fx.width = canvas.width;
+    fx.height = canvas.height;
+    fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    fxCtx.imageSmoothingEnabled = true;
+    fxCtx.imageSmoothingQuality = "high";
+  };
+  fit();
+
+  const gemN = Math.round(5 + (pwr - 1) * 4);
+  const gemPieces = Array.from({ length: gemN }, (_, i) => {
+    const ang = -Math.PI / 2 + (i / gemN) * Math.PI * 2;
+    return {
+      ang,
+      len: 10 + (i % 3) * 2.5,
+      wid: 3.5 + (i % 2) * 1.2,
+      phase: (i / gemN) * Math.PI * 2,
+      speed: 0.7 + i * 0.08,
+    };
+  });
+
+  const motes = Array.from({ length: Math.round(10 + (pwr - 1) * 8) }, () => ({
+    ang: Math.random() * Math.PI * 2,
+    dist: 0.1 + Math.random() * 0.18,
+    size: 0.6 + Math.random() * 1.2,
+    phase: Math.random() * Math.PI * 2,
+    speed: 0.3 + Math.random() * 0.4,
+    drift: (Math.random() - 0.5) * 0.1,
+  }));
+
+  // One debris sprite + smooth float (no multi-frame swap — those looked bad)
+  const debrisSrc =
+    String(rankId) === "prismatic"
+      ? "art/rank-elemental/anim/prism-debris.png?v=2"
+      : String(rankId) === "refracted"
+        ? "art/rank-elemental/anim/refract-debris.png?v=4"
+        : null;
+  const debrisImg = debrisSrc
+    ? (() => {
+        const im = new Image();
+        im.decoding = "async";
+        im.src = debrisSrc;
+        return im;
+      })()
+    : null;
+
+  const fadeWave = (x) => {
+    const s = Math.sin(x);
+    return s * s;
+  };
+  const smooth = (x) => {
+    const u = Math.max(0, Math.min(1, x));
+    return u * u * (3 - 2 * u);
+  };
+
+  /** Gem silhouette — shape matches each ice rank’s art language. */
+  const clipCrystalForm = (c, cx, cy, gemW, gemH, shape) => {
+    c.beginPath();
+    if (shape === "diamond") {
+      c.moveTo(cx, cy - gemH);
+      c.lineTo(cx + gemW * 0.72, cy - gemH * 0.12);
+      c.lineTo(cx + gemW * 0.55, cy + gemH * 0.35);
+      c.lineTo(cx, cy + gemH);
+      c.lineTo(cx - gemW * 0.55, cy + gemH * 0.35);
+      c.lineTo(cx - gemW * 0.72, cy - gemH * 0.12);
+      c.closePath();
+    } else if (shape === "oval") {
+      c.ellipse(cx, cy, gemW * 0.95, gemH * 0.95, 0, 0, Math.PI * 2);
+    } else if (shape === "spire") {
+      c.moveTo(cx, cy - gemH);
+      c.lineTo(cx + gemW * 0.22, cy - gemH * 0.35);
+      c.lineTo(cx + gemW * 0.55, cy + gemH * 0.15);
+      c.lineTo(cx + gemW * 0.38, cy + gemH * 0.75);
+      c.lineTo(cx, cy + gemH);
+      c.lineTo(cx - gemW * 0.38, cy + gemH * 0.75);
+      c.lineTo(cx - gemW * 0.55, cy + gemH * 0.15);
+      c.lineTo(cx - gemW * 0.22, cy - gemH * 0.35);
+      c.closePath();
+    } else {
+      // cluster (Crystalline / Prismatic)
+      c.moveTo(cx, cy - gemH);
+      c.lineTo(cx + gemW * 0.28, cy - gemH * 0.55);
+      c.lineTo(cx + gemW * 0.72, cy - gemH * 0.22);
+      c.lineTo(cx + gemW * 0.95, cy + gemH * 0.02);
+      c.lineTo(cx + gemW * 0.55, cy + gemH * 0.12);
+      c.lineTo(cx + gemW * 0.38, cy + gemH * 0.45);
+      c.lineTo(cx + gemW * 0.22, cy + gemH * 0.88);
+      c.lineTo(cx, cy + gemH);
+      c.lineTo(cx - gemW * 0.22, cy + gemH * 0.88);
+      c.lineTo(cx - gemW * 0.38, cy + gemH * 0.45);
+      c.lineTo(cx - gemW * 0.55, cy + gemH * 0.12);
+      c.lineTo(cx - gemW * 0.95, cy + gemH * 0.02);
+      c.lineTo(cx - gemW * 0.72, cy - gemH * 0.22);
+      c.lineTo(cx - gemW * 0.28, cy - gemH * 0.55);
+      c.closePath();
+    }
+    c.clip();
+  };
+
+  const FRAME_MS = 1000 / 60;
+  let lastDraw = 0;
+  let tAccum = 0;
+  rankLiveAlive = true;
+  const rid = String(rankId || "");
+
+  const tick = (now) => {
+    if (!rankLiveAlive) return;
+    rankLiveRaf = requestAnimationFrame(tick);
+    if (now - lastDraw < FRAME_MS - 0.5) return;
+    const prev = lastDraw || now;
+    lastDraw = now;
+    tAccum += Math.min(0.05, (now - prev) / 1000);
+    const t = tAccum;
+    const w = stage.clientWidth || 200;
+    const h = stage.clientHeight || 168;
+    const breath = 0.5 + 0.5 * Math.sin(t * 1.05);
+    const pulse = 0.5 + 0.5 * Math.sin(t * 1.7);
+    const prism = rid === "prismatic";
+    const refract = rid === "refracted";
+    const lucent = rid === "lucent";
+    const spire = rid === "spirecrystal";
+    const spectral = prism || refract || lucent || spire;
+    const borderless = !!(RANK_ELEMENTAL[rid] && RANK_ELEMENTAL[rid].borderless);
+    const detailSoft = lucent || spire || prism || refract; // keep emblem/anim readable
+    const glowP = (0.85 + (pwr - 1) * 0.55) * (detailSoft ? 0.52 : 1);
+    const waveP = (0.9 + (pwr - 1) * 0.7) * (detailSoft ? 0.55 : 1);
+    const riseP = (0.9 + (pwr - 1) * 0.65) * (detailSoft ? 0.6 : 1);
+    const gemShape = rid === "crystalline" ? "oval" : spire ? "spire" : "cluster";
+    // Spectral RGB per rank language
+    const prismRgb = (shift) => {
+      const stops = lucent
+        ? [
+            [200, 230, 255],
+            [230, 220, 190],
+            [255, 245, 220],
+            [180, 220, 255],
+            [210, 235, 250],
+            [200, 230, 255],
+          ]
+        : refract
+          ? [
+              [160, 230, 255],
+              [220, 240, 255],
+              [190, 200, 255],
+              [140, 210, 255],
+              [240, 250, 255],
+              [160, 230, 255],
+            ]
+          : spire
+            ? [
+                [100, 200, 255],
+                [160, 230, 255],
+                [230, 248, 255],
+                [80, 170, 240],
+                [140, 220, 255],
+                [100, 200, 255],
+              ]
+            : [
+                [120, 220, 255],
+                [170, 150, 255],
+                [255, 130, 220],
+                [255, 210, 140],
+                [140, 235, 220],
+                [120, 220, 255],
+              ];
+      const u = ((t * 0.22 + shift) % 1 + 1) % 1;
+      const x = u * (stops.length - 1);
+      const i = Math.floor(x);
+      const f = x - i;
+      const a = stops[i];
+      const b = stops[Math.min(i + 1, stops.length - 1)];
+      return [
+        Math.round(a[0] + (b[0] - a[0]) * f),
+        Math.round(a[1] + (b[1] - a[1]) * f),
+        Math.round(a[2] + (b[2] - a[2]) * f),
+      ];
+    };
+    const tint = (shift, alpha) => {
+      if (!spectral) return `rgba(180,225,255,${alpha})`;
+      const [r, g, b] = prismRgb(shift);
+      return `rgba(${r},${g},${b},${alpha})`;
+    };
+
+    ctx.clearRect(0, 0, w, h);
+    const cx = w * 0.5;
+    const cy = h * 0.5;
+    const iw = w * 0.92;
+    const ih = h * 0.92;
+    const ix = (w - iw) / 2;
+    const iy = (h - ih) / 2;
+    // Crystal size / aspect matches each art silhouette
+    let gemW;
+    let gemH;
+    if (rid === "crystalline") {
+      gemW = Math.min(w, h) * 0.32;
+      gemH = Math.min(w, h) * 0.38;
+    } else if (spire) {
+      gemW = Math.min(w, h) * 0.48;
+      gemH = Math.min(w, h) * 0.46;
+    } else if (lucent) {
+      gemW = Math.min(w, h) * 0.46;
+      gemH = Math.min(w, h) * 0.42;
+    } else if (refract) {
+      gemW = Math.min(w, h) * 0.38;
+      gemH = Math.min(w, h) * 0.4;
+    } else if (prism) {
+      gemW = Math.min(w, h) * 0.36;
+      gemH = Math.min(w, h) * 0.38;
+    } else {
+      gemW = Math.min(w, h) * 0.28;
+      gemH = Math.min(w, h) * 0.3;
+    }
+
+    // Static sharp emblem + one debris layer floating in/out (no bad frame swaps)
+    let liveBase = baseImg;
+    if (baseImg && baseImg.complete && baseImg.naturalWidth) {
+      ctx.drawImage(baseImg, ix, iy, iw, ih);
+    }
+    if (debrisImg && debrisImg.complete && debrisImg.naturalWidth) {
+      const breathe = Math.sin(t * 0.75);
+      const lift = breathe * 2.5;
+      const expand = 1 + breathe * 0.018;
+      const pivotY = cy - Math.min(w, h) * 0.08;
+      ctx.save();
+      ctx.translate(cx, pivotY);
+      ctx.scale(expand, expand);
+      ctx.translate(-cx, -pivotY + lift);
+      ctx.globalAlpha = 0.92;
+      ctx.drawImage(debrisImg, ix, iy, iw, ih);
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+
+    // Soft self-glow on the crystal art (gem luminosity — not energy FX)
+    {
+      fxCtx.setTransform(1, 0, 0, 1, 0, 0);
+      fxCtx.clearRect(0, 0, fx.width, fx.height);
+      const dpr0 = Math.min(3, window.devicePixelRatio || 1);
+      fxCtx.setTransform(dpr0, 0, 0, dpr0, 0, 0);
+      fxCtx.imageSmoothingEnabled = true;
+      fxCtx.imageSmoothingQuality = "high";
+      fxCtx.save();
+      clipCrystalForm(fxCtx, cx, cy, gemW * 1.08, gemH * 1.06, gemShape);
+      fxCtx.globalCompositeOperation = "lighter";
+      const gemLit = (0.22 + breath * 0.1 + pulse * 0.05) * glowP * (detailSoft ? 0.55 : 1);
+      const selfGlow = fxCtx.createRadialGradient(cx, cy - gemH * 0.05, 0, cx, cy, gemH * 1.05);
+      if (spectral) {
+        const c0 = prismRgb(0);
+        const c1 = prismRgb(0.25);
+        const c2 = prismRgb(0.55);
+        selfGlow.addColorStop(0, `rgba(${c0[0]},${c0[1]},${c0[2]},${0.5 + pulse * 0.12})`);
+        selfGlow.addColorStop(0.35, `rgba(${c1[0]},${c1[1]},${c1[2]},${0.3 + breath * 0.1})`);
+        selfGlow.addColorStop(0.7, `rgba(${c2[0]},${c2[1]},${c2[2]},${0.12 + breath * 0.05})`);
+        selfGlow.addColorStop(1, lucent ? "rgba(230,220,180,0)" : "rgba(160,120,255,0)");
+      } else {
+        selfGlow.addColorStop(0, `rgba(230,248,255,${0.45 + pulse * 0.12})`);
+        selfGlow.addColorStop(0.35, `rgba(170,220,245,${0.28 + breath * 0.1})`);
+        selfGlow.addColorStop(0.7, `rgba(130,195,235,${0.1 + breath * 0.05})`);
+        selfGlow.addColorStop(1, "rgba(90,170,220,0)");
+      }
+      fxCtx.globalAlpha = gemLit;
+      fxCtx.fillStyle = selfGlow;
+      fxCtx.fillRect(cx - gemW * 1.3, cy - gemH * 1.3, gemW * 2.6, gemH * 2.6);
+      // Catch-lights: dense geometric planes on Refracted, soft wash on Lucent
+      const catchSides = refract ? [-0.85, -0.4, 0, 0.4, 0.85] : lucent ? [-0.5, 0.5] : [-1, 0, 1];
+      for (const side of catchSides) {
+        const lx = cx + side * gemW * (refract ? 0.4 : 0.32);
+        const ly =
+          cy -
+          gemH * (spire ? 0.2 : 0.08) +
+          Math.abs(side) * gemH * 0.05 +
+          (refract ? Math.sin(t * 1.8 + side * 2) * 2 : 0);
+        const rad = gemW * (lucent ? 0.45 : refract ? 0.22 : 0.35);
+        const catchG = fxCtx.createRadialGradient(lx, ly, 0, lx, ly, rad);
+        catchG.addColorStop(0, `rgba(240,250,255,${(refract ? 0.32 : lucent ? 0.18 : 0.2) + breath * 0.08})`);
+        catchG.addColorStop(1, "rgba(150,210,240,0)");
+        fxCtx.globalAlpha = (refract ? 0.48 : lucent ? 0.28 : 0.35) + breath * 0.1;
+        fxCtx.fillStyle = catchG;
+        fxCtx.beginPath();
+        fxCtx.arc(lx, ly, rad, 0, Math.PI * 2);
+        fxCtx.fill();
+      }
+      // Refracted: sharp angled light rays through the gem
+      if (refract) {
+        for (let i = 0; i < 5; i++) {
+          const ang = -0.9 + i * 0.45 + Math.sin(t * 0.7 + i) * 0.08;
+          const len = gemH * (0.55 + (i % 2) * 0.25);
+          const x0 = cx - Math.cos(ang) * gemW * 0.15;
+          const y0 = cy + gemH * 0.35;
+          const x1 = cx + Math.cos(ang) * gemW * 0.85;
+          const y1 = cy - Math.sin(ang) * len;
+          const ray = fxCtx.createLinearGradient(x0, y0, x1, y1);
+          const rc = prismRgb(0.1 * i);
+          ray.addColorStop(0, `rgba(${rc[0]},${rc[1]},${rc[2]},0)`);
+          ray.addColorStop(0.45, `rgba(240,250,255,${0.35 + pulse * 0.1})`);
+          ray.addColorStop(1, `rgba(${rc[0]},${rc[1]},${rc[2]},0)`);
+          fxCtx.strokeStyle = ray;
+          fxCtx.globalAlpha = 0.55 + breath * 0.15;
+          fxCtx.lineWidth = 1.2 + (i % 2);
+          fxCtx.lineCap = "round";
+          fxCtx.beginPath();
+          fxCtx.moveTo(x0, y0);
+          fxCtx.lineTo(x1, y1);
+          fxCtx.stroke();
+        }
+      }
+      fxCtx.restore();
+      if (liveBase && liveBase.complete && liveBase.naturalWidth) {
+        fxCtx.globalCompositeOperation = "destination-in";
+        fxCtx.globalAlpha = 1;
+        fxCtx.drawImage(liveBase, ix, iy, iw, ih);
+        fxCtx.globalCompositeOperation = "source-over";
+      }
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = detailSoft ? 0.45 + 0.1 * glowP : 0.75 + 0.15 * glowP;
+      ctx.drawImage(fx, 0, 0, w, h);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+    }
+
+    // Build energy on offscreen, then mask to crystal form + PNG alpha
+    fxCtx.setTransform(1, 0, 0, 1, 0, 0);
+    fxCtx.clearRect(0, 0, fx.width, fx.height);
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    fxCtx.imageSmoothingEnabled = true;
+    fxCtx.imageSmoothingQuality = "high";
+    fxCtx.save();
+    clipCrystalForm(fxCtx, cx, cy, gemW * (1.05 + breath * 0.04), gemH * (1.05 + breath * 0.03), gemShape);
+    fxCtx.globalCompositeOperation = "lighter";
+
+    const bloom = fxCtx.createRadialGradient(cx, cy, 0, cx, cy, gemH * (1.05 + breath * 0.12));
+    bloom.addColorStop(0, `rgba(200,235,255,${0.22 + pulse * 0.1})`);
+    bloom.addColorStop(0.4, `rgba(150,210,245,${0.16 + breath * 0.08})`);
+    bloom.addColorStop(0.75, `rgba(110,185,230,${0.06 + pulse * 0.04})`);
+    bloom.addColorStop(1, "rgba(70,150,220,0)");
+    fxCtx.globalAlpha = 0.28 + breath * 0.1 + pulse * 0.06;
+    fxCtx.fillStyle = bloom;
+    fxCtx.fillRect(cx - gemW * 1.25, cy - gemH * 1.25, gemW * 2.5, gemH * 2.5);
+
+    const beat = 0.55 + 0.45 * Math.sin(t * 0.65);
+    const beatGlow = fxCtx.createRadialGradient(cx, cy - gemH * 0.08, 0, cx, cy, gemH * (0.85 + beat * 0.2));
+    beatGlow.addColorStop(0, `rgba(200,235,255,${0.12 + beat * 0.12})`);
+    beatGlow.addColorStop(0.55, `rgba(140,200,240,${0.07 + beat * 0.05})`);
+    beatGlow.addColorStop(1, "rgba(90,170,235,0)");
+    fxCtx.globalAlpha = 0.55;
+    fxCtx.fillStyle = beatGlow;
+    fxCtx.beginPath();
+    fxCtx.ellipse(cx, cy, gemW * 0.85, gemH * (0.7 + beat * 0.1), 0, 0, Math.PI * 2);
+    fxCtx.fill();
+
+    const drawRise = (u, strength, widthScale) => {
+      const env = fadeWave(u * Math.PI) * strength;
+      if (env < 0.02) return;
+      // Radiate wider as energy climbs — soft bloom, not a hot needle
+      const taper = 0.5 + 0.5 * Math.sin(u * Math.PI);
+      const radiate = 0.75 + u * 0.55;
+      const sy = cy + gemH * 0.9 - u * gemH * 1.85;
+      fxCtx.save();
+      fxCtx.translate(cx + Math.sin(u * Math.PI * 2) * gemW * 0.02, sy);
+      const halfH = 7 + strength * 4;
+      const halfW = gemW * (1.05 + widthScale * 0.4) * taper * radiate;
+
+      // Soft radiating wash (main look)
+      fxCtx.globalAlpha = env * (spectral ? 0.55 : 0.4);
+      const wash = fxCtx.createRadialGradient(0, 0, 0, 0, 0, halfW);
+      if (spectral) {
+        const w0 = prismRgb(u * 0.4);
+        const w1 = prismRgb(u * 0.4 + 0.3);
+        wash.addColorStop(0, `rgba(${w0[0]},${w0[1]},${w0[2]},0.55)`);
+        wash.addColorStop(0.35, `rgba(${w1[0]},${w1[1]},${w1[2]},0.3)`);
+        wash.addColorStop(0.7, `rgba(${w1[0]},${w1[1]},${w1[2]},0.1)`);
+        wash.addColorStop(1, "rgba(160,120,255,0)");
+      } else {
+        wash.addColorStop(0, "rgba(210,240,255,0.4)");
+        wash.addColorStop(0.35, "rgba(160,215,245,0.22)");
+        wash.addColorStop(0.7, "rgba(120,190,230,0.08)");
+        wash.addColorStop(1, "rgba(100,180,255,0)");
+      }
+      fxCtx.fillStyle = wash;
+      fxCtx.beginPath();
+      fxCtx.ellipse(0, 0, halfW, halfH * 2.1, 0, 0, Math.PI * 2);
+      fxCtx.fill();
+
+      // Gentle band — muted, not pure white
+      fxCtx.globalAlpha = env * (spectral ? 0.55 : 0.45);
+      const band = fxCtx.createLinearGradient(0, -halfH, 0, halfH);
+      if (spectral) {
+        const b0 = prismRgb(u + 0.1);
+        const b1 = prismRgb(u + 0.45);
+        band.addColorStop(0, `rgba(${b0[0]},${b0[1]},${b0[2]},0)`);
+        band.addColorStop(0.35, `rgba(${b0[0]},${b0[1]},${b0[2]},0.35)`);
+        band.addColorStop(0.5, `rgba(255,245,255,0.55)`);
+        band.addColorStop(0.65, `rgba(${b1[0]},${b1[1]},${b1[2]},0.35)`);
+        band.addColorStop(1, `rgba(${b1[0]},${b1[1]},${b1[2]},0)`);
+      } else {
+        band.addColorStop(0, "rgba(180,225,255,0)");
+        band.addColorStop(0.35, "rgba(170,220,245,0.28)");
+        band.addColorStop(0.5, "rgba(220,242,255,0.5)");
+        band.addColorStop(0.65, "rgba(170,220,245,0.28)");
+        band.addColorStop(1, "rgba(180,225,255,0)");
+      }
+      fxCtx.fillStyle = band;
+      fxCtx.beginPath();
+      fxCtx.ellipse(0, 0, halfW * 0.92, halfH * 1.15, 0, 0, Math.PI * 2);
+      fxCtx.fill();
+
+      // Soft side radiate into arms
+      fxCtx.globalAlpha = env * (spectral ? 0.5 : 0.35);
+      for (const side of [-1, 1]) {
+        const sx = side * halfW * 0.55;
+        const wing = fxCtx.createRadialGradient(sx, 0, 0, sx, 0, halfW * 0.5);
+        if (spectral) {
+          const c = prismRgb(0.2 + side * 0.15 + u * 0.2);
+          wing.addColorStop(0, `rgba(${c[0]},${c[1]},${c[2]},0.55)`);
+          wing.addColorStop(0.55, `rgba(${c[0]},${c[1]},${c[2]},0.2)`);
+          wing.addColorStop(1, "rgba(160,120,255,0)");
+        } else {
+          wing.addColorStop(0, "rgba(200,235,255,0.4)");
+          wing.addColorStop(0.55, "rgba(150,210,240,0.15)");
+          wing.addColorStop(1, "rgba(120,190,255,0)");
+        }
+        fxCtx.fillStyle = wing;
+        fxCtx.beginPath();
+        fxCtx.ellipse(sx, 0, halfW * 0.48, halfH * 1.5, 0, 0, Math.PI * 2);
+        fxCtx.fill();
+      }
+      fxCtx.restore();
+    };
+    const riseT = t * (spire ? 0.34 : 0.28);
+    drawRise((riseT % 1 + 1) % 1, (0.75 + pulse * 0.12) * riseP, spire ? 0.75 : 1);
+    drawRise(((riseT + 0.5) % 1 + 1) % 1, (0.45 + breath * 0.12) * riseP, spire ? 0.7 : 0.95);
+    if (prism) {
+      drawRise(((riseT + 0.25) % 1 + 1) % 1, (0.55 + pulse * 0.1) * riseP, 1.1);
+      drawRise(((riseT + 0.75) % 1 + 1) % 1, (0.4 + breath * 0.1) * riseP, 1.05);
+    }
+    if (spire) {
+      drawRise(((riseT + 0.2) % 1 + 1) % 1, (0.7 + pulse * 0.12) * riseP, 0.65);
+      drawRise(((riseT + 0.4) % 1 + 1) % 1, (0.5 + breath * 0.1) * riseP, 0.55);
+      drawRise(((riseT + 0.7) % 1 + 1) % 1, (0.45 + pulse * 0.08) * riseP, 0.6);
+    }
+    if (lucent) {
+      drawRise(((riseT + 0.33) % 1 + 1) % 1, (0.35 + breath * 0.1) * riseP, 1.35);
+    }
+    if (refract) {
+      drawRise(((riseT + 0.18) % 1 + 1) % 1, (0.4 + pulse * 0.08) * riseP, 0.85);
+    }
+
+    // Energy branching into left/right crystal arms
+    const drawArmEnergy = (side, u, strength) => {
+      const env = fadeWave(u * Math.PI) * strength;
+      if (env < 0.03) return;
+      // Arms sit near mid-height; energy travels center → tip
+      const armY = cy - gemH * 0.02 + Math.sin(u * Math.PI) * gemH * 0.06;
+      const x0 = cx + side * gemW * 0.08;
+      const x1 = cx + side * gemW * (0.35 + u * 0.55);
+      const y0 = armY + gemH * 0.08;
+      const y1 = armY - gemH * 0.18 * u;
+      fxCtx.save();
+      fxCtx.globalAlpha = env * (spectral ? 1 : 0.9);
+      const grad = fxCtx.createLinearGradient(x0, y0, x1, y1);
+      if (spectral) {
+        const a0 = prismRgb(0.1 + side * 0.1);
+        const a1 = prismRgb(0.4 + side * 0.1);
+        grad.addColorStop(0, `rgba(${a0[0]},${a0[1]},${a0[2]},0)`);
+        grad.addColorStop(0.35, `rgba(${a0[0]},${a0[1]},${a0[2]},0.55)`);
+        grad.addColorStop(0.65, "rgba(255,245,255,0.85)");
+        grad.addColorStop(1, `rgba(${a1[0]},${a1[1]},${a1[2]},0)`);
+      } else {
+        grad.addColorStop(0, "rgba(255,255,255,0)");
+        grad.addColorStop(0.35, "rgba(190,230,255,0.55)");
+        grad.addColorStop(0.65, "rgba(255,255,255,0.95)");
+        grad.addColorStop(1, "rgba(160,215,255,0)");
+      }
+      fxCtx.strokeStyle = grad;
+      fxCtx.lineWidth = (refract ? 2.4 : spectral ? 4.2 : 3.5) + env * (refract ? 2.2 : spectral ? 4 : 3);
+      fxCtx.lineCap = "round";
+      fxCtx.beginPath();
+      fxCtx.moveTo(x0, y0);
+      // slight wave along the arm
+      const mx = (x0 + x1) * 0.5;
+      const my = (y0 + y1) * 0.5 + Math.sin(t * 2.2 + side) * (refract ? 0.8 : 2.2);
+      fxCtx.quadraticCurveTo(mx, my, x1, y1);
+      fxCtx.stroke();
+
+      // Soft bloom at the traveling tip
+      const tipX = x0 + (x1 - x0) * u;
+      const tipY = y0 + (y1 - y0) * u;
+      const bloom = fxCtx.createRadialGradient(tipX, tipY, 0, tipX, tipY, 8 + env * 6);
+      bloom.addColorStop(0, `rgba(230,245,255,${0.28 * env})`);
+      bloom.addColorStop(0.4, `rgba(160,215,245,${0.16 * env})`);
+      bloom.addColorStop(1, "rgba(100,180,255,0)");
+      fxCtx.fillStyle = bloom;
+      fxCtx.beginPath();
+      fxCtx.arc(tipX, tipY, 10 + env * 7, 0, Math.PI * 2);
+      fxCtx.fill();
+      fxCtx.restore();
+    };
+    const armT = (riseT + 0.12) % 1;
+    if (!spire) {
+      drawArmEnergy(1, armT, (0.7 + pulse * 0.1) * riseP * (lucent ? 0.55 : 1));
+      drawArmEnergy(-1, (armT + 0.08) % 1, (0.65 + breath * 0.1) * riseP * (lucent ? 0.55 : 1));
+    }
+    if (!lucent && !spire) {
+      drawArmEnergy(1, (armT + 0.5) % 1, 0.4 * riseP);
+      drawArmEnergy(-1, (armT + 0.58) % 1, 0.38 * riseP);
+    }
+    if (prism) {
+      drawArmEnergy(1, (armT + 0.28) % 1, 0.7 * riseP);
+      drawArmEnergy(-1, (armT + 0.36) % 1, 0.65 * riseP);
+      drawArmEnergy(1, (armT + 0.78) % 1, 0.5 * riseP);
+      drawArmEnergy(-1, (armT + 0.86) % 1, 0.48 * riseP);
+    }
+    if (refract) {
+      drawArmEnergy(1, (armT + 0.2) % 1, 0.5 * riseP);
+      drawArmEnergy(-1, (armT + 0.55) % 1, 0.45 * riseP);
+    }
+
+    // Upper diagonal arm flares
+    for (const side of [-1, 1]) {
+      const u = ((t * 0.28 + (side > 0 ? 0.2 : 0.45)) % 1 + 1) % 1;
+      const env = fadeWave(u * Math.PI) * (0.55 + breath * 0.2);
+      if (env < 0.04) continue;
+      const x0 = cx + side * gemW * 0.1;
+      const y0 = cy - gemH * 0.15;
+      const x1 = cx + side * gemW * (0.55 + u * 0.3);
+      const y1 = cy - gemH * (0.35 + u * 0.35);
+      fxCtx.save();
+      fxCtx.globalAlpha = env;
+      const g = fxCtx.createLinearGradient(x0, y0, x1, y1);
+      g.addColorStop(0, "rgba(255,255,255,0)");
+      g.addColorStop(0.5, "rgba(200,240,255,0.75)");
+      g.addColorStop(1, "rgba(150,210,255,0)");
+      fxCtx.strokeStyle = g;
+      fxCtx.lineWidth = 2.5 + env * 2;
+      fxCtx.lineCap = "round";
+      fxCtx.beginPath();
+      fxCtx.moveTo(x0, y0);
+      fxCtx.lineTo(x1, y1);
+      fxCtx.stroke();
+      fxCtx.restore();
+    }
+
+    // Extra side columns so energy fills left/right, not only center
+    for (let i = 0; i < 5; i++) {
+      const colU = ((t * (0.2 + i * 0.03) + i * 0.2) % 1 + 1) % 1;
+      const env = fadeWave(colU * Math.PI);
+      if (env < 0.04) continue;
+      const taper = 0.4 + 0.6 * Math.sin(colU * Math.PI);
+      const ox = (i - 2) * gemW * 0.28 * taper + Math.sin(t * 0.55 + i) * gemW * 0.03;
+      const y0 = cy + gemH * 0.85;
+      const y1 = cy - gemH * 0.9;
+      const y = y0 + (y1 - y0) * colU;
+      const colW = 4 + (i === 2 ? 2 : 0);
+      fxCtx.save();
+      fxCtx.globalAlpha = env * (0.28 + pulse * 0.18) * (i === 2 ? 1 : 0.85);
+      const col = fxCtx.createLinearGradient(ox - colW, y, ox + colW, y);
+      col.addColorStop(0, "rgba(160,220,255,0)");
+      col.addColorStop(0.5, "rgba(230,248,255,0.9)");
+      col.addColorStop(1, "rgba(160,220,255,0)");
+      fxCtx.fillStyle = col;
+      fxCtx.fillRect(cx + ox - colW, y - gemH * 0.3, colW * 2, gemH * 0.6);
+      fxCtx.restore();
+    }
+
+    fxCtx.save();
+    fxCtx.translate(cx + Math.sin(t * 0.45) * gemW * 0.04, cy);
+    fxCtx.globalAlpha = 0.2 + 0.26 * (0.5 + 0.5 * Math.sin(t * 1.05));
+    const sheen = fxCtx.createLinearGradient(0, gemH * 0.9, 0, -gemH * 0.9);
+    sheen.addColorStop(0, "rgba(255,255,255,0)");
+    sheen.addColorStop(0.35, "rgba(180,225,255,0.18)");
+    sheen.addColorStop(0.55, "rgba(255,255,255,0.5)");
+    sheen.addColorStop(0.75, "rgba(200,235,255,0.22)");
+    sheen.addColorStop(1, "rgba(255,255,255,0)");
+    fxCtx.fillStyle = sheen;
+    // Full crystal width sheen
+    fxCtx.fillRect(-gemW * 0.95, -gemH * 0.95, gemW * 1.9, gemH * 1.9);
+    fxCtx.restore();
+
+    for (const g of gemPieces) {
+      const wobble = Math.sin(t * g.speed + g.phase);
+      const dist = gemW * (0.12 + breath * 0.04 + wobble * 0.03);
+      const ang = g.ang + wobble * 0.04;
+      const x = cx + Math.cos(ang) * dist;
+      const y = cy + Math.sin(ang) * dist * 1.15;
+      const scale = 0.95 + breath * 0.06 + wobble * 0.03;
+      const shine = 0.28 + 0.18 * (0.5 + 0.5 * Math.sin(t * 1.5 + g.phase)) + pulse * 0.08;
+
+      fxCtx.save();
+      fxCtx.translate(x, y);
+      fxCtx.rotate(ang + Math.PI / 2 + wobble * 0.05);
+      fxCtx.scale(scale, scale);
+      fxCtx.globalAlpha = shine;
+      const grad = fxCtx.createLinearGradient(0, -g.len, 0, g.len * 0.4);
+      grad.addColorStop(0, "rgba(230,245,255,0.75)");
+      grad.addColorStop(0.35, "rgba(170,220,245,0.45)");
+      grad.addColorStop(1, "rgba(90,170,235,0)");
+      fxCtx.fillStyle = grad;
+      fxCtx.beginPath();
+      fxCtx.moveTo(0, -g.len);
+      fxCtx.lineTo(g.wid * 0.5, g.len * 0.1);
+      fxCtx.lineTo(0, g.len * 0.45);
+      fxCtx.lineTo(-g.wid * 0.45, g.len * 0.08);
+      fxCtx.closePath();
+      fxCtx.fill();
+      fxCtx.restore();
+    }
+
+    for (let i = 0; i < 3; i++) {
+      const gPhase = t * (0.85 + i * 0.18) + i * 2.05;
+      const gPulse = smooth(fadeWave(gPhase));
+      if (gPulse < 0.03) continue;
+      const ga = -0.35 + i * 0.5 + Math.sin(t * 0.35 + i) * 0.12;
+      const gr = gemW * (0.08 + i * 0.08);
+      const gx = cx + Math.cos(ga) * gr;
+      const gy = cy + Math.sin(ga) * gr * 1.1 - gemH * 0.05;
+      const arm = (2.8 + i * 0.8) * (0.35 + gPulse * 0.65);
+      fxCtx.save();
+      fxCtx.translate(gx, gy);
+      fxCtx.globalAlpha = gPulse * 0.45;
+      fxCtx.strokeStyle = "rgba(220,240,255,0.7)";
+      fxCtx.lineWidth = 0.9 + gPulse * 0.3;
+      fxCtx.lineCap = "round";
+      fxCtx.beginPath();
+      fxCtx.moveTo(-arm, 0);
+      fxCtx.lineTo(arm, 0);
+      fxCtx.moveTo(0, -arm * 0.65);
+      fxCtx.lineTo(0, arm * 0.65);
+      fxCtx.stroke();
+      const spark = fxCtx.createRadialGradient(0, 0, 0, 0, 0, 2.5 + gPulse * 2);
+      spark.addColorStop(0, `rgba(240,250,255,${0.45 * gPulse})`);
+      spark.addColorStop(0.4, `rgba(180,225,245,${0.22 * gPulse})`);
+      spark.addColorStop(1, "rgba(140,200,255,0)");
+      fxCtx.fillStyle = spark;
+      fxCtx.beginPath();
+      fxCtx.arc(0, 0, 2.5 + gPulse * 2, 0, Math.PI * 2);
+      fxCtx.fill();
+      fxCtx.restore();
+    }
+
+    fxCtx.globalAlpha = 0.35 + pulse * 0.12;
+    const core = fxCtx.createRadialGradient(cx, cy - 1, 0, cx, cy - 1, 7 + breath * 3);
+    core.addColorStop(0, "rgba(230,245,255,0.7)");
+    core.addColorStop(0.35, "rgba(180,225,245,0.35)");
+    core.addColorStop(0.7, "rgba(140,200,235,0.1)");
+    core.addColorStop(1, "rgba(120,190,255,0)");
+    fxCtx.fillStyle = core;
+    fxCtx.beginPath();
+    fxCtx.arc(
+      cx + Math.sin(t * 0.7) * 0.4,
+      cy - 1 + Math.cos(t * 0.9) * 0.3,
+      6 + breath * 2.2,
+      0,
+      Math.PI * 2
+    );
+    fxCtx.fill();
+    fxCtx.restore(); // end crystal clip
+
+    // Keep energy only where the emblem PNG has pixels (exact crystal edges)
+    if (baseImg && baseImg.complete && baseImg.naturalWidth) {
+      fxCtx.globalCompositeOperation = "destination-in";
+      fxCtx.globalAlpha = 1;
+      fxCtx.drawImage(liveBase || baseImg, ix, iy, iw, ih);
+      fxCtx.globalCompositeOperation = "source-over";
+    }
+
+    ctx.drawImage(fx, 0, 0, w, h);
+
+    // Metal border — wavy energy along the ring (skip on borderless crystal-only ranks)
+    if (!borderless) {
+    fxCtx.setTransform(1, 0, 0, 1, 0, 0);
+    fxCtx.clearRect(0, 0, fx.width, fx.height);
+    fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    fxCtx.imageSmoothingEnabled = true;
+    fxCtx.imageSmoothingQuality = "high";
+    fxCtx.globalCompositeOperation = "lighter";
+    fxCtx.lineCap = "round";
+    fxCtx.lineJoin = "round";
+
+    const ringR = Math.min(w, h) * (spire ? 0.38 : 0.355);
+    const crackP = detailSoft ? 0.7 : spire ? 1.15 : refract ? 1.05 : 1;
+    const drawWavyEnergy = (phase, amp, strength, width, waves) => {
+      const steps = 96;
+      const waveT = t * 0.85; // slow undulation
+      fxCtx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const u = i / steps;
+        const a = phase + u * Math.PI * 2;
+        // Strong radial wobble — slow, clearly wavy
+        const wobble =
+          Math.sin(a * waves - waveT) * amp +
+          Math.sin(a * (waves * 0.5) + waveT * 0.7) * amp * 0.55 +
+          Math.sin(a * (waves * 1.35) - waveT * 0.45) * amp * 0.28;
+        const r = ringR + wobble;
+        const x = cx + Math.cos(a) * r;
+        const y = cy + Math.sin(a) * r;
+        if (i === 0) fxCtx.moveTo(x, y);
+        else fxCtx.lineTo(x, y);
+      }
+      fxCtx.strokeStyle = tint(0.05, 0.24 * strength);
+      fxCtx.lineWidth = width * 1.9;
+      fxCtx.stroke();
+
+      fxCtx.beginPath();
+      for (let i = 0; i <= steps; i++) {
+        const u = i / steps;
+        const a = phase + u * Math.PI * 2;
+        const wobble =
+          Math.sin(a * waves - waveT) * amp +
+          Math.sin(a * (waves * 0.5) + waveT * 0.7) * amp * 0.55 +
+          Math.sin(a * (waves * 1.35) - waveT * 0.45) * amp * 0.28;
+        const r = ringR + wobble * 0.9;
+        const x = cx + Math.cos(a) * r;
+        const y = cy + Math.sin(a) * r;
+        if (i === 0) fxCtx.moveTo(x, y);
+        else fxCtx.lineTo(x, y);
+      }
+      fxCtx.strokeStyle = tint(0.35, 0.4 * strength);
+      fxCtx.lineWidth = width * 0.9;
+      fxCtx.stroke();
+    };
+
+    // Traveling energy packets along the wavy ring (slow)
+    const drawWavePackets = (baseAng, count, strength) => {
+      const waveT = t * 0.85;
+      for (let i = 0; i < count; i++) {
+        const a = baseAng + (i / count) * Math.PI * 2;
+        const packet = 0.45 + 0.55 * fadeWave(a * 2.2 + t * 0.7);
+        const wobble =
+          Math.sin(a * 6 - waveT) * 5.5 +
+          Math.sin(a * 3 + waveT * 0.7) * 3.2 +
+          Math.sin(a * 8 - waveT * 0.45) * 1.8;
+        const r = ringR + wobble;
+        const x = cx + Math.cos(a) * r;
+        const y = cy + Math.sin(a) * r;
+        const s = (2.4 + packet * 3.8) * strength;
+        fxCtx.globalAlpha = (0.18 + packet * 0.5) * strength;
+        const g = fxCtx.createRadialGradient(x, y, 0, x, y, s * 2.2);
+        g.addColorStop(0, "rgba(255,255,255,0.95)");
+        g.addColorStop(0.35, tint(0.4, 0.55));
+        g.addColorStop(1, "rgba(100,180,255,0)");
+        fxCtx.fillStyle = g;
+        fxCtx.beginPath();
+        fxCtx.arc(x, y, s * 2.2, 0, Math.PI * 2);
+        fxCtx.fill();
+      }
+      fxCtx.globalAlpha = 1;
+    };
+
+    // Soft base rim (Prismatic gaps / Refracted lower-only — shards float above)
+    fxCtx.globalAlpha = 0.14 + breath * 0.1;
+    fxCtx.strokeStyle = tint(0.15, 0.5);
+    fxCtx.lineWidth = 2;
+    if (prism) {
+      for (let seg = 0; seg < 6; seg++) {
+        const a0 = (seg / 6) * Math.PI * 2 + t * 0.08;
+        const a1 = a0 + Math.PI / 6;
+        fxCtx.beginPath();
+        fxCtx.arc(cx, cy, ringR, a0, a1);
+        fxCtx.stroke();
+      }
+    } else if (refract) {
+      fxCtx.beginPath();
+      fxCtx.arc(cx, cy, ringR, Math.PI * 0.05, Math.PI * 0.95);
+      fxCtx.stroke();
+    } else {
+      fxCtx.beginPath();
+      fxCtx.arc(cx, cy, ringR, 0, Math.PI * 2);
+      fxCtx.stroke();
+    }
+    fxCtx.globalAlpha = 1;
+
+    if (!prism) {
+      drawWavyEnergy(t * 0.22, (6.2 + breath * 1.4) * waveP * crackP, 1.0 * glowP * crackP, 2.9 + (pwr - 1), 6 + Math.round((pwr - 1) * 2));
+      drawWavyEnergy(-t * 0.15 + 1.2, (4.8 + pulse * 1.0) * waveP * crackP, 0.72 * glowP * crackP, 2.2 + (pwr - 1) * 0.6, 4.5 + (pwr - 1));
+      drawWavePackets(t * 0.22, Math.round(9 + (pwr - 1) * 4), (0.8 + pulse * 0.12) * glowP * crackP);
+      drawWavePackets(-t * 0.15 + Math.PI * 0.5, Math.round(6 + (pwr - 1) * 3), (0.5 + breath * 0.18) * glowP * crackP);
+    } else {
+      drawWavyEnergy(t * 0.4, (4.2 + breath) * waveP, 0.45 * glowP, 2.2, 5);
+      drawWavePackets(t * 0.4, 5, 0.4 * glowP);
+    }
+
+    if (baseImg && baseImg.complete && baseImg.naturalWidth) {
+      fxCtx.globalCompositeOperation = "destination-in";
+      fxCtx.globalAlpha = 1;
+      fxCtx.drawImage(liveBase || baseImg, ix, iy, iw, ih);
+      fxCtx.globalCompositeOperation = "source-over";
+    }
+    ctx.drawImage(fx, 0, 0, w, h);
+    }
+
+
+    // Sparse frost near crystal only
+    ctx.globalCompositeOperation = "source-over";
+    for (const m of motes) {
+      const ang = m.ang + t * m.drift;
+      const lift = ((t * m.speed * 0.15 + m.phase) % 1);
+      const dist = gemW * (0.35 + m.dist) * (0.7 + Math.sin(ang) * 0.15);
+      const x = cx + Math.cos(ang) * dist * 0.7;
+      const y = cy + Math.sin(ang) * dist * 1.05 - lift * 8;
+      // stay roughly inside crystal bounds
+      if (Math.abs(x - cx) > gemW * 0.7 || Math.abs(y - cy) > gemH * 1.05) continue;
+      const a = 0.1 + 0.25 * fadeWave(lift * Math.PI + 0.2);
+      const s = m.size * (0.85 + breath * 0.2);
+      const g = ctx.createRadialGradient(x, y, 0, x, y, s * 2.2);
+      g.addColorStop(0, `rgba(230,245,255,${a})`);
+      g.addColorStop(1, "rgba(140,200,255,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(x, y, s * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+  rankLiveRaf = requestAnimationFrame(tick);
+}
+
+function mountRankFx() {
+  destroyRankFx();
+  const stage = document.querySelector(".rank-stat .rank-icon-stage");
+  const canvas = stage?.querySelector("canvas.rank-live");
+  const img = stage?.querySelector("img.rank-icon");
+  if (!stage || !canvas || !img) return;
+  const element = stage.dataset.element || img.dataset.element;
+  if (element === "ice") {
+    const conf = RANK_ELEMENTAL[stage.dataset.rank] || RANK_ELEMENTAL[img.dataset.rank] || {};
+    const start = () =>
+      mountRankLiveIce(stage, canvas, img, conf.power || 1, stage.dataset.rank || img.dataset.rank || "");
+    if (img.complete && img.naturalWidth) start();
+    else img.addEventListener("load", start, { once: true });
+    return;
+  }
+}
+
+function rankBadgeHtml() {
+  const p = bossRankProgress();
+  const nextLabel = p.next
+    ? `${p.kills} / ${p.next.kills} kills`
+    : `${p.kills} kills`;
+  const elemental = RANK_ELEMENTAL[p.current.id];
+  const art = elemental
+    ? elemental.art
+    : "art/rank-" + encodeURIComponent(p.current.id) + ".png";
+  const elAttr = elemental ? ` data-element="${esc(elemental.element)}"` : "";
+  return `<article class="stat rank-stat">
+      <div class="rank-icon-stage" data-rank="${esc(p.current.id)}" data-tier="${p.idx}"${elAttr} style="--rank-art:url('${esc(art)}')">
+        ${rankIconHtml(p.current.id, "rank-icon", p.current.name, p.idx)}
+        <div class="rank-fx" aria-hidden="true">
+          <canvas class="rank-live" width="200" height="168"></canvas>
+        </div>
+      </div>
+      <div class="rank-title" data-rank="${esc(p.current.id)}" data-element="${esc(elemental ? elemental.element : "")}">
+        <span>${esc(p.current.name)}</span>
+      </div>
+      <div class="rank-copy">
+        <span>${esc(p.current.name)}</span>
+        <em>${esc(nextLabel)}${p.next ? ` → ${esc(p.next.name)}` : ""}</em>
+        <div class="progress" aria-hidden="true"><i style="width:${p.pct}%"></i></div>
+      </div>
+    </article>`;
+}
+
 function dropCounts(bossId) {
   const counts = {};
   for (const log of logsFor(bossId)) {
@@ -1027,14 +1994,17 @@ function distinctiveTradePhrase(fold) {
 
 function pickTradeStat(list, kind) {
   if (!list?.length) return null;
+  // Fractured rolls → fractured.stat_* (same as EE2 ModifierType.Fractured trade ids).
   const order =
-    kind === "rune"
-      ? ["rune", "enchant", "implicit", "explicit"]
-      : kind === "implicit" || kind === "corrupt" || kind === "skill"
-        ? ["implicit", "enchant", "rune", "explicit"]
-        : kind === "enchant"
-          ? ["enchant", "implicit", "rune", "explicit"]
-          : ["explicit", "implicit", "enchant", "rune"];
+    kind === "fractured"
+      ? ["fractured", "explicit", "implicit", "enchant", "rune"]
+      : kind === "rune"
+        ? ["rune", "enchant", "implicit", "explicit"]
+        : kind === "implicit" || kind === "corrupt" || kind === "skill"
+          ? ["implicit", "enchant", "rune", "explicit"]
+          : kind === "enchant"
+            ? ["enchant", "implicit", "rune", "explicit"]
+            : ["explicit", "implicit", "enchant", "rune"];
   for (const want of order) {
     const hit = list.find((row) => row.type === want || String(row.id).startsWith(want + "."));
     if (hit) return hit;
@@ -1865,7 +2835,7 @@ function expandRollSpan(row, ctx, siblings) {
     delete row.spanSteps;
     delete row.spanTiers;
     clipExtra();
-    return flattenFlatDamageRoll(row);
+    return flattenFlatDamageRoll(row, ctx);
   }
   const hit = lookupAffixLadder(row, ctx, siblings);
   if (hit && Number.isFinite(hit.spanLo) && Number.isFinite(hit.spanHi)) {
@@ -1896,14 +2866,14 @@ function expandRollSpan(row, ctx, siblings) {
         })
         .filter(Boolean);
     }
-    return flattenFlatDamageRoll(row);
+    return flattenFlatDamageRoll(row, ctx);
   }
   row.spanLo = lo;
   row.spanHi = hi;
   delete row.spanSteps;
   delete row.spanTiers;
   clipExtra();
-  return flattenFlatDamageRoll(row);
+  return flattenFlatDamageRoll(row, ctx);
 }
 
 function expandRollSpans(rows, ctx) {
@@ -1952,7 +2922,8 @@ function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
     const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
     const text = stripAdvancedRanges(parseAffixStrings(raw));
     if (!isTradeableRoll(text, kind, roll)) continue;
-    const hit = findTradeStat(index, text, kind, { preferLocal: localModApplies(foldTradeMatcher(text), extra) });
+    const tradeKind = roll?.fractured ? "fractured" : kind;
+    const hit = findTradeStat(index, text, tradeKind, { preferLocal: localModApplies(foldTradeMatcher(text), extra) });
     if (!hit?.id) continue;
     const inverted = invertedTradeRoll(raw);
     const row = grouped.get(hit.id) || { id: hit.id, text, n: 0, option: String(hit.id).includes("|") };
@@ -3206,12 +4177,13 @@ function overlayRateCardHtml() {
     .join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-function overlayBarHtml() {
+function overlayBarHtml(tradeBtns = "") {
   const n = Math.round(Number(prices.exaltedPerDivine) || 0);
   overlayRateShown = n;
   const title = n > 0 ? "1 divine → " + n + " exalted" : "Conversions";
   const rate = `<span class="price-overlay-rate-wrap"><button type="button" class="price-overlay-rate${n > 0 ? "" : " is-empty"}" data-overlay-rate title="${esc(title)}"><svg class="price-overlay-swap" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 5h9.6L9.8 3.2 11 2l4 4-4 4-1.2-1.2L11.6 7H2V5zm12 6H4.4l1.8 1.8L5 14l-4-4 4-4 1.2 1.2L4.4 9H14v2z"/></svg>${n > 0 ? n : ""}</button>${overlayRateCardHtml()}</span>`;
-  return `<div class="price-overlay-bar">${rate}<span class="price-overlay-league">${esc(leagueName())}</span><button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button></div>`;
+  const right = `${tradeBtns}<button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button>`;
+  return `<div class="price-overlay-bar"><div class="price-overlay-bar-left">${rate}<span class="price-overlay-league">${esc(leagueName())}</span></div><div class="price-overlay-bar-right">${right}</div></div>`;
 }
 
 function catalogNames() {
@@ -6225,8 +7197,10 @@ function flatDamageAvg(roll) {
 }
 
 // EE2: trade filters flat "# to #" damage as the average of the two rolls.
-function flattenFlatDamageRoll(row) {
-  if (!row || !isFlatDamageRoll(row) || isWeaponEleFlatRoll(row)) return row;
+// Pass drop so weapon local ele flats stay EDPS-only; socketed runes still flatten (incl. weapons).
+function flattenFlatDamageRoll(row, drop) {
+  if (!row || !isFlatDamageRoll(row)) return row;
+  if (isWeaponEleFlatRoll(row, drop)) return row;
   const pair = flatDamagePairFromText(row.text);
   if (!pair || !Number.isFinite(pair.a) || !Number.isFinite(pair.b)) return row;
   const a = pair.a;
@@ -6255,6 +7229,24 @@ function flattenFlatDamageRoll(row) {
     row.wantMin = snapped;
   }
   return row;
+}
+
+function rollIsRuneMod(roll) {
+  if (canonicalRollKind(roll?.kind) === "rune") return true;
+  const t = String(roll?.text || "");
+  return /\((?:added )?(?:rune|augment)\)/i.test(t) || /\brune modifier\b/i.test(t);
+}
+
+function rollFlatPairIsStatic(roll) {
+  if (
+    Number.isFinite(Number(roll?.flatA)) &&
+    Number.isFinite(Number(roll?.flatB)) &&
+    Math.abs(Number(roll.flatA) - Number(roll.flatB)) < 0.02
+  ) {
+    return true;
+  }
+  const pair = flatDamagePairFromText(roll?.text);
+  return !!(pair && Number.isFinite(pair.a) && Number.isFinite(pair.b) && Math.abs(pair.a - pair.b) < 0.02);
 }
 
 function rollUsesTierSnap(roll, drop) {
@@ -7190,13 +8182,19 @@ function priceOverlayHtml(log, drop) {
   }
   function rollFlatAvgInputHtml(roll) {
     if (!roll?.flatAvg) return "";
+    // Socketed runes / augments are fixed — never a right-hand want box (weapon or armour).
+    if (rollIsRuneMod(roll)) return "";
+    // Static equal pair (non-rune) — no want box.
+    if (rollFlatPairIsStatic(roll)) return "";
     const avg = Number.isFinite(Number(roll.value)) ? Number(roll.value) : flatDamageAvg(roll);
     const want = Number.isFinite(Number(roll.wantMin)) ? Number(roll.wantMin) : avg;
+    if (!Number.isFinite(want)) return "";
     const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
     const shown = formatRollNum(want, rollUsesDecimals(roll) ? "0.1" : "1");
     return `<span class="price-overlay-q-edit"><input type="text" inputmode="decimal" pattern="[0-9.]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="99999" value="${esc(shown)}" data-span-rid="${roll.rid}" data-span-dec="${rollUsesDecimals(roll) ? "1" : "0"}" ${mark} /></span>`;
   }
   function rollSpanHtml(roll) {
+    if (rollIsRuneMod(roll)) return "";
     if (roll?.flatAvg) return "";
     const d = sliderDriver(roll);
     const lo = d.lo;
@@ -7279,7 +8277,9 @@ function priceOverlayHtml(log, drop) {
   const props = overlayPropsHtml(log, drop);
   const offers = pickHtml ? "" : overlayOffersHtml(drop);
   const hasOffers = !!offers;
-  const tradeBtns = `<span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span>`;
+  const tradeBtns = pickHtml
+    ? ""
+    : `<span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span>`;
   const exchange = overlayExchangeHaveHtml(log, drop);
   const footBits = [charmExtra, exchange].filter(Boolean).join("");
   const foot = pickHtml || !footBits ? "" : `<div class="price-overlay-foot">${footBits}</div>`;
@@ -7288,16 +8288,15 @@ function priceOverlayHtml(log, drop) {
     : "";
   return `
     <article class="price-overlay-card item-tip-card ${esc(kindClass)}${hasOffers ? " has-offers" : ""}"${weaponDpsCardAttrs(drop)}>
-      ${overlayBarHtml()}
       <div class="price-overlay-shell">
         <div class="price-overlay-main">
+          ${overlayBarHtml(tradeBtns)}
           <div class="price-overlay-body">
           <div class="item-tip-head">
             ${dropIconHtml(drop, "lg")}
             <div class="item-tip-title">
               <div class="item-tip-name-row">
                 <div class="item-tip-name">${esc(drop.name)}</div>
-                ${pickHtml ? "" : tradeBtns}
               </div>
               ${overlayBaseHtml(log, drop)}
               ${overlayFlagsHtml(log, drop)}
@@ -8638,11 +9637,12 @@ function renderDivineTape() {
 }
 
 function renderStats() {
-  const totalKills = state.logs.length;
+  destroyRankFx();
   document.getElementById("stats").innerHTML = `
-    <article class="stat"><span>Total kills</span><b>${totalKills}</b></article>
-    <article class="stat"><span>Loot value</span><b>${valueHtml(totalLootValue())}</b></article>
+    ${rankBadgeHtml()}
+    <article class="stat loot-stat"><span>Loot value</span><b>${valueHtml(totalLootValue())}</b></article>
   `;
+  mountRankFx();
 }
 
 function renderFilters() {
@@ -9383,7 +10383,7 @@ function render() {
   syncBackupUi();
   document.getElementById("boss-toolbar").style.display = ui.view === "bosses" ? "flex" : "none";
   document.getElementById("stats").style.display =
-    ui.view === "dash" || ui.view === "settings" || ui.view === "econ" || ui.view === "bosses" || ui.view === "decks" ? "none" : "grid";
+    ui.view === "dash" || ui.view === "log" ? "grid" : "none";
 
   const focused = document.activeElement?.id;
   const selStart = document.activeElement?.selectionStart;

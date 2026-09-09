@@ -261,6 +261,11 @@
         const oldBody = oldCard.querySelector(".price-overlay-body");
         const nextBody = nextCard.querySelector(".price-overlay-body");
 
+        const oldBar = oldMain?.querySelector(".price-overlay-bar") || oldCard.querySelector(".price-overlay-bar");
+        const nextBar = nextCard.querySelector(".price-overlay-main .price-overlay-bar") || nextCard.querySelector(".price-overlay-bar");
+        if (oldBar && nextBar && oldBar.innerHTML !== nextBar.innerHTML) oldBar.replaceWith(nextBar);
+        else if (nextBar && !oldBar && oldMain) oldMain.prepend(nextBar);
+
         const oldHead = oldCard.querySelector(".item-tip-head");
         const nextHead = nextCard.querySelector(".item-tip-head");
         if (oldHead && nextHead && oldHead.innerHTML !== nextHead.innerHTML) oldHead.replaceWith(nextHead);
@@ -279,10 +284,6 @@
         if (nextFoot && oldFoot) oldFoot.replaceWith(nextFoot);
         else if (nextFoot && !oldFoot && oldMain) oldMain.appendChild(nextFoot);
         else if (!nextFoot && oldFoot) oldFoot.remove();
-
-        const oldBar = oldCard.querySelector(".price-overlay-bar");
-        const nextBar = nextCard.querySelector(".price-overlay-bar");
-        if (oldBar && nextBar && oldBar.innerHTML !== nextBar.innerHTML) oldBar.replaceWith(nextBar);
         return true;
       }
 
@@ -334,9 +335,9 @@
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;");
           root.innerHTML =
-            '<article class="price-overlay-card item-tip-card"><div class="price-overlay-bar"><span class="price-overlay-rate is-empty" aria-hidden="true"></span><span class="price-overlay-league">Still Sane, Exile?</span><button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button></div><div class="price-overlay-body"><div class="item-tip-descr">' +
+            '<article class="price-overlay-card item-tip-card"><div class="price-overlay-shell"><div class="price-overlay-main"><div class="price-overlay-bar"><div class="price-overlay-bar-left"><span class="price-overlay-rate is-empty" aria-hidden="true"></span><span class="price-overlay-league">Still Sane, Exile?</span></div><div class="price-overlay-bar-right"><button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button></div></div><div class="price-overlay-body"><div class="item-tip-descr">' +
             text +
-            "</div></div></article>";
+            "</div></div></div></div></article>";
           fit();
           requestAnimationFrame(fit);
         }

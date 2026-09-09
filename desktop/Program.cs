@@ -3144,8 +3144,15 @@ sealed class PriceOverlayForm : Form
         var minH = (int)Math.Ceiling(90 * scale);
         var w = Math.Clamp((int)Math.Ceiling(_cssW * scale), minW, Math.Max(minW, screen.Width / 2));
         var h = Math.Clamp((int)Math.Ceiling(_cssH * scale), minH, Math.Max(minH, (int)(screen.Height * 0.92)));
-        var x = Math.Clamp(Location.X, screen.Left, Math.Max(screen.Left, screen.Right - w));
-        var y = Math.Clamp(Location.Y, screen.Top, Math.Max(screen.Top, screen.Bottom - h));
+        var prevW = _appliedW > 0 ? _appliedW : Width;
+        var x = Location.X;
+        var y = Location.Y;
+        // Keep the left edge fixed when Check trade widens the window (grow right only).
+        if (x < screen.Left) x = screen.Left;
+        else if (w < prevW && x + w > screen.Right)
+            x = Math.Max(screen.Left, screen.Right - w);
+        if (y < screen.Top) y = screen.Top;
+        else if (y + h > screen.Bottom) y = Math.Max(screen.Top, screen.Bottom - h);
         if (w == _appliedW && h == _appliedH && x == Location.X && y == Location.Y) return;
         _appliedW = w;
         _appliedH = h;

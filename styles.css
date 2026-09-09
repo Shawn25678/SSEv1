@@ -801,9 +801,10 @@ select:focus {
 
 .stats {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(200px, 228px) minmax(140px, 1fr);
   gap: 12px;
   margin: 22px 0;
+  align-items: start;
 }
 
 .stat {
@@ -814,12 +815,901 @@ select:focus {
   box-shadow: var(--shadow);
 }
 
+.stats .stat {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 0;
+}
+
+.stats .stat:not(.rank-stat) {
+  box-sizing: border-box;
+  padding: 10px 12px;
+  height: 168px;
+  min-height: 168px;
+  max-height: 168px;
+  align-self: start;
+  justify-content: center;
+  gap: 8px;
+}
+
+.stats .loot-stat {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
+  background:
+    radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--gold) 14%, transparent), transparent 55%),
+    linear-gradient(165deg, color-mix(in srgb, var(--panel-2) 88%, var(--gold) 12%), var(--panel) 72%);
+  box-shadow:
+    0 18px 32px rgba(0, 0, 0, 0.5),
+    0 6px 12px rgba(0, 0, 0, 0.35),
+    0 1px 0 color-mix(in srgb, var(--gold) 42%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 1px color-mix(in srgb, var(--gold) 28%, transparent),
+    inset 0 -10px 24px rgba(0, 0, 0, 0.28);
+  transform: translateZ(0);
+  animation: loot-stat-alive 3.6s ease-in-out infinite;
+}
+
+.stats .loot-stat::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(125deg, rgba(255, 255, 255, 0.1), transparent 40%, transparent 65%, rgba(0, 0, 0, 0.18));
+  z-index: 0;
+  opacity: 0.8;
+  animation: loot-stat-sheen 3.6s ease-in-out infinite;
+}
+
+.stats .loot-stat > * {
+  position: relative;
+  z-index: 1;
+}
+
 .stat b {
   display: block;
   font-family: var(--font-display);
   font-size: 1.7rem;
   color: var(--gold-2);
   margin-top: 4px;
+}
+
+.stats .stat:not(.rank-stat) b {
+  font-size: 1.05rem;
+  margin-top: 0;
+  line-height: 1.15;
+}
+
+.stats .loot-stat b {
+  font-size: 1.28rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--gold);
+  text-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.85),
+    0 2px 3px rgba(0, 0, 0, 0.45);
+}
+
+.stats .stat:not(.rank-stat) > span {
+  font-size: 0.7rem;
+  line-height: 1.15;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.stats .loot-stat > span {
+  letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--gold) 55%, var(--muted));
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+
+.rank-stat {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  text-align: center;
+  gap: 2px;
+  grid-column: span 1;
+  min-height: 0;
+  padding: 0 6px 4px;
+  overflow: visible;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  align-self: start;
+}
+
+.rank-icon-stage {
+  position: relative;
+  width: 200px;
+  height: 168px;
+  margin: 0 auto;
+  flex: none;
+  overflow: visible;
+  --rank-tx: 0px;
+  --rank-ty: -2px;
+  --rank-base-scale: 1.08;
+  --rank-ember: 255, 170, 70;
+}
+
+.rank-icon-stage[data-element] {
+  width: 188px;
+  height: 188px;
+}
+
+.rank-icon-stage[data-rank="paragon"] {
+  --rank-tx: 6px;
+}
+
+.rank-icon-stage .rank-icon {
+  position: relative;
+  z-index: 1;
+}
+
+.rank-icon-stage .rank-icon.is-elemental-base {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* League-style living elemental canvas (60fps pieces, not slideshow) */
+.rank-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  transform: translate(var(--rank-tx, 0px), var(--rank-ty, -2px)) scale(var(--rank-base-scale, 1.08));
+  transform-origin: center center;
+}
+
+.rank-live {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: auto;
+}
+
+.rank-icon-stage[data-rank="crystalline"] { --rank-ember: 160, 220, 255; }
+.rank-icon-stage[data-rank="prismatic"] { --rank-ember: 190, 235, 255; }
+.rank-icon-stage[data-rank="refracted"] { --rank-ember: 200, 230, 255; }
+.rank-icon-stage[data-rank="lucent"] { --rank-ember: 220, 230, 210; }
+.rank-icon-stage[data-rank="spirecrystal"] { --rank-ember: 140, 210, 255; }
+.rank-icon-stage[data-rank="frostbound"] { --rank-ember: 160, 220, 255; }
+.rank-icon-stage[data-rank="rime"] { --rank-ember: 160, 220, 255; }
+.rank-icon-stage[data-rank="bronze"] { --rank-ember: 255, 150, 55; }
+.rank-icon-stage[data-rank="silver"] { --rank-ember: 210, 225, 240; }
+.rank-icon-stage[data-rank="gold"] { --rank-ember: 255, 205, 80; }
+.rank-icon-stage[data-rank="platinum"] { --rank-ember: 80, 235, 240; }
+.rank-icon-stage[data-rank="diamond"] { --rank-ember: 160, 220, 255; }
+.rank-icon-stage[data-rank="master"] { --rank-ember: 190, 120, 255; }
+.rank-icon-stage[data-rank="grandmaster"] { --rank-ember: 255, 110, 185; }
+.rank-icon-stage[data-rank="apex"] { --rank-ember: 255, 90, 50; }
+.rank-icon-stage[data-rank="eternal"] { --rank-ember: 190, 220, 255; }
+.rank-icon-stage[data-rank="legendary"] { --rank-ember: 255, 175, 50; }
+.rank-icon-stage[data-rank="ultimate"] { --rank-ember: 255, 130, 230; }
+.rank-icon-stage[data-rank="mythic"] { --rank-ember: 60, 240, 220; }
+.rank-icon-stage[data-rank="ascendant"] { --rank-ember: 120, 255, 210; }
+.rank-icon-stage[data-rank="conqueror"] { --rank-ember: 255, 100, 60; }
+.rank-icon-stage[data-rank="overlord"] { --rank-ember: 190, 70, 255; }
+.rank-icon-stage[data-rank="revenant"] { --rank-ember: 130, 255, 200; }
+.rank-icon-stage[data-rank="infinite"] { --rank-ember: 110, 200, 255; }
+.rank-icon-stage[data-rank="celestial"] { --rank-ember: 90, 185, 255; }
+.rank-icon-stage[data-rank="transcendent"] { --rank-ember: 210, 140, 255; }
+.rank-icon-stage[data-rank="paragon"] { --rank-ember: 255, 170, 220; }
+
+/* Elemental themes override rank ember tint */
+.rank-icon-stage[data-element="ice"] { --rank-ember: 160, 220, 255; }
+.rank-icon-stage[data-element="fire"] { --rank-ember: 255, 120, 40; }
+.rank-icon-stage[data-element="lightning"] { --rank-ember: 255, 230, 120; }
+.rank-icon-stage[data-element="cold"] { --rank-ember: 140, 210, 255; }
+.rank-icon-stage[data-element="chaos"] { --rank-ember: 180, 90, 255; }
+.rank-icon-stage[data-element="physical"] { --rank-ember: 220, 200, 170; }
+
+/* Animated rank name under the emblem */
+.rank-title {
+  position: relative;
+  display: block;
+  margin: 2px 0 4px;
+  padding: 0 4px;
+  text-align: center;
+  line-height: 1.15;
+  pointer-events: none;
+  z-index: 5;
+  min-height: 1.2em;
+  overflow: visible;
+}
+
+.rank-title span {
+  display: inline-block;
+  font-family: var(--font-display);
+  font-size: 1.08rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #b8e4ff;
+  background: linear-gradient(
+    100deg,
+    #7ec8ff 0%,
+    #e8f7ff 22%,
+    #9ad4ff 40%,
+    #ffffff 50%,
+    #9ad4ff 60%,
+    #e8f7ff 78%,
+    #7ec8ff 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 6px rgba(140, 210, 255, 0.45));
+  animation: rank-title-sheen 3.6s ease-in-out infinite;
+}
+
+.rank-title[data-element="ice"] span {
+  animation-duration: 3.2s;
+}
+
+.rank-title[data-rank="prismatic"] span {
+  color: #e0c4ff;
+  background: linear-gradient(
+    100deg,
+    #7ec8ff 0%,
+    #c9a8ff 18%,
+    #ff9ad8 36%,
+    #ffe29a 50%,
+    #9af0e0 64%,
+    #c9a8ff 82%,
+    #7ec8ff 100%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 8px rgba(200, 160, 255, 0.55));
+  animation: rank-title-prism 3s ease-in-out infinite;
+}
+
+.rank-title[data-rank="faceted"] span,
+.rank-title[data-rank="refracted"] span {
+  color: #d8f0ff;
+  background: linear-gradient(
+    100deg,
+    #9ad4ff 0%,
+    #e8f4ff 18%,
+    #c8d4f8 34%,
+    #ffffff 50%,
+    #b8e8ff 66%,
+    #dce6ff 82%,
+    #9ad4ff 100%
+  );
+  background-size: 280% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 9px rgba(190, 225, 255, 0.6));
+  animation: rank-title-refract 2.7s ease-in-out infinite;
+}
+
+.rank-title[data-rank="lucent"] span {
+  color: #f0e8d8;
+  background: linear-gradient(
+    100deg,
+    #b8dfff 0%,
+    #f5f0e0 22%,
+    #ffffff 48%,
+    #e8dcc0 62%,
+    #c8e8ff 82%,
+    #b8dfff 100%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 10px rgba(230, 220, 180, 0.55));
+  animation: rank-title-lucent 3.1s ease-in-out infinite;
+}
+
+.rank-title[data-rank="spirecrystal"] span {
+  color: #b8e8ff;
+  background: linear-gradient(
+    100deg,
+    #5eb0ff 0%,
+    #c8f0ff 28%,
+    #ffffff 50%,
+    #8ad0ff 72%,
+    #5eb0ff 100%
+  );
+  background-size: 240% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 10px rgba(120, 200, 255, 0.65));
+  animation: rank-title-spire 2.5s ease-in-out infinite;
+}
+
+@keyframes rank-title-refract {
+  0% {
+    background-position: 130% 0;
+    filter: drop-shadow(0 0 5px rgba(170, 215, 255, 0.4));
+  }
+  50% {
+    background-position: -30% 0;
+    filter: drop-shadow(0 0 14px rgba(230, 245, 255, 0.7));
+  }
+  100% {
+    background-position: 130% 0;
+    filter: drop-shadow(0 0 5px rgba(170, 215, 255, 0.4));
+  }
+}
+
+@keyframes rank-title-lucent {
+  0% {
+    background-position: 120% 0;
+    filter: drop-shadow(0 0 5px rgba(200, 210, 180, 0.35));
+  }
+  50% {
+    background-position: -20% 0;
+    filter: drop-shadow(0 0 14px rgba(255, 245, 220, 0.65));
+  }
+  100% {
+    background-position: 120% 0;
+    filter: drop-shadow(0 0 5px rgba(200, 210, 180, 0.35));
+  }
+}
+
+@keyframes rank-title-spire {
+  0% {
+    background-position: 120% 0;
+    filter: drop-shadow(0 0 5px rgba(100, 180, 255, 0.4));
+  }
+  50% {
+    background-position: -20% 0;
+    filter: drop-shadow(0 0 14px rgba(180, 235, 255, 0.75));
+  }
+  100% {
+    background-position: 120% 0;
+    filter: drop-shadow(0 0 5px rgba(100, 180, 255, 0.4));
+  }
+}
+
+@keyframes rank-title-facet {
+  0% {
+    background-position: 130% 0;
+    filter: drop-shadow(0 0 5px rgba(170, 215, 255, 0.4));
+  }
+  50% {
+    background-position: -30% 0;
+    filter: drop-shadow(0 0 14px rgba(230, 245, 255, 0.7));
+  }
+  100% {
+    background-position: 130% 0;
+    filter: drop-shadow(0 0 5px rgba(170, 215, 255, 0.4));
+  }
+}
+
+@keyframes rank-title-prism {
+  0% {
+    background-position: 130% 0;
+    filter: drop-shadow(0 0 4px rgba(140, 200, 255, 0.35));
+  }
+  50% {
+    background-position: -30% 0;
+    filter: drop-shadow(0 0 12px rgba(255, 160, 220, 0.55));
+  }
+  100% {
+    background-position: 130% 0;
+    filter: drop-shadow(0 0 4px rgba(160, 220, 255, 0.35));
+  }
+}
+
+
+@keyframes rank-title-sheen {
+  0% {
+    background-position: 120% 0;
+    filter: drop-shadow(0 0 4px rgba(140, 210, 255, 0.3));
+  }
+  50% {
+    background-position: -20% 0;
+    filter: drop-shadow(0 0 10px rgba(180, 230, 255, 0.65));
+  }
+  100% {
+    background-position: 120% 0;
+    filter: drop-shadow(0 0 4px rgba(140, 210, 255, 0.3));
+  }
+}
+
+.rank-haze {
+  position: absolute;
+  inset: 6% 8%;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at 50% 46%,
+    rgba(var(--rank-ember), 0.28) 0%,
+    rgba(var(--rank-ember), 0.1) 42%,
+    transparent 72%
+  );
+  mix-blend-mode: screen;
+  filter: blur(8px);
+  opacity: 0.85;
+  animation: rank-haze-breathe 4.8s ease-in-out infinite;
+}
+
+.rank-rays {
+  position: absolute;
+  inset: -4%;
+  opacity: 0.22;
+  mix-blend-mode: screen;
+  background: repeating-conic-gradient(
+    from 0deg,
+    transparent 0deg 12deg,
+    rgba(var(--rank-ember), 0.45) 16deg 19deg,
+    transparent 23deg 36deg
+  );
+  -webkit-mask-image: radial-gradient(
+    ellipse 58% 62% at 50% 48%,
+    transparent 0%,
+    transparent 30%,
+    #000 42%,
+    #000 68%,
+    transparent 88%
+  );
+  mask-image: radial-gradient(
+    ellipse 58% 62% at 50% 48%,
+    transparent 0%,
+    transparent 30%,
+    #000 42%,
+    #000 68%,
+    transparent 88%
+  );
+  filter: blur(2.5px);
+  animation: rank-rays-spin 36s linear infinite;
+  will-change: transform;
+}
+
+.rank-embers {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  mix-blend-mode: screen;
+  opacity: 0.9;
+}
+
+.rank-icon-stage[data-rank="bronze"] .rank-haze,
+.rank-icon-stage[data-rank="silver"] .rank-haze,
+.rank-icon-stage[data-rank="gold"] .rank-haze {
+  opacity: 1;
+  filter: blur(10px);
+  animation-duration: 3.6s;
+}
+
+.rank-icon-stage[data-rank="bronze"] .rank-embers,
+.rank-icon-stage[data-rank="silver"] .rank-embers,
+.rank-icon-stage[data-rank="gold"] .rank-embers {
+  opacity: 1;
+}
+
+@keyframes rank-haze-breathe {
+  0%,
+  100% {
+    opacity: 0.65;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+/* Animate a single pulse factor — WebView2 will not interpolate filter when
+   keyframes self-assign vars like --rank-bright: var(--rank-bright). */
+@property --rank-pulse {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+.rank-stat .rank-icon,
+img.rank-icon[data-rank] {
+  flex: none;
+  width: 200px;
+  height: 168px;
+  min-height: 0;
+  max-width: 100%;
+  align-self: center;
+  display: block;
+  margin: 0 auto;
+  object-fit: contain;
+  object-position: center center;
+  overflow: visible;
+  --rank-tx: 0px;
+  --rank-ty: -2px;
+  --rank-base-scale: 1.08;
+  --rank-c0: 212, 178, 74;
+  --rank-c1: 180, 140, 60;
+  --rank-c2: 255, 220, 140;
+  --rank-bright-lo: 1.03;
+  --rank-bright-hi: 1.06;
+  --rank-sat-lo: 1.05;
+  --rank-sat-hi: 1.1;
+  --rank-contrast-lo: 1.02;
+  --rank-contrast-hi: 1.04;
+  --rank-hue-hi: 0deg;
+  --rank-lift-hi: 1.01;
+  --rank-glow-dur: 4.2s;
+  --rank-pulse: 0;
+  transform: translate(var(--rank-tx), var(--rank-ty))
+    scale(calc(var(--rank-base-scale) * (1 + (var(--rank-lift-hi) - 1) * var(--rank-pulse))));
+  transform-origin: center center;
+  will-change: filter, transform;
+  /* Static depth + tiny rim — life comes from League-style embers/rays */
+  filter:
+    drop-shadow(0 0 0.7px rgba(var(--rank-c0), 0.5))
+    drop-shadow(0 0 1.5px rgba(var(--rank-c2), 0.28))
+    drop-shadow(0 1px 0 rgba(0, 0, 0, 0.95))
+    drop-shadow(0 3px 0 rgba(0, 0, 0, 0.7))
+    drop-shadow(0 8px 6px rgba(0, 0, 0, 0.4))
+    drop-shadow(0 1px 0 rgba(255, 255, 255, 0.18))
+    brightness(calc(var(--rank-bright-lo) + (var(--rank-bright-hi) - var(--rank-bright-lo)) * var(--rank-pulse)))
+    saturate(calc(var(--rank-sat-lo) + (var(--rank-sat-hi) - var(--rank-sat-lo)) * var(--rank-pulse)))
+    contrast(calc(var(--rank-contrast-lo) + (var(--rank-contrast-hi) - var(--rank-contrast-lo)) * var(--rank-pulse)));
+  animation: rank-icon-alive var(--rank-glow-dur) ease-in-out infinite;
+}
+
+/* Per-rank accents (icon crystal / energy color) */
+.rank-stat .rank-icon[data-rank="bronze"] {
+  --rank-c0: 255, 140, 48;
+  --rank-c1: 210, 90, 28;
+  --rank-c2: 255, 190, 90;
+}
+.rank-stat .rank-icon[data-rank="silver"] {
+  --rank-c0: 220, 230, 240;
+  --rank-c1: 160, 180, 200;
+  --rank-c2: 200, 220, 245;
+}
+.rank-stat .rank-icon[data-rank="gold"] {
+  --rank-c0: 255, 205, 70;
+  --rank-c1: 230, 155, 35;
+  --rank-c2: 255, 230, 130;
+}
+.rank-stat .rank-icon[data-rank="platinum"] {
+  --rank-c0: 0, 230, 235;
+  --rank-c1: 20, 175, 200;
+  --rank-c2: 120, 255, 250;
+}
+.rank-stat .rank-icon[data-rank="diamond"] {
+  --rank-c0: 150, 215, 255;
+  --rank-c1: 80, 165, 245;
+  --rank-c2: 210, 240, 255;
+}
+.rank-stat .rank-icon[data-rank="master"] {
+  --rank-c0: 185, 105, 255;
+  --rank-c1: 130, 55, 210;
+  --rank-c2: 220, 160, 255;
+}
+.rank-stat .rank-icon[data-rank="grandmaster"] {
+  --rank-c0: 255, 95, 170;
+  --rank-c1: 180, 45, 200;
+  --rank-c2: 255, 170, 220;
+}
+.rank-stat .rank-icon[data-rank="eternal"] {
+  --rank-c0: 200, 230, 255;
+  --rank-c1: 130, 175, 255;
+  --rank-c2: 240, 250, 255;
+}
+.rank-stat .rank-icon[data-rank="legendary"] {
+  --rank-c0: 255, 175, 40;
+  --rank-c1: 255, 85, 40;
+  --rank-c2: 255, 220, 100;
+}
+.rank-stat .rank-icon[data-rank="ultimate"] {
+  --rank-c0: 255, 110, 220;
+  --rank-c1: 120, 80, 255;
+  --rank-c2: 255, 190, 240;
+}
+.rank-stat .rank-icon[data-rank="apex"] {
+  --rank-c0: 255, 70, 40;
+  --rank-c1: 255, 175, 40;
+  --rank-c2: 255, 40, 120;
+}
+.rank-stat .rank-icon[data-rank="mythic"] {
+  --rank-c0: 0, 235, 220;
+  --rank-c1: 255, 185, 55;
+  --rank-c2: 80, 255, 240;
+}
+.rank-stat .rank-icon[data-rank="ascendant"] {
+  --rank-c0: 110, 255, 205;
+  --rank-c1: 80, 170, 255;
+  --rank-c2: 200, 255, 235;
+}
+.rank-stat .rank-icon[data-rank="conqueror"] {
+  --rank-c0: 255, 85, 55;
+  --rank-c1: 255, 195, 70;
+  --rank-c2: 255, 130, 90;
+}
+.rank-stat .rank-icon[data-rank="overlord"] {
+  --rank-c0: 185, 45, 255;
+  --rank-c1: 255, 55, 120;
+  --rank-c2: 220, 120, 255;
+}
+.rank-stat .rank-icon[data-rank="revenant"] {
+  --rank-c0: 130, 255, 200;
+  --rank-c1: 70, 190, 155;
+  --rank-c2: 190, 255, 230;
+}
+.rank-stat .rank-icon[data-rank="infinite"] {
+  --rank-c0: 90, 200, 255;
+  --rank-c1: 255, 90, 255;
+  --rank-c2: 160, 240, 255;
+}
+.rank-stat .rank-icon[data-rank="celestial"] {
+  --rank-c0: 70, 175, 255;
+  --rank-c1: 255, 205, 70;
+  --rank-c2: 140, 220, 255;
+}
+.rank-stat .rank-icon[data-rank="transcendent"] {
+  --rank-c0: 200, 120, 255;
+  --rank-c1: 255, 215, 110;
+  --rank-c2: 255, 140, 255;
+}
+.rank-stat .rank-icon[data-rank="paragon"] {
+  --rank-c0: 255, 205, 60;
+  --rank-c1: 220, 55, 255;
+  --rank-c2: 255, 120, 220;
+}
+
+/* Tier bands — keep pulse tiny; sheen carries the motion */
+.rank-stat .rank-icon[data-tier="0"],
+.rank-stat .rank-icon[data-tier="1"],
+.rank-stat .rank-icon[data-tier="2"],
+.rank-stat .rank-icon[data-tier="3"],
+.rank-stat .rank-icon[data-tier="4"],
+img.rank-icon[data-rank][data-tier="0"],
+img.rank-icon[data-rank][data-tier="1"],
+img.rank-icon[data-rank][data-tier="2"],
+img.rank-icon[data-rank][data-tier="3"],
+img.rank-icon[data-rank][data-tier="4"] {
+  --rank-bright-lo: 1.02;
+  --rank-bright-hi: 1.04;
+  --rank-sat-lo: 1.04;
+  --rank-sat-hi: 1.07;
+  --rank-contrast-lo: 1.02;
+  --rank-contrast-hi: 1.03;
+  --rank-lift-hi: 1.006;
+  --rank-glow-dur: 4.5s;
+}
+
+.rank-stat .rank-icon[data-tier="5"],
+.rank-stat .rank-icon[data-tier="6"],
+.rank-stat .rank-icon[data-tier="7"],
+.rank-stat .rank-icon[data-tier="8"],
+.rank-stat .rank-icon[data-tier="9"],
+img.rank-icon[data-rank][data-tier="5"],
+img.rank-icon[data-rank][data-tier="6"],
+img.rank-icon[data-rank][data-tier="7"],
+img.rank-icon[data-rank][data-tier="8"],
+img.rank-icon[data-rank][data-tier="9"] {
+  --rank-bright-lo: 1.03;
+  --rank-bright-hi: 1.05;
+  --rank-sat-lo: 1.05;
+  --rank-sat-hi: 1.09;
+  --rank-contrast-lo: 1.02;
+  --rank-contrast-hi: 1.04;
+  --rank-lift-hi: 1.008;
+  --rank-glow-dur: 4s;
+}
+
+.rank-stat .rank-icon[data-tier="10"],
+.rank-stat .rank-icon[data-tier="11"],
+.rank-stat .rank-icon[data-tier="12"],
+.rank-stat .rank-icon[data-tier="13"],
+.rank-stat .rank-icon[data-tier="14"],
+img.rank-icon[data-rank][data-tier="10"],
+img.rank-icon[data-rank][data-tier="11"],
+img.rank-icon[data-rank][data-tier="12"],
+img.rank-icon[data-rank][data-tier="13"],
+img.rank-icon[data-rank][data-tier="14"] {
+  --rank-bright-lo: 1.03;
+  --rank-bright-hi: 1.06;
+  --rank-sat-lo: 1.06;
+  --rank-sat-hi: 1.1;
+  --rank-contrast-lo: 1.03;
+  --rank-contrast-hi: 1.05;
+  --rank-lift-hi: 1.01;
+  --rank-glow-dur: 3.6s;
+}
+
+.rank-stat .rank-icon[data-tier="15"],
+.rank-stat .rank-icon[data-tier="16"],
+.rank-stat .rank-icon[data-tier="17"],
+.rank-stat .rank-icon[data-tier="18"],
+.rank-stat .rank-icon[data-tier="19"],
+.rank-stat .rank-icon[data-rank="paragon"],
+.rank-stat .rank-icon[data-rank="transcendent"],
+img.rank-icon[data-rank][data-tier="15"],
+img.rank-icon[data-rank][data-tier="16"],
+img.rank-icon[data-rank][data-tier="17"],
+img.rank-icon[data-rank][data-tier="18"],
+img.rank-icon[data-rank][data-tier="19"],
+img.rank-icon[data-rank="paragon"],
+img.rank-icon[data-rank="transcendent"] {
+  --rank-bright-lo: 1.04;
+  --rank-bright-hi: 1.07;
+  --rank-sat-lo: 1.07;
+  --rank-sat-hi: 1.12;
+  --rank-contrast-lo: 1.03;
+  --rank-contrast-hi: 1.05;
+  --rank-lift-hi: 1.012;
+  --rank-glow-dur: 3.2s;
+  animation-name: rank-icon-alive-apex;
+}
+
+.rank-icon-stage[data-rank="paragon"],
+.rank-stat .rank-icon[data-rank="paragon"],
+img.rank-icon[data-rank="paragon"] {
+  --rank-tx: 6px;
+}
+
+@keyframes rank-icon-alive {
+  0%,
+  100% {
+    --rank-pulse: 0;
+  }
+  45% {
+    --rank-pulse: 1;
+  }
+  55% {
+    --rank-pulse: 1;
+  }
+}
+
+@keyframes rank-icon-alive-apex {
+  0%,
+  100% {
+    --rank-pulse: 0;
+  }
+  30% {
+    --rank-pulse: 0.75;
+  }
+  50% {
+    --rank-pulse: 1;
+  }
+  70% {
+    --rank-pulse: 0.85;
+  }
+}
+
+@keyframes loot-stat-alive {
+  0%,
+  100% {
+    box-shadow:
+      0 18px 32px rgba(0, 0, 0, 0.5),
+      0 6px 12px rgba(0, 0, 0, 0.35),
+      0 1px 0 color-mix(in srgb, var(--gold) 42%, transparent),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      inset 0 0 0 1px color-mix(in srgb, var(--gold) 24%, transparent),
+      inset 0 -10px 24px rgba(0, 0, 0, 0.28);
+    border-color: color-mix(in srgb, var(--gold) 48%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 18px 32px rgba(0, 0, 0, 0.52),
+      0 6px 12px rgba(0, 0, 0, 0.36),
+      0 1px 0 color-mix(in srgb, var(--gold) 62%, transparent),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      inset 0 0 0 1px color-mix(in srgb, var(--gold) 42%, transparent),
+      inset 0 -10px 24px rgba(0, 0, 0, 0.26);
+    border-color: color-mix(in srgb, var(--gold) 72%, transparent);
+  }
+}
+
+@keyframes loot-stat-sheen {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.rank-icon {
+  width: 200px;
+  height: 168px;
+  flex: none;
+  flex-shrink: 0;
+  display: block;
+  margin: 0 auto;
+  object-fit: contain;
+  object-position: center center;
+  overflow: visible;
+}
+
+.rank-icon.sm {
+  width: 120px;
+  height: 100px;
+}
+
+.rank-copy {
+  flex: none;
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+}
+
+.rank-stat .rank-copy {
+  flex: 0 0 auto;
+  gap: 2px;
+  padding-top: 0;
+}
+
+.rank-copy span {
+  color: var(--muted);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.rank-stat .rank-copy span {
+  display: none;
+}
+
+.rank-copy em {
+  font-style: normal;
+  color: var(--gold);
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.rank-stat .rank-copy em {
+  font-family: var(--font-display);
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: 0.02em;
+  color: var(--gold);
+  text-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.9),
+    0 2px 6px rgba(0, 0, 0, 0.55),
+    0 0 14px color-mix(in srgb, var(--gold) 40%, transparent);
+}
+
+.rank-stat .progress {
+  margin-top: 4px;
+  width: min(100%, 168px);
+  height: 7px;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg) 70%, #000), color-mix(in srgb, var(--gold) 22%, var(--bg)));
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.65),
+    inset 0 0 0 1px color-mix(in srgb, var(--gold) 22%, transparent),
+    0 1px 0 color-mix(in srgb, var(--gold) 18%, transparent),
+    0 4px 12px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.rank-stat .progress > i {
+  background: linear-gradient(90deg, var(--crimson), var(--gold), var(--gold-2));
+  box-shadow:
+    0 0 10px color-mix(in srgb, var(--gold) 55%, transparent),
+    0 0 18px color-mix(in srgb, var(--crimson) 28%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
 }
 
 .toolbar {
@@ -1872,9 +2762,10 @@ button.price-chip {
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: minmax(200px, 228px) minmax(140px, 1fr);
   gap: 12px;
   margin: 22px 0;
+  align-items: start;
 }
 
 .currency-name {
@@ -2531,7 +3422,7 @@ button.roll-chip:hover {
   }
 
   .stats {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 200px) minmax(0, 1fr);
   }
 
   .top-actions {
@@ -2646,7 +3537,6 @@ button.roll-chip:hover {
 .item-tip-name-row {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 8px;
   min-width: 0;
 }
@@ -2654,18 +3544,6 @@ button.roll-chip:hover {
 .item-tip-name-row .item-tip-name {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.item-tip-name-row .price-overlay-trade-btns {
-  flex: none;
-  align-items: flex-start;
-  padding-top: 1px;
-}
-
-.item-tip-name-row .price-overlay-trade-btns .btn {
-  padding: 5px 10px;
-  font-size: 0.8rem;
-  line-height: 1.2;
 }
 
 .item-tip-name {
@@ -2795,7 +3673,7 @@ button.roll-chip:hover {
   inset: 0;
   z-index: 140;
   display: grid;
-  justify-items: end;
+  justify-items: start;
   align-items: start;
   padding: 72px 22px 24px;
 }
@@ -2922,15 +3800,32 @@ button.roll-chip:hover {
 }
 
 .price-overlay-bar {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   flex: none;
-  height: 26px;
-  padding: 0 2px 0 8px;
+  min-height: 40px;
+  padding: 6px 4px 6px 10px;
   background: color-mix(in srgb, var(--bg) 88%, #000);
   border-bottom: 1px solid color-mix(in srgb, var(--bg) 40%, #000);
   color: var(--muted);
+}
+
+.price-overlay-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.price-overlay-bar-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: none;
 }
 
 .price-overlay-rate {
@@ -3017,8 +3912,7 @@ button.roll-chip:hover {
 }
 
 .price-overlay-league {
-  justify-self: center;
-  max-width: 220px;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3825,6 +4719,11 @@ button.roll-chip:hover {
   color: #ffffff;
 }
 
+.price-overlay-mod.is-rune .price-overlay-q-edit,
+.price-overlay-mod-trail:has(.price-overlay-pill.is-rune) .price-overlay-q-edit {
+  display: none !important;
+}
+
 .price-overlay-mod.is-fractured,
 .price-overlay-affix.is-fractured,
 .price-overlay-mod.is-fractured .price-overlay-mod-text,
@@ -3914,8 +4813,25 @@ button.roll-chip:hover {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
-  flex-wrap: wrap;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+.price-overlay-bar .price-overlay-trade-btns {
+  gap: 10px;
+}
+
+.price-overlay-bar .price-overlay-trade-btns .btn,
+.price-overlay-bar .price-overlay-web {
+  padding: 6px 12px;
+  font-size: 0.86rem;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.price-overlay-bar .price-overlay-status {
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .price-overlay-web {
