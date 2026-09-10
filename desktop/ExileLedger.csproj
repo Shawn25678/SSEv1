@@ -12,7 +12,7 @@
     <Description>Still Sane, Exile?</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>1.0.29</Version>
+    <Version>1.0.30</Version>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
     <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
@@ -28,8 +28,6 @@
     <EmbeddedResource Include="..\styles.css" LogicalName="www.styles.css" />
     <EmbeddedResource Include="..\app.js" LogicalName="www.app.js" />
     <EmbeddedResource Include="..\affix-ladders.js" LogicalName="www.affix-ladders.js" />
-    <EmbeddedResource Include="..\decks.js" LogicalName="www.decks.js" />
-    <EmbeddedResource Include="..\deck-game.js" LogicalName="www.deck-game.js" />
     <EmbeddedResource Include="..\bosses.js" LogicalName="www.bosses.js" />
     <EmbeddedResource Include="..\icons.js" LogicalName="www.icons.js" />
     <EmbeddedResource Include="..\still-sane-sigil.png" LogicalName="www.still-sane-sigil.png" />

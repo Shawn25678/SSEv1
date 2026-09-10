@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.29";
+const APP_VERSION = "1.0.30";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -566,7 +566,6 @@ window.__bossArtFail = function (img) {
 let updateCache = { at: 0, newer: false, latest: "" };
 let affixTried = false;
 let affixLoading = null;
-let decksLoading = null;
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -590,17 +589,6 @@ function ensureAffixLadders() {
     affixLoading = null;
   });
   return affixLoading;
-}
-
-function ensureDecks() {
-  if (window.DeckGame) return Promise.resolve();
-  if (decksLoading) return decksLoading;
-  decksLoading = loadScript("decks.js")
-    .then(() => loadScript("deck-game.js"))
-    .catch(() => {
-      decksLoading = null;
-    });
-  return decksLoading;
 }
 
 function paintUpdatePanel() {
@@ -693,18 +681,9 @@ function rankIconHtml(rankId, className = "rank-icon", alt = "", tier = null) {
   return `<img class="${esc(hideClass.trim())}" src="${esc(src)}" alt="${esc(alt)}" width="${w}" height="${h}"${rankAttr}${tierAttr}${elAttr} loading="lazy" />`;
 }
 
-let rankLottieAnim = null;
 let rankLiveRaf = 0;
 let rankLiveAlive = false;
 let rankFrameTimer = 0;
-
-function destroyRankLottie() {
-  if (!rankLottieAnim) return;
-  try {
-    rankLottieAnim.destroy();
-  } catch (_) {}
-  rankLottieAnim = null;
-}
 
 function destroyRankLive() {
   rankLiveAlive = false;
@@ -722,7 +701,6 @@ function destroyRankFrameAnim() {
 }
 
 function destroyRankFx() {
-  destroyRankLottie();
   destroyRankLive();
   destroyRankFrameAnim();
 }
@@ -10366,10 +10344,9 @@ function wireFarmPad() {
 
 function render() {
   const shown = document.getElementById("item-tip")?.dataset.for || "";
-  if (ui.view === "hunt" || ui.view === "bosses" || ui.view === "title") ui.view = "dash";
+  if (ui.view === "hunt" || ui.view === "bosses" || ui.view === "title" || ui.view === "decks") ui.view = "dash";
   document.body.classList.toggle("view-bosses", ui.view === "bosses");
   document.body.classList.toggle("view-econ", ui.view === "econ");
-  document.body.classList.toggle("view-decks", ui.view === "decks");
   renderStats();
   renderDivineTape();
   renderFilters();
@@ -10397,15 +10374,6 @@ function render() {
   if (ui.view === "econ") {
     main.innerHTML = renderEcon();
     fillEconChart();
-  }
-  if (ui.view === "decks") {
-    if (window.DeckGame) window.DeckGame.mount(main);
-    else {
-      main.innerHTML = "";
-      ensureDecks().then(() => {
-        if (ui.view === "decks" && window.DeckGame) window.DeckGame.mount(main);
-      });
-    }
   }
   if (ui.view === "settings") {
     main.innerHTML = renderSettings();
@@ -11239,7 +11207,6 @@ startPriceClock();
 startRateBar();
 syncHotkeys();
 checkAppUpdate();
-ensureAffixLadders();
 const diskPrices = hydratePriceDisk();
 loadLeagues().then(() => diskPrices).then(() => {
   if (!prices.byName.size) hydratePriceCache();

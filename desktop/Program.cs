@@ -2508,7 +2508,7 @@ sealed class TrackerWindow : Form
         var needed = new[]
         {
             "index.html", "overlay.html", "styles.css", "app.js", "affix-ladders.js",
-            "decks.js", "deck-game.js", "bosses.js", "icons.js", "still-sane-sigil.png",
+            "bosses.js", "icons.js", "still-sane-sigil.png",
         };
         if (File.Exists(stampPath)
             && needed.All(name => File.Exists(Path.Combine(dir, name)))
@@ -2522,11 +2522,15 @@ sealed class TrackerWindow : Form
         WriteResource(asm, "www.styles.css", Path.Combine(dir, "styles.css"));
         WriteResource(asm, "www.app.js", Path.Combine(dir, "app.js"));
         WriteResource(asm, "www.affix-ladders.js", Path.Combine(dir, "affix-ladders.js"));
-        WriteResource(asm, "www.decks.js", Path.Combine(dir, "decks.js"));
-        WriteResource(asm, "www.deck-game.js", Path.Combine(dir, "deck-game.js"));
         WriteResource(asm, "www.bosses.js", Path.Combine(dir, "bosses.js"));
         WriteResource(asm, "www.icons.js", Path.Combine(dir, "icons.js"));
         WriteResource(asm, "www.still-sane-sigil.png", Path.Combine(dir, "still-sane-sigil.png"));
+        // Drop retired Stacked Deck scripts if an older extract left them behind
+        foreach (var stale in new[] { "decks.js", "deck-game.js" })
+        {
+            var path = Path.Combine(dir, stale);
+            if (File.Exists(path)) File.Delete(path);
+        }
         var artDir = Path.Combine(dir, "art");
         EnsureDirectory(artDir);
         var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
