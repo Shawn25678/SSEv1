@@ -12,7 +12,7 @@
     <Description>Still Sane, Exile?</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <Version>1.0.28</Version>
+    <Version>1.0.29</Version>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
     <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
@@ -34,9 +34,17 @@
     <EmbeddedResource Include="..\icons.js" LogicalName="www.icons.js" />
     <EmbeddedResource Include="..\still-sane-sigil.png" LogicalName="www.still-sane-sigil.png" />
     <EmbeddedResource Include="supabase.public.json" LogicalName="www.supabase.public.json" />
-    <EmbeddedResource Include="..\art\*.png" LogicalName="www.art.%(Filename).png" />
+    <EmbeddedResource Include="..\art\*.png" Exclude="..\art\rank-*.png" LogicalName="www.art.%(Filename).png" />
     <EmbeddedResource Include="..\art\*.jpg" LogicalName="www.art.%(Filename).jpg" />
     <EmbeddedResource Include="..\art\*.gif" LogicalName="www.art.%(Filename).gif" />
-    <EmbeddedResource Include="..\art\*.webp" LogicalName="www.art.%(Filename).webp" />
+    <EmbeddedResource Include="..\art\*.webp" Exclude="..\art\rank-*.webp" LogicalName="www.art.%(Filename).webp" />
+    <!-- Ice rank ladder (paths after www.art. extract under www/art/) -->
+    <EmbeddedResource Include="..\art\rank-elemental\crystalline-egg.png" LogicalName="www.art.rank-elemental/crystalline-egg.png" />
+    <EmbeddedResource Include="..\art\rank-elemental\prismatic-hatch.png" LogicalName="www.art.rank-elemental/prismatic-hatch.png" />
+    <EmbeddedResource Include="..\art\rank-elemental\refracted-free.png" LogicalName="www.art.rank-elemental/refracted-free.png" />
+    <EmbeddedResource Include="..\art\rank-elemental\lucent-ice.png" LogicalName="www.art.rank-elemental/lucent-ice.png" />
+    <EmbeddedResource Include="..\art\rank-elemental\spirecrystal.png" LogicalName="www.art.rank-elemental/spirecrystal.png" />
+    <EmbeddedResource Include="..\art\rank-elemental\anim\prism-debris.png" LogicalName="www.art.rank-elemental/anim/prism-debris.png" />
+    <EmbeddedResource Include="..\art\rank-elemental\anim\refract-debris.png" LogicalName="www.art.rank-elemental/anim/refract-debris.png" />
   </ItemGroup>
 </Project>

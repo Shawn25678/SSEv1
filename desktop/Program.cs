@@ -2534,13 +2534,18 @@ sealed class TrackerWindow : Form
         {
             const string prefix = "www.art.";
             if (!name.StartsWith(prefix, StringComparison.Ordinal)) continue;
-            var file = name[prefix.Length..];
-            keep.Add(file);
-            WriteResource(asm, name, Path.Combine(artDir, file));
+            // Flat: "boss.png" or nested: "rank-elemental/crystalline-egg.png"
+            var rel = name[prefix.Length..].Replace('/', Path.DirectorySeparatorChar);
+            keep.Add(rel.Replace('\\', '/'));
+            var dest = Path.Combine(artDir, rel);
+            var parent = Path.GetDirectoryName(dest);
+            if (!string.IsNullOrEmpty(parent)) EnsureDirectory(parent);
+            WriteResource(asm, name, dest);
         }
-        foreach (var file in Directory.GetFiles(artDir))
+        foreach (var file in Directory.GetFiles(artDir, "*", SearchOption.AllDirectories))
         {
-            if (!keep.Contains(Path.GetFileName(file))) File.Delete(file);
+            var rel = Path.GetRelativePath(artDir, file).Replace('\\', '/');
+            if (!keep.Contains(rel)) File.Delete(file);
         }
         File.WriteAllText(stampPath, want);
         return index;
