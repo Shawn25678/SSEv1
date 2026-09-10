@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.27";
+const APP_VERSION = "1.0.28";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -670,11 +670,11 @@ function bossRankProgress(kills = totalBossKills()) {
 
 /** Elemental living ranks — ice: metal ring → crystallizing ring → crack → Absolute break later. */
 const RANK_ELEMENTAL = {
-  crystalline: { element: "ice", art: "art/rank-elemental/crystalline-egg.png?v=1", power: 1 },
-  prismatic: { element: "ice", art: "art/rank-elemental/prismatic-hatch.png?v=5", power: 1.35 },
-  refracted: { element: "ice", art: "art/rank-elemental/refracted-free.png?v=8", power: 1.65 },
-  lucent: { element: "ice", art: "art/rank-elemental/lucent-ice.png?v=1", power: 1.7 },
-  spirecrystal: { element: "ice", art: "art/rank-elemental/spirecrystal.png?v=4", power: 1.85 },
+  crystalline: { element: "ice", art: "art/rank-elemental/crystalline-egg.png?v=2", power: 1 },
+  prismatic: { element: "ice", art: "art/rank-elemental/prismatic-hatch.png?v=6", power: 1.35 },
+  refracted: { element: "ice", art: "art/rank-elemental/refracted-free.png?v=9", power: 1.65 },
+  lucent: { element: "ice", art: "art/rank-elemental/lucent-ice.png?v=2", power: 1.7 },
+  spirecrystal: { element: "ice", art: "art/rank-elemental/spirecrystal.png?v=5", power: 1.85 },
 };
 
 function rankIconHtml(rankId, className = "rank-icon", alt = "", tier = null) {
@@ -778,9 +778,9 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
   // One debris sprite + smooth float (no multi-frame swap — those looked bad)
   const debrisSrc =
     String(rankId) === "prismatic"
-      ? "art/rank-elemental/anim/prism-debris.png?v=2"
+      ? "art/rank-elemental/anim/prism-debris.png?v=3"
       : String(rankId) === "refracted"
-        ? "art/rank-elemental/anim/refract-debris.png?v=4"
+        ? "art/rank-elemental/anim/refract-debris.png?v=5"
         : null;
   const debrisImg = debrisSrc
     ? (() => {
