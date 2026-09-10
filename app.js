@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.33";
+const APP_VERSION = "1.0.34";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -680,7 +680,7 @@ const RANK_ELEMENTAL = {
   prismatic: { element: "ice", art: "art/rank-elemental/prismatic-hatch.png?v=6", power: 1.35 },
   refracted: { element: "ice", art: "art/rank-elemental/refracted-free.png?v=9", power: 1.65 },
   lucent: { element: "ice", art: "art/rank-elemental/lucent-ice.png?v=2", power: 1.7 },
-  spirecrystal: { element: "ice", art: "art/rank-elemental/spirecrystal.png?v=5", power: 1.85 },
+  spirecrystal: { element: "ice", art: "art/rank-elemental/spirecrystal.png?v=6", power: 1.85 },
 };
 
 function rankIconHtml(rankId, className = "rank-icon", alt = "", tier = null) {
@@ -3153,6 +3153,45 @@ function paintRateBar() {
   }
   if (clockLabel) clockLabel.textContent = status.label;
   if (clockText) clockText.textContent = status.chip;
+  paintOverlayTradeRate(status);
+}
+
+let overlayRateSent = "";
+
+function overlayTradeRateHtml() {
+  if (!window.chrome?.webview) return "";
+  const status = rateStatus();
+  const cls =
+    "price-overlay-trade-rate" +
+    (status.wait ? " is-wait" : "") +
+    (status.wait && status.limited ? " is-limited" : "");
+  return `<span class="${cls}" data-overlay-trade-rate title="${esc(status.title)}">${esc(status.chip)}</span>`;
+}
+
+function paintOverlayTradeRate(status) {
+  status = status || rateStatus();
+  const cls =
+    "price-overlay-trade-rate" +
+    (status.wait ? " is-wait" : "") +
+    (status.wait && status.limited ? " is-limited" : "");
+  document.querySelectorAll("[data-overlay-trade-rate]").forEach((el) => {
+    el.className = cls;
+    el.title = status.title || "";
+    el.textContent = status.chip || "";
+  });
+  if (!window.chrome?.webview) return;
+  const key = [status.chip, status.wait ? 1 : 0, status.limited ? 1 : 0].join("|");
+  if (key === overlayRateSent) return;
+  overlayRateSent = key;
+  try {
+    chrome.webview.postMessage({
+      type: "overlay-rate",
+      chip: status.chip || "",
+      title: status.title || "",
+      wait: !!status.wait,
+      limited: !!(status.wait && status.limited),
+    });
+  } catch (_) {}
 }
 
 function startRateBar() {
@@ -8405,7 +8444,7 @@ function priceOverlayHtml(log, drop) {
   const hasOffers = !!offers;
   const tradeBtns = pickHtml
     ? ""
-    : `<span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span>`;
+    : `<span class="price-overlay-trade-btns">${overlayTradeRateHtml()}${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span>`;
   const exchange = overlayExchangeHaveHtml(log, drop);
   const footBits = [charmExtra, exchange].filter(Boolean).join("");
   const foot = pickHtml || !footBits ? "" : `<div class="price-overlay-foot">${footBits}</div>`;
@@ -8898,15 +8937,9 @@ async function quoteRolledDrop(log, drop, force = false) {
   if (!inspectTarget()) openInspect(log, drop);
   if (drop.quoting) return;
   if (!force && drop.quoteTried) return;
-  if (tradeWaiting() && tradeRate.limited) {
-    drop.quote = Object.assign({}, drop.quote, {
-      listings: drop.quote?.listings || 0,
-      league: drop.quote?.league || leagueId(),
-      at: Date.now(),
-      error: "rate limited",
-    });
-    paintPriceOverlay();
-    return;
+  if (tradeWaiting()) {
+    const wait = Math.min(120000, Math.max(0, tradeRate.readyAt - Date.now()));
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
   }
   drop.quoting = true;
   drop.quoteTried = true;

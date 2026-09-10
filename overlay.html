@@ -341,6 +341,14 @@
           fit();
           requestAnimationFrame(fit);
         }
+        if (msg?.type === "rate") {
+          const el = root.querySelector("[data-overlay-trade-rate]");
+          if (!el) return;
+          el.textContent = String(msg.chip || "");
+          el.title = String(msg.title || "");
+          el.classList.toggle("is-wait", !!msg.wait);
+          el.classList.toggle("is-limited", !!msg.limited);
+        }
       });
 
       document.addEventListener("contextmenu", (event) => event.preventDefault());

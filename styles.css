@@ -980,7 +980,7 @@ select:focus {
 .rank-icon-stage[data-rank="prismatic"] { --rank-ember: 190, 235, 255; }
 .rank-icon-stage[data-rank="refracted"] { --rank-ember: 200, 230, 255; }
 .rank-icon-stage[data-rank="lucent"] { --rank-ember: 220, 230, 210; }
-.rank-icon-stage[data-rank="spirecrystal"] { --rank-ember: 140, 210, 255; }
+.rank-icon-stage[data-rank="spirecrystal"] { --rank-ember: 140, 210, 255; --rank-base-scale: 1.16; }
 .rank-icon-stage[data-rank="frostbound"] { --rank-ember: 160, 220, 255; }
 .rank-icon-stage[data-rank="rime"] { --rank-ember: 160, 220, 255; }
 .rank-icon-stage[data-rank="bronze"] { --rank-ember: 255, 150, 55; }
@@ -4900,6 +4900,33 @@ button.roll-chip:hover {
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: nowrap;
+}
+
+.price-overlay-trade-rate {
+  flex: none;
+  max-width: 11rem;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-2) 88%, transparent);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.price-overlay-trade-rate.is-wait {
+  color: var(--gold-2);
+  border-color: color-mix(in srgb, var(--gold) 45%, var(--line));
+}
+
+.price-overlay-trade-rate.is-limited {
+  color: #f0a090;
+  border-color: color-mix(in srgb, #c45c48 50%, var(--line));
 }
 
 .price-overlay-bar .price-overlay-trade-btns {

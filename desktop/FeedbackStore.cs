@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace ExileLedger;
 
@@ -109,6 +110,7 @@ static class FeedbackStore
                 var item = JsonSerializer.Deserialize<FeedbackItem>(File.ReadAllText(path), Json);
                 if (item is null || string.IsNullOrWhiteSpace(item.Title)) continue;
                 if (string.IsNullOrWhiteSpace(item.Id)) item.Id = Path.GetFileNameWithoutExtension(path);
+                AttachLocalExtras(item);
                 items.Add(item);
             }
             catch
@@ -122,7 +124,7 @@ static class FeedbackStore
     public static async Task<IReadOnlyList<FeedbackItem>> ListAllAsync()
     {
         var remote = await FetchCloudAsync();
-        foreach (var item in remote) Write(item);
+        foreach (var item in remote) MergeRemote(item);
         return List();
     }
 
@@ -160,10 +162,46 @@ static class FeedbackStore
     public static string InboxListJson(IReadOnlyList<FeedbackItem> items)
     {
         var cfg = LoadConfig();
+        var rows = items.Select(item =>
+        {
+            AttachLocalExtras(item);
+            string? shotData = null;
+            if (!string.IsNullOrWhiteSpace(item.Screenshot))
+            {
+                try
+                {
+                    var path = Path.Combine(Dir(), Path.GetFileName(item.Screenshot));
+                    if (File.Exists(path))
+                    {
+                        var bytes = File.ReadAllBytes(path);
+                        if (bytes.Length is > 32 and < 900_000)
+                            shotData = "data:image/jpeg;base64," + Convert.ToBase64String(bytes);
+                    }
+                }
+                catch
+                {
+                    shotData = null;
+                }
+            }
+            return new
+            {
+                item.Id,
+                item.At,
+                item.Title,
+                item.Body,
+                item.Version,
+                item.League,
+                item.Page,
+                item.Feature,
+                item.Screenshot,
+                item.Read,
+                screenshotData = shotData,
+            };
+        }).ToArray();
         return JsonSerializer.Serialize(new
         {
             type = "inbox-list",
-            items,
+            items = rows,
             cloud = cfg.ServiceKey.Length > 0,
             needSetup = cfg.Url.Length == 0 || cfg.ServiceKey.Length == 0,
             host = ConfigHost(cfg),
@@ -446,6 +484,54 @@ static class FeedbackStore
     }
 
     static FeedbackItem? Find(string id) => List().FirstOrDefault(item => item.Id == id);
+
+    static void MergeRemote(FeedbackItem remote)
+    {
+        FeedbackItem? local = null;
+        try
+        {
+            var path = PathFor(remote.Id);
+            if (File.Exists(path))
+                local = JsonSerializer.Deserialize<FeedbackItem>(File.ReadAllText(path), Json);
+        }
+        catch
+        {
+            local = null;
+        }
+        if (local is not null)
+        {
+            if (string.IsNullOrWhiteSpace(remote.Screenshot) && !string.IsNullOrWhiteSpace(local.Screenshot))
+                remote.Screenshot = local.Screenshot;
+            if (string.IsNullOrWhiteSpace(remote.Feature) && !string.IsNullOrWhiteSpace(local.Feature))
+                remote.Feature = local.Feature;
+        }
+        AttachLocalExtras(remote);
+        Write(remote);
+    }
+
+    static void AttachLocalExtras(FeedbackItem item)
+    {
+        if (string.IsNullOrWhiteSpace(item.Feature))
+        {
+            var match = Regex.Match(item.Body ?? "", @"^Feature:\s*(.+)$", RegexOptions.Multiline);
+            if (match.Success) item.Feature = Clip(match.Groups[1].Value, 80);
+        }
+        if (!string.IsNullOrWhiteSpace(item.Screenshot))
+        {
+            var path = Path.Combine(Dir(), Path.GetFileName(item.Screenshot));
+            if (File.Exists(path)) return;
+            item.Screenshot = "";
+        }
+        var safe = new string((item.Id ?? "").Where(char.IsLetterOrDigit).ToArray());
+        if (safe.Length < 4) return;
+        foreach (var ext in new[] { ".jpg", ".jpeg", ".png", ".webp" })
+        {
+            var path = Path.Combine(Dir(), safe + ext);
+            if (!File.Exists(path)) continue;
+            item.Screenshot = safe + ext;
+            return;
+        }
+    }
 
     static void SaveScreenshot(FeedbackItem item, byte[]? screenshot)
     {

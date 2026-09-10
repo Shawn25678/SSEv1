@@ -171,8 +171,9 @@
           return;
         }
         const meta = [item.feature, item.version && "v" + item.version, item.league, item.page].filter(Boolean).join(" · ");
-        const shot = item.screenshot
-          ? `<a class="inbox-shot" href="https://still-sane-inbox.assets/${esc(item.screenshot)}" target="_blank" rel="noreferrer"><img src="https://still-sane-inbox.assets/${esc(item.screenshot)}" alt="Screenshot" /></a>`
+        const shotSrc = item.screenshotData || (item.screenshot ? "https://still-sane-inbox.assets/" + item.screenshot : "");
+        const shot = shotSrc
+          ? `<a class="inbox-shot" href="${esc(shotSrc)}" target="_blank" rel="noreferrer"><img src="${esc(shotSrc)}" alt="Screenshot" /></a>`
           : "";
         detail.innerHTML = `
           <p class="inbox-tag inbox-tag-app">App</p>

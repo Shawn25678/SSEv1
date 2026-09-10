@@ -405,12 +405,7 @@ sealed class TrackerWindow : Form
         public DateTime PenaltyUntil = DateTime.MinValue;
         public bool Limited => PenaltyUntil > DateTime.UtcNow;
 
-        public static TradeLimiter Default()
-        {
-            var limiter = new TradeLimiter();
-            limiter.Limits.Add(new SlidingLimit(1, 5));
-            return limiter;
-        }
+        public static TradeLimiter Default() => new();
 
         public int WaitMs()
         {
@@ -422,6 +417,8 @@ sealed class TrackerWindow : Form
 
         public void Borrow()
         {
+            // No local buckets until PoE response headers teach us the real rules.
+            if (Limits.Count == 0) return;
             foreach (var limit in Limits) limit.Borrow();
         }
 
@@ -595,7 +592,6 @@ sealed class TrackerWindow : Form
         {
             /* fetch below */
         }
-        if (CombinedWaitMs() >= 1500 && SearchLimit.Limited) return null;
         await Gate.WaitAsync();
         try
         {
@@ -636,11 +632,6 @@ sealed class TrackerWindow : Form
         }
         if (name.Length is < 2 or > 80) name = typeLine.Length > 0 ? typeLine : name;
         var rollList = (rolls ?? Array.Empty<string>()).Where(r => !string.IsNullOrWhiteSpace(r)).Take(12).ToArray();
-        if ((SearchLimit.Limited || ExchangeLimit.Limited) && CombinedWaitMs() >= 1500)
-        {
-            Reply(id, false, 429, "{\"error\":\"rate limited\"}");
-            return;
-        }
         IReadOnlyList<RollFilter> mapped = preMapped is { Count: > 0 } ? preMapped : Array.Empty<RollFilter>();
         if (mapped.Count == 0 && rollList.Length > 0)
             mapped = await MapRollsToFilters(rollList, category);
@@ -1198,7 +1189,6 @@ sealed class TrackerWindow : Form
 
         async Task<TradeLookup?> Run(string body)
         {
-            if (SearchLimit.Limited && CombinedWaitMs() >= 1500) return new TradeLookup(RateLimited: true);
             var (searchJson, searchStatus) = await PostTradeSearch(searchUri, body);
             if (searchStatus == 429) return new TradeLookup(RateLimited: true);
             if (searchStatus is 401 or 403) return new TradeLookup(Forbidden: true);
@@ -1282,7 +1272,6 @@ sealed class TrackerWindow : Form
             "https://www.pathofexile.com/api/trade2/exchange/poe2/" + Uri.EscapeDataString(league),
             "https://www.pathofexile.com/api/trade2/exchange/" + Uri.EscapeDataString(league),
         };
-        if (ExchangeLimit.Limited && CombinedWaitMs() >= 1500) return new TradeLookup(RateLimited: true);
         string? json = null;
         var status = 0;
         foreach (var uri in uris)
@@ -1398,7 +1387,6 @@ sealed class TrackerWindow : Form
         {
             /* fetch below */
         }
-        if (CombinedWaitMs() >= 1500 && SearchLimit.Limited) return null;
         if (!await WaitForSlot(SearchLimit)) return null;
         using var res = await TradeHttp.GetAsync("https://www.pathofexile.com/api/trade2/data/static");
         NoteRate(res, SearchLimit);
@@ -1940,6 +1928,15 @@ sealed class TrackerWindow : Form
                 BeginInvoke(() => _overlay?.HideOverlay());
                 return;
             }
+            if (type == "overlay-rate")
+            {
+                var chip = root.TryGetProperty("chip", out var chipEl) ? chipEl.GetString() ?? "" : "";
+                var title = root.TryGetProperty("title", out var titleEl2) ? titleEl2.GetString() ?? "" : "";
+                var wait = root.TryGetProperty("wait", out var waitEl) && waitEl.ValueKind == JsonValueKind.True;
+                var limited = root.TryGetProperty("limited", out var limEl) && limEl.ValueKind == JsonValueKind.True;
+                BeginInvoke(() => _overlay?.PostRate(chip, title, wait, limited));
+                return;
+            }
             if (type == "overlay-notice")
             {
                 var text = root.TryGetProperty("text", out var textEl) ? textEl.GetString() ?? "" : "";
@@ -2151,17 +2148,17 @@ sealed class TrackerWindow : Form
             while (true)
             {
                 var wait = limiter.WaitMs();
-                if (limiter.Limited && wait >= 1500) return false;
                 if (wait <= 0)
                 {
                     limiter.Borrow();
                     PushRate();
                     return true;
                 }
-                if (wait >= 20000) return false;
+                // Wait out PoE windows/penalties instead of failing early.
+                if (wait > 180_000) return false;
                 PushRate();
                 SlotLock.Release();
-                try { await Task.Delay(Math.Min(wait, 250)); }
+                try { await Task.Delay(Math.Min(Math.Max(wait, 50), 750)); }
                 finally { await SlotLock.WaitAsync(); }
             }
         }
@@ -3222,6 +3219,20 @@ sealed class PriceOverlayForm : Form
         _clickAwayReadyAt = 0;
         StopClickAwayWatch();
         Hide();
+    }
+
+    public void PostRate(string chip, string title, bool wait, bool limited)
+    {
+        if (!_ready || _web.CoreWebView2 is null || !Visible) return;
+        var payload = JsonSerializer.Serialize(new
+        {
+            type = "rate",
+            chip = chip ?? "",
+            title = title ?? "",
+            wait,
+            limited,
+        });
+        _web.CoreWebView2.PostWebMessageAsJson(payload);
     }
 
     void SnapWidthForHtml(string? html)
