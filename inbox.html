@@ -138,7 +138,7 @@
                 ${row.kind === "app" && !row.read ? `<span class="inbox-dot"></span>` : ""}
               </span>
               <strong>${esc(row.title)}</strong>
-              <span>${esc(when(row.at))}</span>
+              <span>${esc([row.feature, when(row.at)].filter(Boolean).join(" · "))}</span>
             </button>`;
           })
           .join("");
@@ -170,12 +170,16 @@
             </div>`;
           return;
         }
-        const meta = [item.version && "v" + item.version, item.league, item.page].filter(Boolean).join(" · ");
+        const meta = [item.feature, item.version && "v" + item.version, item.league, item.page].filter(Boolean).join(" · ");
+        const shot = item.screenshot
+          ? `<a class="inbox-shot" href="https://still-sane-inbox.assets/${esc(item.screenshot)}" target="_blank" rel="noreferrer"><img src="https://still-sane-inbox.assets/${esc(item.screenshot)}" alt="Screenshot" /></a>`
+          : "";
         detail.innerHTML = `
           <p class="inbox-tag inbox-tag-app">App</p>
           <h2>${esc(item.title)}</h2>
           <p class="muted">${esc(when(item.at))}${meta ? " · " + esc(meta) : ""}</p>
           <pre class="inbox-body">${esc(item.body)}</pre>
+          ${shot}
           <div class="row-actions">
             <button class="btn ghost" data-delete="${esc(item.id)}" type="button">Delete</button>
             <button class="btn gold" data-toggle="${esc(item.id)}" type="button">${item.read ? "Mark new" : "Mark read"}</button>

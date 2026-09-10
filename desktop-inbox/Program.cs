@@ -98,6 +98,10 @@ sealed class InboxWindow : Form
         _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _web.CoreWebView2.Settings.IsWebMessageEnabled = true;
+        _web.CoreWebView2.SetVirtualHostNameToFolderMapping(
+            "still-sane-inbox.assets",
+            FeedbackStore.Dir(),
+            CoreWebView2HostResourceAccessKind.Allow);
         _web.CoreWebView2.WebMessageReceived += OnWebMessage;
         _web.CoreWebView2.NewWindowRequested += (_, ev) =>
         {

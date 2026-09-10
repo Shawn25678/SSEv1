@@ -2993,6 +2993,21 @@ button.pill.is-inspect:hover {
   gap: 12px;
 }
 
+
+.settings-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
+
+.settings-check input {
+  margin-top: 3px;
+  flex: none;
+}
 .hotkey-btn {
   min-width: 140px;
   padding: 8px 12px;
@@ -3117,6 +3132,72 @@ button.roll-chip:hover {
 
 .feedback-form .row-actions {
   justify-content: space-between;
+}
+
+.feedback-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.feedback-form input,
+.feedback-form select,
+.feedback-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  padding: 10px 12px;
+  font: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.feedback-shot {
+  display: grid;
+  gap: 8px;
+}
+
+.feedback-shot-preview {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-2);
+  max-height: 220px;
+}
+
+.feedback-shot-preview img {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+}
+
+.feedback-shot-actions {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.inbox-shot {
+  margin: 12px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0c0a08;
+  max-width: 100%;
+}
+
+.inbox-shot img {
+  display: block;
+  width: 100%;
+  max-height: 520px;
+  object-fit: contain;
+  cursor: zoom-in;
 }
 
 .theme-color {
@@ -3686,6 +3767,10 @@ button.roll-chip:hover {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.28);
+}
+
+.price-overlay-back.is-inert {
+  pointer-events: none;
 }
 
 .price-overlay-card {
@@ -5274,3 +5359,15 @@ button.roll-chip:hover {
   }
 }
 
+
+/* Lower-end PCs: drop expensive animated filters on rank chrome */
+body.fx-quality-low .rank-title span,
+body.fx-quality-low .rank-haze,
+body.fx-quality-low .rank-embers {
+  animation: none !important;
+  filter: none !important;
+}
+body.fx-quality-mid .rank-haze,
+body.fx-quality-mid .rank-embers {
+  animation-duration: 8s;
+}

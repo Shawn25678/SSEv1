@@ -333,15 +333,15 @@ sealed class TrackerWindow : Form
         _web.CoreWebView2.PostWebMessageAsJson(json);
     }
 
-    async Task ShowPriceOverlayAsync(string html, string vars, string? notice, bool fresh = false)
+    async Task ShowPriceOverlayAsync(string html, string vars, string? notice, bool fresh = false, bool clickAway = false)
     {
         try
         {
             _overlay ??= new PriceOverlayForm(ForwardOverlayJson);
             var page = Path.Combine(AppDataDir(), "www", "overlay.html");
             await _overlay.EnsureAsync(_env, page);
-            if (!string.IsNullOrWhiteSpace(notice)) _overlay.ShowNotice(notice, vars);
-            else _overlay.ShowHtml(html, vars, fresh);
+            if (!string.IsNullOrWhiteSpace(notice)) _overlay.ShowNotice(notice, vars, clickAway);
+            else _overlay.ShowHtml(html, vars, fresh, clickAway);
         }
         catch
         {
@@ -1864,15 +1864,33 @@ sealed class TrackerWindow : Form
                 var version = root.TryGetProperty("version", out var verEl) ? verEl.GetString() ?? "" : "";
                 var league = root.TryGetProperty("league", out var leagueEl) ? leagueEl.GetString() ?? "" : "";
                 var page = root.TryGetProperty("page", out var pageEl) ? pageEl.GetString() ?? "" : "";
+                var feature = root.TryGetProperty("feature", out var featureEl) ? featureEl.GetString() ?? "" : "";
+                var shotB64 = root.TryGetProperty("screenshot", out var shotEl) ? shotEl.GetString() ?? "" : "";
                 title = title.Trim();
                 body = body.Trim();
+                feature = feature.Trim();
                 if (title.Length is < 1 or > 80)
                 {
                     Reply(id ?? "", false, 400, "{\"error\":\"need a title\"}");
                     return;
                 }
                 if (body.Length > 4000) body = body[..4000];
-                var item = FeedbackStore.Save(title, body, version, league, page);
+                byte[]? shot = null;
+                if (shotB64.Length > 0)
+                {
+                    try
+                    {
+                        var comma = shotB64.IndexOf(',');
+                        if (shotB64.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && comma > 0)
+                            shotB64 = shotB64[(comma + 1)..];
+                        shot = Convert.FromBase64String(shotB64);
+                    }
+                    catch
+                    {
+                        shot = null;
+                    }
+                }
+                var item = FeedbackStore.Save(title, body, version, league, page, feature, shot);
                 _ = Task.Run(async () =>
                 {
                     await FeedbackStore.NotifyCloudAsync(item);
@@ -1913,7 +1931,8 @@ sealed class TrackerWindow : Form
                 var html = root.TryGetProperty("html", out var htmlEl) ? htmlEl.GetString() ?? "" : "";
                 var vars = root.TryGetProperty("vars", out var varsEl) ? varsEl.GetString() ?? "" : "";
                 var fresh = root.TryGetProperty("fresh", out var freshEl) && freshEl.ValueKind == JsonValueKind.True;
-                BeginInvoke(() => _ = ShowPriceOverlayAsync(html, vars, null, fresh));
+                var clickAway = root.TryGetProperty("clickAway", out var clickEl) && clickEl.ValueKind == JsonValueKind.True;
+                BeginInvoke(() => _ = ShowPriceOverlayAsync(html, vars, null, fresh, clickAway));
                 return;
             }
             if (type == "overlay-hide")
@@ -2521,10 +2540,10 @@ sealed class TrackerWindow : Form
         WriteResource(asm, "www.overlay.html", Path.Combine(dir, "overlay.html"));
         WriteResource(asm, "www.styles.css", Path.Combine(dir, "styles.css"));
         WriteResource(asm, "www.app.js", Path.Combine(dir, "app.js"));
-        WriteResource(asm, "www.affix-ladders.js", Path.Combine(dir, "affix-ladders.js"));
+        WriteResource(asm, "www.affix-ladders.js", Path.Combine(dir, "affix-ladders.js"), skipUnchanged: true);
         WriteResource(asm, "www.bosses.js", Path.Combine(dir, "bosses.js"));
-        WriteResource(asm, "www.icons.js", Path.Combine(dir, "icons.js"));
-        WriteResource(asm, "www.still-sane-sigil.png", Path.Combine(dir, "still-sane-sigil.png"));
+        WriteResource(asm, "www.icons.js", Path.Combine(dir, "icons.js"), skipUnchanged: true);
+        WriteResource(asm, "www.still-sane-sigil.png", Path.Combine(dir, "still-sane-sigil.png"), skipUnchanged: true);
         // Drop retired Stacked Deck scripts if an older extract left them behind
         foreach (var stale in new[] { "decks.js", "deck-game.js" })
         {
@@ -2544,7 +2563,7 @@ sealed class TrackerWindow : Form
             var dest = Path.Combine(artDir, rel);
             var parent = Path.GetDirectoryName(dest);
             if (!string.IsNullOrEmpty(parent)) EnsureDirectory(parent);
-            WriteResource(asm, name, dest);
+            WriteResource(asm, name, dest, skipUnchanged: true);
         }
         foreach (var file in Directory.GetFiles(artDir, "*", SearchOption.AllDirectories))
         {
@@ -2897,12 +2916,27 @@ sealed class TrackerWindow : Form
         return Regex.Replace(text, @"\s+", " ").Trim();
     }
 
-    static void WriteResource(Assembly asm, string name, string path)
+    static void WriteResource(Assembly asm, string name, string path, bool skipUnchanged = false)
     {
         using var stream = asm.GetManifestResourceStream(name)
             ?? throw new InvalidOperationException("Missing embedded file: " + name);
-        using var file = File.Create(path);
-        stream.CopyTo(file);
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        var bytes = ms.ToArray();
+        if (skipUnchanged && File.Exists(path))
+        {
+            try
+            {
+                if (new FileInfo(path).Length == bytes.Length) return;
+            }
+            catch
+            {
+                /* rewrite */
+            }
+        }
+        var parent = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(parent)) EnsureDirectory(parent);
+        File.WriteAllBytes(path, bytes);
     }
 }
 
@@ -2917,6 +2951,11 @@ sealed class PriceOverlayForm : Form
     readonly Action<string> _forward;
     bool _ready;
     bool _allowActivate;
+    bool _clickAway;
+    int _showGen;
+    long _clickAwayReadyAt;
+    bool _clickAwayBtnUp;
+    System.Windows.Forms.Timer? _clickAwayWatch;
     int _cssW = 428;
     int _cssH = 220;
     int _appliedW;
@@ -3001,6 +3040,9 @@ sealed class PriceOverlayForm : Form
     static extern bool GetCursorPos(out NativePoint pt);
 
     [DllImport("user32.dll")]
+    static extern short GetAsyncKeyState(int vKey);
+
+    [DllImport("user32.dll")]
     static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
 
     [DllImport("user32.dll")]
@@ -3071,43 +3113,114 @@ sealed class PriceOverlayForm : Form
         else _ready = true;
     }
 
-    public void ShowHtml(string html, string vars, bool fresh = false)
+    public void ShowHtml(string html, string vars, bool fresh = false, bool clickAway = false)
     {
+        var opening = fresh || !Visible;
+        var rearm = opening || clickAway != _clickAway;
+        _clickAway = clickAway;
+        if (rearm) ArmClickAway(clickAway);
         _pendingKind = "paint";
         _pendingHtml = html;
         _pendingVars = vars;
         _pendingNotice = null;
         SnapWidthForHtml(html);
-        if (fresh || !Visible)
+        if (opening)
         {
             ApplySize();
             PlaceNearCursor();
         }
         else ApplySize();
-        Peek();
+        // Keep game focus — click-away watches mouse downs outside this window.
+        Peek(activate: false);
         FlushPending();
     }
 
-    public void ShowNotice(string text, string vars)
+    public void ShowNotice(string text, string vars, bool clickAway = false)
     {
+        var opening = !Visible;
+        var rearm = opening || clickAway != _clickAway;
+        _clickAway = clickAway;
+        if (rearm) ArmClickAway(clickAway);
         _pendingKind = "notice";
         _pendingNotice = text;
         _pendingVars = vars;
         _pendingHtml = null;
         _cssW = OverlayNarrowCssW;
-        if (!Visible)
+        if (opening)
         {
             ApplySize();
             PlaceNearCursor();
         }
-        Peek();
+        Peek(activate: false);
         FlushPending();
+    }
+
+    void ArmClickAway(bool clickAway)
+    {
+        _showGen++;
+        // Grace so the hotkey / open click itself does not dismiss immediately.
+        _clickAwayReadyAt = clickAway ? Environment.TickCount64 + 220 : 0;
+        _clickAwayBtnUp = false;
+        if (clickAway) StartClickAwayWatch();
+        else StopClickAwayWatch();
+    }
+
+    void StartClickAwayWatch()
+    {
+        if (_clickAwayWatch is null)
+        {
+            _clickAwayWatch = new System.Windows.Forms.Timer { Interval = 33 };
+            _clickAwayWatch.Tick += (_, _) => PollClickAway();
+        }
+        _clickAwayWatch.Start();
+    }
+
+    void StopClickAwayWatch()
+    {
+        _clickAwayWatch?.Stop();
+    }
+
+    void PollClickAway()
+    {
+        if (!_clickAway || !Visible)
+        {
+            StopClickAwayWatch();
+            return;
+        }
+        const int vkLButton = 0x01;
+        const int vkRButton = 0x02;
+        var down = (GetAsyncKeyState(vkLButton) & 0x8000) != 0
+            || (GetAsyncKeyState(vkRButton) & 0x8000) != 0;
+        if (Environment.TickCount64 < _clickAwayReadyAt)
+        {
+            // Require a full button-up after open before arming the edge detector.
+            if (!down) _clickAwayBtnUp = true;
+            return;
+        }
+        if (!down)
+        {
+            _clickAwayBtnUp = true;
+            return;
+        }
+        if (!_clickAwayBtnUp) return;
+        _clickAwayBtnUp = false;
+        if (!GetCursorPos(out var pt)) return;
+        var screen = new Rectangle(Location, Size);
+        if (_appliedW > 0 && _appliedH > 0)
+            screen = new Rectangle(Location.X, Location.Y, _appliedW, _appliedH);
+        if (screen.Contains(pt.X, pt.Y)) return;
+        HideOverlay();
+        _forward("""{"type":"overlay-click","closeInspect":""}""");
     }
 
     public void HideOverlay()
     {
+        _showGen++;
         _pendingKind = null;
         _allowActivate = false;
+        _clickAway = false;
+        _clickAwayReadyAt = 0;
+        StopClickAwayWatch();
         Hide();
     }
 
@@ -3128,14 +3241,17 @@ sealed class PriceOverlayForm : Form
         _web.CoreWebView2.PostWebMessageAsJson(payload);
     }
 
-    void Peek()
+    void Peek(bool activate = false)
     {
+        var prevAllow = _allowActivate;
+        _allowActivate = activate;
         Show();
         var flags = SwpShowWindow | SwpNoMove | SwpNoSize;
-        if (!_allowActivate) flags |= SwpNoActivate;
+        if (!activate) flags |= SwpNoActivate;
         SetWindowPos(Handle, HwndTopmost, 0, 0, 0, 0, flags);
         TopMost = true;
-        if (_allowActivate) ForceForeground();
+        if (activate) ForceForeground();
+        _allowActivate = prevAllow;
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)

@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.30";
+const APP_VERSION = "1.0.33";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -213,6 +213,7 @@ function loadState() {
       hotkeyLog: parsed.hotkeyLog || "F8",
       hotkeyNext: parsed.hotkeyNext || "F9",
       hotkeyPrice: parsed.hotkeyPrice || "F7",
+      overlayClickAway: parsed._clickAwaySet ? !!parsed.overlayClickAway : true,
       theme: migrateTheme(parsed.theme),
     };
   } catch {
@@ -236,6 +237,7 @@ function defaultState() {
     hotkeyLog: "F8",
     hotkeyNext: "F9",
     hotkeyPrice: "F7",
+    overlayClickAway: true,
     theme: themeDefaults(),
   };
 }
@@ -566,6 +568,7 @@ window.__bossArtFail = function (img) {
 let updateCache = { at: 0, newer: false, latest: "" };
 let affixTried = false;
 let affixLoading = null;
+let iconsLoading = null;
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -589,6 +592,21 @@ function ensureAffixLadders() {
     affixLoading = null;
   });
   return affixLoading;
+}
+
+function ensureIcons() {
+  if (typeof ITEM_ICONS !== "undefined") return Promise.resolve();
+  if (iconsLoading) return iconsLoading;
+  iconsLoading = loadScript("icons.js")
+    .then(() => {
+      iconFolds = null;
+      paintLivePrices();
+      if (ui.view === "dash" || ui.view === "log" || ui.view === "econ") render();
+    })
+    .catch(() => {
+      iconsLoading = null;
+    });
+  return iconsLoading;
 }
 
 function paintUpdatePanel() {
@@ -685,6 +703,18 @@ let rankLiveRaf = 0;
 let rankLiveAlive = false;
 let rankFrameTimer = 0;
 
+/** Auto FX budget for lower-end PCs (rank canvas is the heavy path). */
+function fxQuality() {
+  try {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) return "low";
+  } catch (_) {}
+  const cores = Number(navigator.hardwareConcurrency) || 8;
+  const mem = Number(navigator.deviceMemory) || 8;
+  if (cores <= 4 || mem <= 4) return "low";
+  if (cores <= 6 || mem <= 8) return "mid";
+  return "high";
+}
+
 function destroyRankLive() {
   rankLiveAlive = false;
   if (rankLiveRaf) {
@@ -709,12 +739,17 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
   const ctx = canvas.getContext("2d", { alpha: true });
   if (!ctx) return;
   const pwr = Math.max(1, Math.min(2.2, Number(power) || 1));
+  const q = fxQuality();
+  const dprCap = q === "low" ? 1.25 : q === "mid" ? 1.75 : 2;
+  const smoothQ = q === "high" ? "high" : "medium";
+  const moteScale = q === "low" ? 0.35 : q === "mid" ? 0.65 : 1;
+  const gemScale = q === "low" ? 0.6 : q === "mid" ? 0.85 : 1;
 
   const fx = document.createElement("canvas");
   const fxCtx = fx.getContext("2d", { alpha: true });
 
   const fit = () => {
-    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const dpr = Math.min(dprCap, window.devicePixelRatio || 1);
     const w = stage.clientWidth || 200;
     const h = stage.clientHeight || 168;
     canvas.width = Math.max(1, Math.floor(w * dpr));
@@ -723,16 +758,16 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
     canvas.style.height = h + "px";
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
+    ctx.imageSmoothingQuality = smoothQ;
     fx.width = canvas.width;
     fx.height = canvas.height;
     fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     fxCtx.imageSmoothingEnabled = true;
-    fxCtx.imageSmoothingQuality = "high";
+    fxCtx.imageSmoothingQuality = smoothQ;
   };
   fit();
 
-  const gemN = Math.round(5 + (pwr - 1) * 4);
+  const gemN = Math.max(3, Math.round((5 + (pwr - 1) * 4) * gemScale));
   const gemPieces = Array.from({ length: gemN }, (_, i) => {
     const ang = -Math.PI / 2 + (i / gemN) * Math.PI * 2;
     return {
@@ -744,7 +779,8 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
     };
   });
 
-  const motes = Array.from({ length: Math.round(10 + (pwr - 1) * 8) }, () => ({
+  const moteN = Math.max(0, Math.round((10 + (pwr - 1) * 8) * moteScale));
+  const motes = Array.from({ length: moteN }, () => ({
     ang: Math.random() * Math.PI * 2,
     dist: 0.1 + Math.random() * 0.18,
     size: 0.6 + Math.random() * 1.2,
@@ -822,7 +858,7 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
     c.clip();
   };
 
-  const FRAME_MS = 1000 / 60;
+  const FRAME_MS = q === "low" ? 1000 / 30 : q === "mid" ? 1000 / 45 : 1000 / 60;
   let lastDraw = 0;
   let tAccum = 0;
   rankLiveAlive = true;
@@ -831,6 +867,8 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
   const tick = (now) => {
     if (!rankLiveAlive) return;
     rankLiveRaf = requestAnimationFrame(tick);
+    if (document.hidden) return;
+    if (!stage.isConnected || stage.offsetParent === null) return;
     if (now - lastDraw < FRAME_MS - 0.5) return;
     const prev = lastDraw || now;
     lastDraw = now;
@@ -960,10 +998,10 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
     {
       fxCtx.setTransform(1, 0, 0, 1, 0, 0);
       fxCtx.clearRect(0, 0, fx.width, fx.height);
-      const dpr0 = Math.min(3, window.devicePixelRatio || 1);
+      const dpr0 = Math.min(dprCap, window.devicePixelRatio || 1);
       fxCtx.setTransform(dpr0, 0, 0, dpr0, 0, 0);
       fxCtx.imageSmoothingEnabled = true;
-      fxCtx.imageSmoothingQuality = "high";
+      fxCtx.imageSmoothingQuality = smoothQ;
       fxCtx.save();
       clipCrystalForm(fxCtx, cx, cy, gemW * 1.08, gemH * 1.06, gemShape);
       fxCtx.globalCompositeOperation = "lighter";
@@ -1046,10 +1084,10 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
     // Build energy on offscreen, then mask to crystal form + PNG alpha
     fxCtx.setTransform(1, 0, 0, 1, 0, 0);
     fxCtx.clearRect(0, 0, fx.width, fx.height);
-    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const dpr = Math.min(dprCap, window.devicePixelRatio || 1);
     fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     fxCtx.imageSmoothingEnabled = true;
-    fxCtx.imageSmoothingQuality = "high";
+    fxCtx.imageSmoothingQuality = smoothQ;
     fxCtx.save();
     clipCrystalForm(fxCtx, cx, cy, gemW * (1.05 + breath * 0.04), gemH * (1.05 + breath * 0.03), gemShape);
     fxCtx.globalCompositeOperation = "lighter";
@@ -1397,7 +1435,7 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
     fxCtx.clearRect(0, 0, fx.width, fx.height);
     fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     fxCtx.imageSmoothingEnabled = true;
-    fxCtx.imageSmoothingQuality = "high";
+    fxCtx.imageSmoothingQuality = smoothQ;
     fxCtx.globalCompositeOperation = "lighter";
     fxCtx.lineCap = "round";
     fxCtx.lineJoin = "round";
@@ -3123,7 +3161,8 @@ function startRateBar() {
     try { window.chrome.webview.postMessage({ type: "rate-status" }); } catch { /* native host not ready */ }
   }
   if (rateBarTimer) return;
-  rateBarTimer = setInterval(paintRateBar, 250);
+  const ms = fxQuality() === "low" ? 500 : 250;
+  rateBarTimer = setInterval(paintRateBar, ms);
 }
 
 function priceKey(name) {
@@ -5266,6 +5305,10 @@ function hotkeys() {
   };
 }
 
+function overlayClickAway() {
+  return !!state.overlayClickAway;
+}
+
 function normalizeHotkey(spec) {
   const parts = String(spec || "")
     .split("+")
@@ -5861,6 +5904,9 @@ function isUsefulRoll(text, kind, extra) {
   if (/^this item can be anointed/i.test(t)) return false;
   if (/^can have up to/i.test(t)) return false;
   if (/^\d+\s+uses? remaining$/i.test(t)) return false;
+  // Charge state is not a trade filter
+  if (/^consumes\b.+\bcharges?\b/i.test(t)) return false;
+  if (/^currently has\b.+\bcharges?\b/i.test(t)) return false;
   if (/^\{/.test(t)) return false;
   if (!isBaseModKind(kind)) {
     if (/^has\b.*\b(charm slot|socketable)/i.test(t)) return false;
@@ -6279,7 +6325,13 @@ function pushNativeOverlay(html, notice, fresh) {
     chrome.webview.postMessage({ type: "overlay-hide" });
     return true;
   }
-  chrome.webview.postMessage({ type: "overlay-show", html, vars: overlayThemeVars(), fresh: !!fresh });
+  chrome.webview.postMessage({
+    type: "overlay-show",
+    html,
+    vars: overlayThemeVars(),
+    fresh: !!fresh,
+    clickAway: overlayClickAway(),
+  });
   return true;
 }
 
@@ -6300,16 +6352,108 @@ function focusFeedback() {
   el.focus();
 }
 
+let feedbackShot = null;
+
+const FEEDBACK_FEATURES = [
+  ["", "Pick one…"],
+  ["Dashboard", "Dashboard"],
+  ["Bosses", "Bosses"],
+  ["Loot log", "Loot log"],
+  ["Economy", "Economy"],
+  ["Price check", "Price check overlay"],
+  ["Trade", "Trade / filters"],
+  ["Ranks", "Ranks"],
+  ["Hotkeys", "Hotkeys"],
+  ["Settings", "Settings / look"],
+  ["Startup", "Startup / update"],
+  ["Other", "Other"],
+];
+
+function feedbackFeatureOptions(selected) {
+  const cur = String(selected || "");
+  return FEEDBACK_FEATURES.map(
+    ([value, label]) =>
+      `<option value="${esc(value)}"${value === cur ? " selected" : ""}>${esc(label)}</option>`
+  ).join("");
+}
+
+function paintFeedbackShot() {
+  const preview = document.getElementById("feedback-shot-preview");
+  const clearBtn = document.querySelector("[data-feedback-shot='clear']");
+  if (!preview) return;
+  if (!feedbackShot?.dataUrl) {
+    preview.hidden = true;
+    preview.innerHTML = "";
+    if (clearBtn) clearBtn.hidden = true;
+    return;
+  }
+  preview.hidden = false;
+  preview.innerHTML = `<img src="${feedbackShot.dataUrl}" alt="" />`;
+  if (clearBtn) clearBtn.hidden = false;
+}
+
+function setFeedbackShotFile(file) {
+  if (!file || !String(file.type || "").startsWith("image/")) return;
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    const max = 1280;
+    let w = img.naturalWidth || 1;
+    let h = img.naturalHeight || 1;
+    const scale = Math.min(1, max / Math.max(w, h));
+    w = Math.max(1, Math.round(w * scale));
+    h = Math.max(1, Math.round(h * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      URL.revokeObjectURL(url);
+      return;
+    }
+    ctx.drawImage(img, 0, 0, w, h);
+    feedbackShot = {
+      dataUrl: canvas.toDataURL("image/jpeg", 0.72),
+      name: file.name || "screenshot.jpg",
+    };
+    URL.revokeObjectURL(url);
+    paintFeedbackShot();
+  };
+  img.onerror = () => URL.revokeObjectURL(url);
+  img.src = url;
+}
+
 function feedbackNote(form) {
   const data = new FormData(form);
   const title = String(data.get("title") || "").trim();
+  const feature = String(data.get("feature") || "").trim();
   const details = String(data.get("body") || "").trim().slice(0, 1500);
   if (!title) {
     document.getElementById("feedback-title")?.focus();
     return null;
   }
-  const body = [details || "(no details)", "", "---", "App: Still Sane, Exile? " + APP_VERSION, "League: " + leagueId(), "Page: " + (ui.view || "")].join("\n");
-  return { title, body, text: title + "\n\n" + body };
+  if (!feature) {
+    form.querySelector("[name=feature]")?.focus();
+    showToast("Pick which menu or feature.");
+    return null;
+  }
+  const body = [
+    "Feature: " + feature,
+    "",
+    details || "(no details)",
+    "",
+    "---",
+    "App: Still Sane, Exile? " + APP_VERSION,
+    "League: " + leagueId(),
+    "Page: " + (ui.view || ""),
+  ].join("\n");
+  return {
+    title,
+    feature,
+    body,
+    text: title + "\n\n" + body,
+    screenshot: feedbackShot?.dataUrl || "",
+  };
 }
 
 function copyFeedbackText(text) {
@@ -6340,15 +6484,19 @@ function submitFeedback(form, via = "send") {
       type: "feedback-send",
       title: note.title,
       body: note.body,
+      feature: note.feature,
+      screenshot: note.screenshot,
       version: APP_VERSION,
       league: leagueId(),
       page: ui.view || "",
     },
-    8000,
+    20000,
     "send timed out"
   )
     .then(() => {
       form.reset();
+      feedbackShot = null;
+      paintFeedbackShot();
       showToast("Sent.");
     })
     .catch(() => {
@@ -8342,7 +8490,10 @@ function paintPriceOverlay(forceInApp = false, fresh = false) {
     return;
   }
   root.hidden = false;
-  root.innerHTML = `<div class="price-overlay-back" data-close-inspect></div>${html}`;
+  const back = overlayClickAway()
+    ? `<div class="price-overlay-back" data-close-inspect></div>`
+    : `<div class="price-overlay-back is-inert" aria-hidden="true"></div>`;
+  root.innerHTML = `${back}${html}`;
 }
 
 function toggleInspectRoll(log, drop, text, kind, rid) {
@@ -9620,7 +9771,10 @@ function renderStats() {
     ${rankBadgeHtml()}
     <article class="stat loot-stat"><span>Loot value</span><b>${valueHtml(totalLootValue())}</b></article>
   `;
-  mountRankFx();
+  requestAnimationFrame(() => {
+    if (typeof requestIdleCallback === "function") requestIdleCallback(() => mountRankFx(), { timeout: 800 });
+    else setTimeout(() => mountRankFx(), 120);
+  });
 }
 
 function renderFilters() {
@@ -9819,10 +9973,19 @@ function renderSettings() {
           </div>
         </div>
         <p class="muted">Escape cancels a rebind. If a key is already used, the two actions swap. Keep this window open on a second screen while you farm.</p>
+        <label class="settings-check" style="margin-top:14px">
+          <input type="checkbox" data-overlay-click-away ${overlayClickAway() ? "checked" : ""} />
+          <span>Click outside to close price check</span>
+        </label>
+        <p class="muted" style="margin-top:6px">When on, click the dimmed area (or back into the game) to dismiss the overlay instead of using ×.</p>
       </article>`
           : `<article class="panel">
         <h3>Hotkeys</h3>
         <p class="muted" style="margin-top:8px">In-game copy hotkeys need the desktop app.</p>
+        <label class="settings-check" style="margin-top:14px">
+          <input type="checkbox" data-overlay-click-away ${overlayClickAway() ? "checked" : ""} />
+          <span>Click outside to close price check</span>
+        </label>
       </article>`
       }
       <article class="panel">
@@ -9869,7 +10032,19 @@ function renderSettings() {
           <label>Title
             <input id="feedback-title" name="title" required maxlength="80" />
           </label>
-          <textarea name="body" rows="5" maxlength="2000" aria-label="Feedback"></textarea>
+          <label>Menu / feature
+            <select name="feature" required>${feedbackFeatureOptions("")}</select>
+          </label>
+          <textarea name="body" rows="5" maxlength="2000" aria-label="Feedback" placeholder="What went wrong or what you want?"></textarea>
+          <div class="feedback-shot">
+            <div class="feedback-shot-preview" id="feedback-shot-preview" hidden></div>
+            <div class="row-actions feedback-shot-actions">
+              <button class="btn ghost" data-feedback-shot="pick" type="button">Add screenshot</button>
+              <button class="btn ghost" data-feedback-shot="clear" type="button" hidden>Remove</button>
+            </div>
+            <p class="muted">Optional. Paste with Ctrl+V, or pick a file.</p>
+            <input id="feedback-shot-file" type="file" accept="image/*" hidden />
+          </div>
           <div class="row-actions">
             <button class="btn ghost" data-feedback-send="copy" type="button">Copy</button>
             <button class="btn gold" type="submit">Send</button>
@@ -10377,6 +10552,7 @@ function render() {
   }
   if (ui.view === "settings") {
     main.innerHTML = renderSettings();
+    paintFeedbackShot();
     checkAppUpdate();
   }
 
@@ -10422,6 +10598,19 @@ function onClick(event) {
     const form = feedbackSend.closest("#feedback-form") || document.getElementById("feedback-form");
     if (form) submitFeedback(form, feedbackSend.dataset.feedbackSend);
     return;
+  }
+  const feedbackShotBtn = event.target.closest("[data-feedback-shot]");
+  if (feedbackShotBtn) {
+    const act = feedbackShotBtn.dataset.feedbackShot;
+    if (act === "clear") {
+      feedbackShot = null;
+      paintFeedbackShot();
+      return;
+    }
+    if (act === "pick") {
+      document.getElementById("feedback-shot-file")?.click();
+      return;
+    }
   }
   const toastAct = event.target.closest("[data-toast]");
   if (toastAct) {
@@ -10826,6 +11015,18 @@ function onClick(event) {
 }
 
 function onChange(event) {
+  if (event.target?.matches?.("[data-overlay-click-away]")) {
+    state.overlayClickAway = !!event.target.checked;
+    state._clickAwaySet = true;
+    save();
+    return;
+  }
+  if (event.target?.id === "feedback-shot-file") {
+    const file = event.target.files?.[0];
+    if (file) setFeedbackShotFile(file);
+    event.target.value = "";
+    return;
+  }
   const span = event.target.closest("[data-span-rid]");
   if (span) {
     const { log, drop } = overlayLogDrop(span.dataset.pickLog, span.dataset.pickDrop);
@@ -10900,6 +11101,21 @@ document.addEventListener("mousedown", (event) => {
 });
 document.addEventListener("contextmenu", (event) => event.preventDefault());
 document.addEventListener("change", onChange);
+document.addEventListener("paste", (event) => {
+  if (ui.view !== "settings") return;
+  if (!document.getElementById("feedback-form")) return;
+  const items = event.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (!String(item.type || "").startsWith("image/")) continue;
+    const file = item.getAsFile();
+    if (!file) continue;
+    event.preventDefault();
+    setFeedbackShotFile(file);
+    showToast("Screenshot attached.");
+    return;
+  }
+});
 document.addEventListener("input", (event) => {
   const span = event.target.closest("[data-span-rid]");
   if (span) {
@@ -11200,20 +11416,31 @@ function seedReliquaryLore() {
 }
 
 seedReliquaryLore();
-hydratePriceCache();
+try {
+  document.body.classList.add("fx-quality-" + fxQuality());
+} catch (_) {}
 refreshBackupInfo();
 render();
-startPriceClock();
-startRateBar();
-syncHotkeys();
-checkAppUpdate();
-const diskPrices = hydratePriceDisk();
-loadLeagues().then(() => diskPrices).then(() => {
-  if (!prices.byName.size) hydratePriceCache();
-  linkCatalogPrices();
-  paintPriceClock();
-  paintLivePrices();
-  render();
-  if (prices.byName.size) persistCatalogCache();
-  kickFirstPriceCheck();
+requestAnimationFrame(() => {
+  startPriceClock();
+  syncHotkeys();
 });
+const afterPaint = typeof requestIdleCallback === "function"
+  ? (fn) => requestIdleCallback(fn, { timeout: 1800 })
+  : (fn) => setTimeout(fn, 50);
+afterPaint(() => {
+  startRateBar();
+  hydratePriceCache();
+  const diskPrices = hydratePriceDisk();
+  loadLeagues().then(() => diskPrices).then(() => {
+    if (!prices.byName.size) hydratePriceCache();
+    linkCatalogPrices();
+    paintPriceClock();
+    paintLivePrices();
+    render();
+    if (prices.byName.size) persistCatalogCache();
+    kickFirstPriceCheck();
+  });
+});
+setTimeout(() => ensureIcons(), 1600);
+setTimeout(() => checkAppUpdate(), 2800);

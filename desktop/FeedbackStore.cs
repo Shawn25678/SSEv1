@@ -15,6 +15,8 @@ sealed class FeedbackItem
     public string Version { get; set; } = "";
     public string League { get; set; } = "";
     public string Page { get; set; } = "";
+    public string Feature { get; set; } = "";
+    public string Screenshot { get; set; } = "";
     public bool Read { get; set; }
 }
 
@@ -51,7 +53,7 @@ static class FeedbackStore
         return dir;
     }
 
-    public static FeedbackItem Save(string title, string body, string version, string league, string page)
+    public static FeedbackItem Save(string title, string body, string version, string league, string page, string feature = "", byte[]? screenshot = null)
     {
         var item = new FeedbackItem
         {
@@ -62,9 +64,11 @@ static class FeedbackStore
             Version = Clip(version, 32),
             League = Clip(league, 64),
             Page = Clip(page, 64),
+            Feature = Clip(feature, 80),
             Read = false,
         };
         if (item.Title.Length == 0) item.Title = "Note";
+        SaveScreenshot(item, screenshot);
         Write(item);
         return item;
     }
@@ -86,6 +90,8 @@ static class FeedbackStore
         item.Version = Clip(item.Version, 32);
         item.League = Clip(item.League, 64);
         item.Page = Clip(item.Page, 64);
+        item.Feature = Clip(item.Feature, 80);
+        item.Screenshot = Clip(item.Screenshot, 80);
         if (item.Title.Length == 0) return null;
         if (string.IsNullOrWhiteSpace(item.Id) || item.Id.Length > 40) item.Id = Guid.NewGuid().ToString("N")[..12];
         if (item.At <= 0) item.At = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -133,7 +139,20 @@ static class FeedbackStore
     public static bool Delete(string id)
     {
         var path = PathFor(id);
-        if (File.Exists(path)) File.Delete(path);
+        if (File.Exists(path))
+        {
+            try
+            {
+                var item = JsonSerializer.Deserialize<FeedbackItem>(File.ReadAllText(path), Json);
+                if (item is not null) DeleteScreenshot(item);
+            }
+            catch
+            {
+                /* still delete the note */
+            }
+            File.Delete(path);
+        }
+        DeleteScreenshotFiles(id);
         _ = DeleteCloudAsync(id);
         return true;
     }
@@ -325,7 +344,9 @@ static class FeedbackStore
             id = item.Id,
             at = item.At,
             title = item.Title,
-            body = item.Body,
+            body = item.Feature.Length > 0 && !item.Body.StartsWith("Feature:", StringComparison.OrdinalIgnoreCase)
+                ? "Feature: " + item.Feature + "\n\n" + item.Body
+                : item.Body,
             version = item.Version,
             league = item.League,
             page = item.Page,
@@ -341,6 +362,8 @@ static class FeedbackStore
         Version = row.version ?? "",
         League = row.league ?? "",
         Page = row.page ?? "",
+        Feature = "",
+        Screenshot = "",
         Read = row.is_read,
     };
 
@@ -423,6 +446,51 @@ static class FeedbackStore
     }
 
     static FeedbackItem? Find(string id) => List().FirstOrDefault(item => item.Id == id);
+
+    static void SaveScreenshot(FeedbackItem item, byte[]? screenshot)
+    {
+        item.Screenshot = "";
+        if (screenshot is null || screenshot.Length is < 32 or > 3_500_000) return;
+        var name = item.Id + ".jpg";
+        try
+        {
+            File.WriteAllBytes(Path.Combine(Dir(), name), screenshot);
+            item.Screenshot = name;
+        }
+        catch
+        {
+            item.Screenshot = "";
+        }
+    }
+
+    static void DeleteScreenshot(FeedbackItem item)
+    {
+        if (string.IsNullOrWhiteSpace(item.Screenshot)) return;
+        try
+        {
+            var path = Path.Combine(Dir(), Path.GetFileName(item.Screenshot));
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch
+        {
+            /* ignore */
+        }
+    }
+
+    static void DeleteScreenshotFiles(string id)
+    {
+        var safe = new string((id ?? "").Where(char.IsLetterOrDigit).ToArray());
+        if (safe.Length < 4) return;
+        foreach (var ext in new[] { ".jpg", ".jpeg", ".png", ".webp" })
+        {
+            var path = Path.Combine(Dir(), safe + ext);
+            if (File.Exists(path))
+            {
+                try { File.Delete(path); }
+                catch { /* ignore */ }
+            }
+        }
+    }
 
     static void Write(FeedbackItem item)
     {
