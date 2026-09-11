@@ -1,25 +1,52 @@
+# Build / publish outputs — ship via GitHub Releases only
+dist/
+*.exe
+*.msi
+*.pdb
+
+# .NET
 desktop/bin/
 desktop/obj/
 desktop-inbox/bin/
 desktop-inbox/obj/
+
+# Secrets / local-only
 .cursor/
-dist/*.old
-dist/*.old*
-dist/json/
-dist/unins000.*
-dist/StillSaneExile.exe.old*
-dist/StillSaneInbox.exe
-dist/StillSaneInbox.exe*
-dist/supabase.public.json
 desktop/supabase.json
 desktop/feedback-hook.txt
+
+# Local PoE / vendor copies (never ship)
 /dont repo/
 /poe2 builder/
 /poe2builder/
 /ffmpeg/
+/vendor/
+/assets/
+
+# Scratch / WIP art (keep art/rank-elemental + boss art)
+/Icon for level up/
+/tools/rank-cutout/
 /tools/ModItem.lua
 /tools/_poe2db*
 /tools/_ModsView.js
 /tools/_peek-mods.js
 /tools/_poe2db_cache/
-/_reliquary.xlsx
+art/rank-ai-test/
+art/rank-anim/
+art/rank-boxed/
+art/rank-fx/
+art/rank-stock/
+art/rank-*.png
+art/rank-*.webp
+!art/rank-elemental/
+!art/rank-elemental/**
+art/rank-elemental/*.before-*.png
+art/rank-elemental/lucent-soft.png
+art/rank-elemental/anim/prism-0*.png
+art/rank-elemental/anim/refract-0*.png
+art/rank-elemental/anim/ring-0*.png
+art/rank-elemental/anim/shell-0*.png
+
+# Large local spreadsheets
+_reliquary.xlsx
+*.xlsx
