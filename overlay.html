@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        display: block;
+        background: #120e0a;
+        overflow: hidden;
+        font-size: 17px;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #root {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        max-width: 100%;
+        overflow: hidden;
+      }
+      .price-overlay-card {
+        width: 420px;
+        max-width: 100%;
+        height: 100%;
+        max-height: 100%;
+        margin: 0;
+        overflow: hidden;
+        box-shadow: none;
+        cursor: grab;
+        display: flex;
+        flex-direction: column;
+      }
+      .price-overlay-card.has-offers {
+        width: 720px;
+        max-width: 100%;
+      }
+      .price-overlay-shell {
+        flex: 1 1 auto;
+        min-height: 0;
+        max-height: none;
+        position: relative;
+        isolation: isolate;
+        overflow: hidden;
+      }
+      .price-overlay-main {
+        flex: 0 0 420px;
+        width: 420px;
+        max-width: 420px;
+        height: 100%;
+        min-height: 0;
+        position: relative;
+        z-index: 2;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .price-overlay-side {
+        flex: 0 0 300px;
+        width: 300px;
+        max-width: 300px;
+        max-height: none;
+        position: relative;
+        z-index: 1;
+        overflow: hidden;
+      }
+      .price-overlay-card.has-offers .price-overlay-side {
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        height: auto;
+        max-height: none;
+      }
+      .price-overlay-side .price-overlay-offers {
+        flex: 1 1 auto;
+        min-height: 0;
+        max-height: none;
+        margin-top: 0;
+        justify-content: flex-start;
+        align-content: start;
+        overflow-x: hidden;
+        overflow-y: auto;
+      }
+      .price-overlay-body {
+        flex: 1 1 auto;
+        min-width: 0;
+        min-height: 0;
+        overflow-x: hidden;
+        overflow-y: auto;
+      }
+      .price-overlay-foot {
+        flex: none;
+      }
+      .price-overlay-card .item-tip-head {
+        grid-template-columns: 56px 1fr;
+      }
+      .item-tip-title .price-overlay-flags {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 14px;
+      }
+      .price-overlay-corrupt,
+      .price-overlay-raven,
+      .price-overlay-fractured,
+      .price-overlay-unid {
+        display: inline-flex;
+        align-items: center;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: color-mix(in srgb, var(--ink) 55%, var(--bg) 45%);
+        font-family: inherit;
+        font-size: 0.94rem;
+        font-weight: 600;
+        font-style: normal;
+        line-height: 1.3;
+        letter-spacing: 0.02em;
+        text-transform: none;
+        white-space: nowrap;
+        position: relative;
+        z-index: 4;
+        pointer-events: auto;
+      }
+      .price-overlay-corrupt.is-on {
+        color: #f05a4a;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+      .price-overlay-fractured.is-on {
+        color: #e85a4a;
+        font-weight: 700;
+        text-transform: uppercase;
+        cursor: default;
+      }
+      .price-overlay-raven.is-on {
+        color: #7aa2ff;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+      .price-overlay-unid.is-on {
+        color: color-mix(in srgb, var(--citadel) 35%, var(--ink) 65%);
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+      .price-overlay-flags,
+      .price-overlay-base-mode,
+      .price-overlay-dps-tag {
+        position: relative;
+        z-index: 4;
+        pointer-events: auto;
+      }
+      .price-overlay-bar {
+        flex: none;
+        cursor: grab;
+      }
+      .price-overlay-card.is-drag {
+        cursor: grabbing;
+      }
+      .price-overlay-card :is(button, a, input, .price-overlay-offers, .price-overlay-mods, .price-overlay-span, .price-overlay-prop) {
+        cursor: pointer;
+      }
+      .price-overlay-q-input {
+        cursor: text !important;
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      .price-overlay-offers,
+      .price-overlay-offer {
+        cursor: default;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const root = document.getElementById("root");
+      let drag = null;
+      let skipClick = false;
+
+      function camel(name) {
+        return String(name || "")
+          .replace(/^data-/, "")
+          .replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      }
+
+      function fit() {
+        const card = root.querySelector(".price-overlay-card") || root.firstElementChild;
+        if (!card || !window.chrome?.webview) return;
+        const prevH = card.style.height;
+        const prevMax = card.style.maxHeight;
+        card.style.height = "auto";
+        card.style.maxHeight = "none";
+        const bar = card.querySelector(".price-overlay-bar");
+        const bodyEl = card.querySelector(".price-overlay-body");
+        const foot = card.querySelector(".price-overlay-foot");
+        const barH = bar ? bar.offsetHeight : 0;
+        const bodyH = bodyEl ? bodyEl.scrollHeight : 0;
+        const footH = foot ? foot.offsetHeight : 0;
+        let h = Math.max(card.scrollHeight, barH + bodyH + footH);
+        const cs = getComputedStyle(card);
+        h += (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+        let w = card.classList.contains("has-offers") ? 720 : 420;
+        const extra = card.querySelector(".price-overlay-rate-card");
+        if (extra && getComputedStyle(extra).display !== "none") {
+          const r = card.getBoundingClientRect();
+          const er = extra.getBoundingClientRect();
+          w = Math.max(w, er.right - r.left);
+          h = Math.max(h, Math.ceil(er.bottom - r.top));
+        }
+        card.style.height = prevH;
+        card.style.maxHeight = prevMax;
+        const nextW = Math.max(280, Math.ceil(w) + 4);
+        const nextH = Math.max(90, Math.ceil(h) + 4);
+        if (nextW === lastFitW && nextH === lastFitH) return;
+        lastFitW = nextW;
+        lastFitH = nextH;
+        chrome.webview.postMessage({
+          type: "overlay-size",
+          w: nextW,
+          h: nextH,
+        });
+      }
+
+      function sameOverlayItem(a, b) {
+        if (!a || !b) return false;
+        const nameA = a.querySelector(".item-tip-name")?.textContent || "";
+        const nameB = b.querySelector(".item-tip-name")?.textContent || "";
+        if (!nameA || nameA !== nameB) return false;
+        const modsA = a.querySelector(".price-overlay-mods")?.innerHTML || "";
+        const modsB = b.querySelector(".price-overlay-mods")?.innerHTML || "";
+        return modsA === modsB;
+      }
+
+      function syncOverlayChild(oldParent, nextParent, sel, beforeSel) {
+        if (!oldParent || !nextParent) return;
+        const oldEl = oldParent.querySelector(sel);
+        const nextEl = nextParent.querySelector(sel);
+        if (nextEl && oldEl) {
+          if (oldEl.innerHTML !== nextEl.innerHTML || oldEl.className !== nextEl.className) oldEl.replaceWith(nextEl);
+        } else if (nextEl && !oldEl) {
+          const before = beforeSel ? oldParent.querySelector(beforeSel) : null;
+          if (before) before.before(nextEl);
+          else oldParent.appendChild(nextEl);
+        } else if (!nextEl && oldEl) oldEl.remove();
+      }
+
+      function patchOverlayQuote(oldCard, nextCard) {
+        oldCard.className = nextCard.className;
+        const shell = oldCard.querySelector(".price-overlay-shell");
+        if (!shell) return false;
+        const oldMain = oldCard.querySelector(".price-overlay-main");
+        const oldBody = oldCard.querySelector(".price-overlay-body");
+        const nextBody = nextCard.querySelector(".price-overlay-body");
+
+        const oldBar = oldMain?.querySelector(".price-overlay-bar") || oldCard.querySelector(".price-overlay-bar");
+        const nextBar = nextCard.querySelector(".price-overlay-main .price-overlay-bar") || nextCard.querySelector(".price-overlay-bar");
+        if (oldBar && nextBar && oldBar.innerHTML !== nextBar.innerHTML) oldBar.replaceWith(nextBar);
+        else if (nextBar && !oldBar && oldMain) oldMain.prepend(nextBar);
+
+        const oldHead = oldCard.querySelector(".item-tip-head");
+        const nextHead = nextCard.querySelector(".item-tip-head");
+        if (oldHead && nextHead && oldHead.innerHTML !== nextHead.innerHTML) oldHead.replaceWith(nextHead);
+
+        syncOverlayChild(oldBody, nextBody, ".price-overlay-meta", ".price-overlay-props");
+        syncOverlayChild(oldBody, nextBody, ".price-overlay-props", ".price-overlay-mods");
+
+        const oldSide = oldCard.querySelector(".price-overlay-side");
+        const nextSide = nextCard.querySelector(".price-overlay-side");
+        if (nextSide && oldSide) oldSide.replaceWith(nextSide);
+        else if (nextSide && !oldSide) shell.appendChild(nextSide);
+        else if (!nextSide && oldSide) oldSide.remove();
+
+        const oldFoot = oldCard.querySelector(".price-overlay-foot");
+        const nextFoot = nextCard.querySelector(".price-overlay-foot");
+        if (nextFoot && oldFoot) oldFoot.replaceWith(nextFoot);
+        else if (nextFoot && !oldFoot && oldMain) oldMain.appendChild(nextFoot);
+        else if (!nextFoot && oldFoot) oldFoot.remove();
+        return true;
+      }
+
+      let lastFitW = 0;
+      let lastFitH = 0;
+      document.addEventListener("mouseover", (event) => {
+        if (event.target.closest(".price-overlay-rate-wrap")) requestAnimationFrame(fit);
+      });
+      document.addEventListener("mouseout", (event) => {
+        const wrap = event.target.closest(".price-overlay-rate-wrap");
+        if (wrap && !wrap.contains(event.relatedTarget)) requestAnimationFrame(fit);
+      });
+
+      chrome.webview.addEventListener("message", (event) => {
+        let msg = event.data;
+        if (typeof msg === "string") {
+          try {
+            msg = JSON.parse(msg);
+          } catch {
+            return;
+          }
+        }
+        if (msg?.type === "paint") {
+          document.body.classList.toggle("click-away", !!msg.clickAway);
+          if (msg.vars) document.documentElement.style.cssText = msg.vars;
+          const html = msg.html || "";
+          const cur = root.querySelector(".price-overlay-card");
+          if (cur && html) {
+            const tmp = document.createElement("div");
+            tmp.innerHTML = html;
+            const next = tmp.querySelector(".price-overlay-card");
+            if (next && sameOverlayItem(cur, next) && patchOverlayQuote(cur, next)) {
+              lastFitW = 0;
+              lastFitH = 0;
+              fit();
+              requestAnimationFrame(fit);
+              return;
+            }
+          }
+          root.innerHTML = html;
+          lastFitW = 0;
+          lastFitH = 0;
+          fit();
+          requestAnimationFrame(fit);
+        }
+        if (msg?.type === "notice") {
+          document.body.classList.toggle("click-away", !!msg.clickAway);
+          if (msg.vars) document.documentElement.style.cssText = msg.vars;
+          const text = String(msg.text || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+          root.innerHTML =
+            '<article class="price-overlay-card item-tip-card"><div class="price-overlay-shell"><div class="price-overlay-main"><div class="price-overlay-bar"><div class="price-overlay-bar-left"><span class="price-overlay-rate is-empty" aria-hidden="true"></span><span class="price-overlay-league">Still Sane, Exile?</span></div><div class="price-overlay-bar-right"><button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button></div></div><div class="price-overlay-body"><div class="item-tip-descr">' +
+            text +
+            "</div></div></div></div></article>";
+          fit();
+          requestAnimationFrame(fit);
+        }
+        if (msg?.type === "rate") {
+          const el = root.querySelector("[data-overlay-trade-rate]");
+          if (!el) return;
+          el.textContent = String(msg.chip || "");
+          el.title = String(msg.title || "");
+          el.classList.toggle("is-wait", !!msg.wait);
+          el.classList.toggle("is-limited", !!msg.limited);
+        }
+      });
+
+      document.addEventListener("contextmenu", (event) => event.preventDefault());
+      document.addEventListener("selectstart", (event) => {
+        if (event.target.closest("input, textarea")) return;
+        event.preventDefault();
+      });
+      document.addEventListener("mousedown", (event) => {
+        if (event.detail > 1 && !event.target.closest("input, textarea")) event.preventDefault();
+      });
+
+      const overlayControlSel =
+        "button, a, input, textarea, select, .price-overlay-flags, .price-overlay-base-modes, .price-overlay-dps-tags, .price-overlay-offers, .price-overlay-mods, .price-overlay-span, .price-overlay-prop-quality, .price-overlay-prop-num, .price-overlay-q-edit, .price-overlay-rate-wrap";
+
+      document.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        if (event.target.closest(overlayControlSel)) {
+          if (event.target.closest("input, textarea, .price-overlay-q-edit, .price-overlay-prop-quality, .price-overlay-prop-num")) {
+            chrome.webview?.postMessage({ type: "overlay-activate" });
+          }
+          return;
+        }
+        const card = event.target.closest(".price-overlay-card");
+        if (!card || !window.chrome?.webview) return;
+        drag = { x: event.screenX, y: event.screenY, moved: false, id: event.pointerId };
+        card.classList.add("is-drag");
+        try {
+          document.body.setPointerCapture(event.pointerId);
+        } catch {
+          /* keep going */
+        }
+      });
+
+      document.addEventListener("pointermove", (event) => {
+        if (!drag || event.pointerId !== drag.id || !window.chrome?.webview) return;
+        const dx = event.screenX - drag.x;
+        const dy = event.screenY - drag.y;
+        if (!dx && !dy) return;
+        drag.x = event.screenX;
+        drag.y = event.screenY;
+        drag.moved = true;
+        chrome.webview.postMessage({ type: "overlay-drag", dx, dy });
+      });
+
+      function endDrag(event) {
+        if (!drag || (event && event.pointerId !== drag.id)) return;
+        if (drag.moved) skipClick = true;
+        root.querySelector(".price-overlay-card")?.classList.remove("is-drag");
+        drag = null;
+      }
+
+      document.addEventListener("pointerup", endDrag);
+      document.addEventListener("pointercancel", endDrag);
+
+      document.addEventListener(
+        "click",
+        (event) => {
+          if (!skipClick) return;
+          skipClick = false;
+          if (event.target.closest(overlayControlSel)) return;
+          event.preventDefault();
+          event.stopPropagation();
+        },
+        true
+      );
+
+      function paintLiveDps(card) {
+        const d = card?.dataset;
+        const baseAps = Number(d?.dpsAps);
+        if (!Number.isFinite(baseAps) || baseAps <= 0) return;
+        const itemQ = Number(d.dpsItemQ) || 0;
+        const q = Number.isFinite(Number(d.dpsShowQ)) ? Number(d.dpsShowQ) : 20;
+        let flatLo = 0;
+        let flatHi = 0;
+        let incr = 0;
+        let asIncr = 0;
+        let eleAdd = 0;
+        let hasEflat = false;
+        let hasPflat = false;
+        let hasPincr = false;
+        let hasAsincr = false;
+        const eleAddBy = { fire: 0, cold: 0, lightning: 0 };
+        for (const el of card.querySelectorAll("[data-dps-kind]")) {
+          const liveEl = el.querySelector("[data-roll-live]");
+          const extraEl = el.querySelector("[data-roll-extra]");
+          const a = liveEl ? Number(liveEl.textContent) : Number(el.dataset.dpsA);
+          const b = extraEl ? Number(extraEl.textContent) : Number(el.dataset.dpsB);
+          if (el.dataset.dpsKind === "pincr") {
+            hasPincr = true;
+            if (Number.isFinite(a)) incr += a;
+            continue;
+          }
+          if (el.dataset.dpsKind === "asincr") {
+            hasAsincr = true;
+            if (Number.isFinite(a)) asIncr += a;
+            continue;
+          }
+          if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+          if (el.dataset.dpsKind === "pflat") {
+            hasPflat = true;
+            flatLo += a;
+            flatHi += b;
+          } else if (el.dataset.dpsKind === "eflat") {
+            hasEflat = true;
+            const type = el.dataset.dpsEle;
+            eleAdd += (a + b) / 2;
+            if (type && eleAddBy[type] != null) eleAddBy[type] += (a + b) / 2;
+          }
+        }
+        const baseIncr = Number(d.dpsIncr) || 0;
+        const baseAs = Number(d.dpsAsIncr) || 0;
+        if (!hasPincr) incr = baseIncr;
+        if (!hasAsincr) asIncr = baseAs;
+        const as0 = 1 + baseAs / 100;
+        const as1 = 1 + asIncr / 100;
+        let aps = baseAps;
+        if (as0 > 0 && as0 !== as1) aps = Math.round((baseAps / as0) * as1 * 100) / 100;
+        const inc0 = 1 + baseIncr / 100;
+        const inc1 = 1 + incr / 100;
+        const more = 1 + q / 100;
+        const f0Lo = Number(d.dpsFlatLo) || 0;
+        const f0Hi = Number(d.dpsFlatHi) || 0;
+        function scaleDmg(n, toQ) {
+          if (itemQ === toQ) return n;
+          return (n / (1 + itemQ / 100)) * (1 + toQ / 100);
+        }
+        function at(shown, f0, f1) {
+          if (f0 === f1 && inc0 === inc1) return scaleDmg(shown, q);
+          const base = Math.max(0, shown / (1 + itemQ / 100) / inc0 - f0);
+          return (base + f1) * inc1 * more;
+        }
+        const physLo = Number(d.dpsPhysLo);
+        const physHi = Number(d.dpsPhysHi);
+        const phys = Number(d.dpsPhys);
+        let physAt = NaN;
+        if (Number.isFinite(physLo) && Number.isFinite(physHi) && physHi > 0) {
+          const useFlat = hasPflat;
+          physAt = (at(physLo, useFlat ? f0Lo : 0, useFlat ? flatLo : 0) + at(physHi, useFlat ? f0Hi : 0, useFlat ? flatHi : 0)) / 2;
+        } else if (Number.isFinite(phys) && phys > 0) {
+          if (hasPflat) {
+            physAt = (Math.max(0, phys / (1 + itemQ / 100) / inc0 - (f0Lo + f0Hi) / 2) + (flatLo + flatHi) / 2) * inc1 * more;
+          } else if (itemQ === q && inc0 === inc1) {
+            physAt = phys;
+          } else {
+            physAt = (Math.max(0, phys / (1 + itemQ / 100) / inc0 - (f0Lo + f0Hi) / 2) + (flatLo + flatHi) / 2) * inc1 * more;
+          }
+        }
+        const clipEle = Number(d.dpsEle);
+        const eleParts = [Number(d.dpsFire), Number(d.dpsCold), Number(d.dpsLightning)].filter((n) => Number.isFinite(n) && n > 0);
+        const eleFromParts = eleParts.length ? eleParts.reduce((a, b) => a + b, 0) : NaN;
+        const eleBase = Number(d.dpsEleAdd) || 0;
+        const eleClip = Number.isFinite(eleFromParts) && eleFromParts > 0 ? eleFromParts : clipEle;
+        const eleAt = Number.isFinite(eleClip) ? (hasEflat ? Math.max(0, eleClip - eleBase + eleAdd) : eleClip) : NaN;
+        const chaos = Number(d.dpsChaos);
+        const physUntouched = incr === baseIncr && asIncr === baseAs && (!hasPflat || (flatLo === f0Lo && flatHi === f0Hi));
+        const eflatUntouched = !hasEflat || Math.abs(eleAdd - eleBase) < 1e-9;
+        // Clip parenthetical DPS only when range/avg missing (game may hide APS precision).
+        const useClip = itemQ === q && physUntouched && eflatUntouched;
+        const clipPdps = Number(d.dpsPhysDps);
+        const clipEdps = Number(d.dpsEleDps);
+        const clipTdps = Number(d.dpsTotalDps);
+        let pdps = Number.isFinite(physAt) ? aps * physAt : NaN;
+        let edps = Number.isFinite(eleAt) ? aps * eleAt : NaN;
+        const cdps = Number.isFinite(chaos) ? aps * chaos : NaN;
+        if (!Number.isFinite(pdps) && useClip && Number.isFinite(clipPdps) && clipPdps > 0) pdps = clipPdps;
+        if (!Number.isFinite(edps) && useClip && Number.isFinite(clipEdps) && clipEdps > 0) edps = clipEdps;
+        let dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
+        if (!(dps > 0) && useClip && Number.isFinite(clipTdps) && clipTdps > 0) dps = clipTdps;
+        const show = (n) => (Math.round(n * 100 + Number.EPSILON) / 100).toFixed(2);
+        const pdpsEl = card.querySelector("[data-live-pdps]");
+        if (pdpsEl && Number.isFinite(pdps)) pdpsEl.textContent = show(pdps);
+        const edpsEl = card.querySelector("[data-live-edps]");
+        if (edpsEl && Number.isFinite(edps)) edpsEl.textContent = show(edps);
+        const dpsEl = card.querySelector("[data-live-dps]");
+        if (dpsEl && dps > 0) dpsEl.textContent = show(dps);
+        const typedEl = card.querySelector("[data-live-typed-dps]");
+        if (!typedEl) return;
+        const type = typedEl.getAttribute("data-live-typed-dps");
+        function partDps(name) {
+          const clip = Number(name === "fire" ? d.dpsFire : name === "cold" ? d.dpsCold : d.dpsLightning);
+          const was = Number(name === "fire" ? d.dpsFireAdd : name === "cold" ? d.dpsColdAdd : d.dpsLightningAdd) || 0;
+          if (!Number.isFinite(clip)) return NaN;
+          if (!hasEflat) return aps * clip;
+          return aps * Math.max(0, clip - was + eleAddBy[name]);
+        }
+        const typed = type === "physical" ? pdps : type === "any" ? edps : partDps(type);
+        if (Number.isFinite(typed) && typed > 0) typedEl.textContent = show(typed);
+      }
+
+      function sanitizeBox(t) {
+        const raw = String(t.value || "");
+        let next = raw;
+        if (t.dataset.spanDec) {
+          next = raw.replace(/[^\d.]/g, "");
+          const i = next.indexOf(".");
+          if (i >= 0) next = next.slice(0, i + 1) + next.slice(i + 1).replace(/\./g, "");
+        } else {
+          next = raw.replace(/\D/g, "");
+        }
+        if (next !== raw) t.value = next;
+      }
+
+      function paintSpan(t) {
+        const rid = String(t.dataset.spanRid || "");
+        const box = t.classList?.contains("price-overlay-q-input");
+        if (box) sanitizeBox(t);
+        const value = Number(t.value);
+        if (!Number.isFinite(value)) return;
+        if (rid === "quality" || rid === "ilvl" || rid === "runes") {
+          t.closest(".price-overlay-prop-num")?.classList.add("is-on");
+          return;
+        }
+        if (box) {
+          sanitizeBox(t);
+          t.closest(".price-overlay-prop-num")?.classList.add("is-on");
+          const wrap = t.closest(".price-overlay-mod-wrap");
+          if (wrap) {
+            wrap.classList.add("is-on");
+            for (const el of wrap.querySelectorAll('[data-roll-live="' + rid.replace(/"/g, "") + '"]')) {
+              if (!Number.isFinite(value)) continue;
+              const signed = el.dataset.signed === "1";
+              const mag = t.dataset.spanDec === "1" ? String(Math.round(Math.abs(value) * 10) / 10) : String(Math.round(Math.abs(value)));
+              el.textContent = signed ? (value < 0 ? "-" : "+") + mag : value < 0 ? "-" + mag : mag;
+            }
+          }
+          return;
+        }
+        const min = Number(t.min);
+        const max = Number(t.max);
+        const pct = Number.isFinite(min) && Number.isFinite(max) && max > min ? ((value - min) / (max - min)) * 100 : 0;
+        t.style.setProperty("--fill", String(pct));
+        const wrap = t.closest(".price-overlay-mod-wrap");
+        const host = wrap || t.closest(".price-overlay-charms");
+        if (!host) return;
+        const hybridRow = t.closest(".price-overlay-hybrid-row");
+        if (wrap) {
+          for (const row of wrap.querySelectorAll(".price-overlay-hybrid-row.is-sliding")) row.classList.remove("is-sliding");
+          if (hybridRow) hybridRow.classList.add("is-sliding");
+        }
+        const scope = hybridRow || wrap;
+        const step = t.step === "0.1" ? "0.1" : "1";
+        const shown = step === "0.1" ? String(Math.round(value * 10) / 10) : String(Math.round(value));
+        const u = Number.isFinite(min) && Number.isFinite(max) && max > min ? (value - min) / (max - min) : 0;
+        function parseTiers(spec) {
+          return String(spec || "")
+            .split(";")
+            .map((part) => {
+              const bits = part.split(",");
+              const a = Number(bits[0]);
+              const b = Number(bits[1]);
+              if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+              return { lo: Math.min(a, b), hi: Math.max(a, b) };
+            })
+            .filter(Boolean);
+        }
+        function posInTiers(parts, v) {
+          if (!parts.length || !Number.isFinite(v)) return null;
+          for (let i = 0; i < parts.length; i++) {
+            if (v + 0.01 >= parts[i].lo && v - 0.01 <= parts[i].hi) return { i, u: parts[i].hi > parts[i].lo ? (v - parts[i].lo) / (parts[i].hi - parts[i].lo) : 1 };
+          }
+          if (v > parts[0].hi) return { i: 0, u: 1 };
+          if (v < parts[parts.length - 1].lo) return { i: parts.length - 1, u: 0 };
+          return { i: parts.length - 1, u: 0 };
+        }
+        function showAt(n, lo, hi, signed) {
+          const mag =
+            String(lo).includes(".") || String(hi).includes(".")
+              ? String(Math.round(Math.abs(n) * 10) / 10)
+              : String(Math.round(Math.abs(n)));
+          if (signed) return (n < 0 ? "-" : "+") + mag;
+          return n < 0 ? "-" + mag : mag;
+        }
+        function atDiv(parts, pos) {
+          const n = parts.length;
+          if (!n || !Number.isFinite(pos)) return NaN;
+          const flat = parts.every((p) => !(p.hi > p.lo));
+          if (flat) {
+            const i = Math.min(n - 1, Math.max(0, Math.round(pos)));
+            return parts[i].lo;
+          }
+          let i;
+          let frac;
+          if (pos >= n) {
+            i = n - 1;
+            frac = 1;
+          } else if (pos <= 0) {
+            i = 0;
+            frac = 0;
+          } else {
+            i = Math.min(n - 1, Math.max(0, Math.ceil(pos) - 1));
+            frac = Math.min(1, Math.max(0, pos - i));
+          }
+          const part = parts[i];
+          if (frac <= 0) return part.lo;
+          if (frac >= 1) return part.hi;
+          if (String(part.lo).includes(".") || String(part.hi).includes(".")) return part.lo + frac * (part.hi - part.lo);
+          const span = part.hi - part.lo;
+          if (!(span > 0)) return part.lo;
+          const edge = 0.1;
+          if (frac <= edge) return part.lo;
+          if (frac >= 1 - edge) return part.hi;
+          return part.lo + Math.round(((frac - edge) / (1 - 2 * edge)) * span);
+        }
+        const driverTiers = parseTiers(t.dataset.spanTiers);
+        const divs = Number(t.dataset.spanDivs);
+        if (t.dataset.spanTierSnap === "1") {
+          const i = Math.min(Math.max(0, Math.round(value)), Math.max(0, driverTiers.length - 1));
+          const minParts = parseTiers(t.dataset.spanMinTiers);
+          const maxParts = parseTiers(t.dataset.spanMaxTiers);
+          const a = minParts[i] || minParts[0];
+          const b = maxParts[i] || driverTiers[i] || a;
+          function rng(p) {
+            if (!p) return "";
+            return p.hi > p.lo ? p.lo + "—" + p.hi : String(p.lo);
+          }
+          const eleRaw = String(t.dataset.spanEle || "Elemental");
+          const ele = eleRaw.charAt(0).toUpperCase() + eleRaw.slice(1);
+          const nTiers = Math.max(minParts.length, maxParts.length, driverTiers.length);
+          const tLabel = nTiers > 0 ? "T" + (nTiers - i) + " " : "";
+          const label = a && b ? tLabel + "Adds (" + rng(a) + ") to (" + rng(b) + ") " + ele + " Damage" : "";
+          for (const el of scope ? scope.querySelectorAll("[data-tier-snap-live]") : []) {
+            if (label) el.textContent = label;
+          }
+        }
+        for (const el of scope ? scope.querySelectorAll("[data-roll-live]") : []) {
+          const elo = Number(el.dataset.spanLo);
+          const ehi = Number(el.dataset.spanHi);
+          const lineTiers = parseTiers(el.dataset.spanTiers);
+          const signed = el.dataset.signed === "1";
+          let n = NaN;
+          if (divs > 1 && lineTiers.length) n = atDiv(lineTiers, value);
+          else {
+            const pos = posInTiers(driverTiers, value);
+            if (pos && lineTiers[pos.i]) n = lineTiers[pos.i].lo + pos.u * (lineTiers[pos.i].hi - lineTiers[pos.i].lo);
+            else if (ehi > elo) n = elo + u * (ehi - elo);
+          }
+          if (Number.isFinite(n)) el.textContent = showAt(n, elo, ehi, signed);
+          else if (el.getAttribute("data-roll-live") === rid) el.textContent = showAt(value, min, max, signed);
+        }
+        for (const el of scope ? scope.querySelectorAll("[data-roll-extra]") : []) {
+          const elo = Number(el.dataset.extraLo);
+          const ehi = Number(el.dataset.extraHi);
+          const extraTiers = parseTiers(el.dataset.spanTiers);
+          const signed = el.dataset.signed === "1";
+          let n = NaN;
+          if (divs > 1 && extraTiers.length) n = atDiv(extraTiers, value);
+          else {
+            const pos = posInTiers(driverTiers, value);
+            if (pos && extraTiers[pos.i]) n = extraTiers[pos.i].lo + pos.u * (extraTiers[pos.i].hi - extraTiers[pos.i].lo);
+            else if (ehi > elo) n = elo + u * (ehi - elo);
+          }
+          if (Number.isFinite(n)) el.textContent = showAt(n, elo, ehi, signed);
+        }
+        const em = host.querySelector("em");
+        if (em) em.textContent = shown;
+        const pill = wrap?.querySelector("[data-roll-tier]");
+        const t0 = Number(t.dataset.tier0);
+        const v0 = Number(t.dataset.value0);
+        const w = Number(t.dataset.tierW) || 1;
+        const base = String(pill?.dataset.pillBase || "").trim();
+        if (pill && t0 > 0 && base) {
+          let tier = Math.max(1, Math.round(t0 - (value - v0) / w));
+          const spec = String(t.dataset.spanTiers || "");
+          if (spec) {
+            const parts = spec.split(";").map((part) => {
+              const bits = part.split(",");
+              const a = Number(bits[0]);
+              const b = Number(bits[1]);
+              return { lo: Math.min(a, b), hi: Math.max(a, b) };
+            }).filter((p) => Number.isFinite(p.lo) && Number.isFinite(p.hi));
+            if (parts.length) {
+              const n = parts.length;
+              const flat = t.dataset.spanFlat === "1" || parts.every((p) => !(p.hi > p.lo));
+              if (divs > 1 && value >= 0 && (flat ? value <= n - 1 + 0.001 : value <= n + 0.001)) {
+                const i = flat
+                  ? Math.min(n - 1, Math.max(0, Math.round(value)))
+                  : value <= 0
+                    ? 0
+                    : value >= n
+                      ? n - 1
+                      : Math.min(n - 1, Math.max(0, Math.ceil(value) - 1));
+                tier = n - i;
+              } else {
+                tier = n;
+                for (let i = 0; i < n; i++) {
+                  if (value + 0.01 >= parts[i].lo && value - 0.01 <= parts[i].hi) {
+                    tier = n - i;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+          const hyb = /hyb/i.test(pill.textContent) ? " · hyb" : "";
+          pill.textContent = base + " T" + tier + hyb;
+        }
+        const card = t.closest(".price-overlay-card");
+        if (card) paintLiveDps(card);
+      }
+
+      function postSpan(t, live) {
+        if (!window.chrome?.webview) return;
+        if (live && String(t.value || "").trim() === "") return;
+        const payload = { type: "overlay-click" };
+        for (const a of t.attributes) {
+          if (a.name.startsWith("data-")) payload[camel(a.name)] = a.value;
+        }
+        payload.spanMin = t.value;
+        payload.spanLive = live;
+        chrome.webview.postMessage(payload);
+      }
+
+      document.addEventListener("input", (event) => {
+        const t = event.target.closest("[data-span-rid]");
+        if (!t) return;
+        if (t.classList?.contains("price-overlay-q-input")) {
+          sanitizeBox(t);
+          t.closest(".price-overlay-prop-num")?.classList.add("is-on");
+          return;
+        }
+        paintSpan(t);
+        postSpan(t, true);
+      });
+
+      document.addEventListener("change", (event) => {
+        const t = event.target.closest("[data-span-rid]");
+        if (!t) return;
+        paintSpan(t);
+        postSpan(t, false);
+      });
+
+      document.addEventListener(
+        "wheel",
+        (event) => {
+          const t = event.target.closest(".price-overlay-q-input, input[data-span-rid='quality']");
+          if (!t) return;
+          event.preventDefault();
+          const min = Number(t.min);
+          const max = Number(t.max);
+          const cur = Number(t.value);
+          if (!Number.isFinite(cur)) return;
+          const step = t.dataset.spanDec ? 0.1 : 1;
+          const next = Math.min(
+            Number.isFinite(max) ? max : cur + step,
+            Math.max(Number.isFinite(min) ? min : cur - step, Math.round((cur + (event.deltaY < 0 ? step : -step)) * 100) / 100)
+          );
+          if (next === cur) return;
+          t.value = String(next);
+          paintSpan(t);
+          postSpan(t, true);
+        },
+        { passive: false }
+      );
+
+      document.addEventListener("click", (event) => {
+        if (event.target.closest("[data-span-rid]")) return;
+        const step = event.target.closest("[data-q-step]");
+        if (step && window.chrome?.webview) {
+          event.preventDefault();
+          const input = step.parentElement?.querySelector("[data-span-rid]");
+          const delta = Number(step.dataset.qStep);
+          if (input && Number.isFinite(delta)) {
+            const min = Number(input.min);
+            const max = Number(input.max);
+            const cur = Number(input.value);
+            const base = Number.isFinite(cur) ? cur : 0;
+            const next = Math.min(
+              Number.isFinite(max) ? max : base + delta,
+              Math.max(Number.isFinite(min) ? min : base + delta, base + delta)
+            );
+            input.value = String(next);
+            paintSpan(input);
+          }
+          const payload = { type: "overlay-click" };
+          for (const a of step.attributes) {
+            if (a.name.startsWith("data-")) payload[camel(a.name)] = a.value;
+          }
+          chrome.webview.postMessage(payload);
+          return;
+        }
+        const t = event.target.closest(
+          "[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-dps-type],[data-pick-search],[data-pick-base],[data-pick-have],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-runes],[data-pick-runes-toggle],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
+        );
+        if (!t || !window.chrome?.webview) return;
+        event.preventDefault();
+        const payload = { type: "overlay-click" };
+        for (const a of t.attributes) {
+          if (a.name.startsWith("data-")) payload[camel(a.name)] = a.value;
+        }
+        chrome.webview.postMessage(payload);
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.target.closest(".price-overlay-q-input")) {
+          if (event.key === "Escape") return;
+          if (event.key === "Enter") {
+            event.target.blur();
+            return;
+          }
+          if (event.key.length === 1 && !/[0-9]/.test(event.key) && !(event.target.dataset.spanDec && event.key === ".") && !event.ctrlKey && !event.metaKey && !event.altKey) {
+            event.preventDefault();
+          }
+          return;
+        }
+        if (event.key === "Escape" && window.chrome?.webview) {
+          chrome.webview.postMessage({ type: "overlay-click", closeInspect: "" });
+        }
+      });
+    </script>
+  </body>
+</html>

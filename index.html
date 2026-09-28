@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Still Sane, Exile?</title>
+    <link rel="icon" href="still-sane-sigil.png" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="win-chrome">
+      <div class="win-drag" data-win-drag title="Still Sane, Exile?">
+        <img class="sigil tiny" src="still-sane-sigil.png" alt="" />
+        <strong>Still Sane, Exile?</strong>
+      </div>
+      <div class="win-btns">
+        <button type="button" class="win-btn" data-win-min aria-label="Minimize"><img src="art/window-minimize.png" alt="" draggable="false" /></button>
+        <button type="button" class="win-btn" data-win-max aria-label="Maximize"><img src="art/window-maximize.png" alt="" draggable="false" /></button>
+        <button type="button" class="win-btn win-close" data-title-quit aria-label="Close"><img src="art/window-close.png" alt="" draggable="false" /></button>
+      </div>
+    </div>
+    <aside class="app-menu" id="app-menu">
+      <nav class="menu-nav" aria-label="Menu">
+        <button class="menu-link is-active" data-view="dash" type="button">
+          <span class="nav-symbol" aria-hidden="true">◈</span>
+          <span class="menu-link-title">Dashboard</span>
+        </button>
+        <button class="menu-link" data-view="econ" type="button">
+          <span class="nav-symbol" aria-hidden="true">↗</span>
+          <span class="menu-link-title">Economy</span>
+        </button>
+        <button class="menu-link" data-view="guides" type="button">
+          <span class="nav-symbol" aria-hidden="true">▤</span>
+          <span class="menu-link-title">Tools &amp; Wiki</span>
+        </button>
+        <button class="menu-link" data-view="settings" type="button">
+          <span class="nav-symbol" aria-hidden="true">⚙</span>
+          <span class="menu-link-title">Settings</span>
+        </button>
+      </nav>
+      <div class="menu-tools">
+        <p class="menu-label">Data</p>
+        <button class="menu-link quiet" id="export-btn" type="button">
+          <span class="menu-link-title">Export</span>
+          <span class="menu-link-note"></span>
+        </button>
+        <button class="menu-link quiet" id="import-btn" type="button">
+          <span class="menu-link-title">Import</span>
+          <span class="menu-link-note"></span>
+        </button>
+        <button class="menu-link quiet" data-title-quit type="button">
+          <span class="menu-link-title">Exit</span>
+        </button>
+      </div>
+    </aside>
+
+    <div class="shell">
+    <div class="bg-glow"></div>
+    <div class="app">
+      <header class="top">
+        <div class="top-actions">
+          <label class="boss-picker" id="boss-picker">
+            <span>Current boss</span>
+            <select id="farm-boss" aria-label="Current boss"></select>
+          </label>
+          <label class="league-field">
+            <span>League</span>
+            <select id="league-input">
+              <option value="Forbidden Rites">Forbidden Rites</option>
+            </select>
+          </label>
+          <div class="rate-pop" id="rate-pop">
+            <div class="rate-pop-row">
+              <button class="rate-pop-btn" id="rate-pop-btn" type="button" aria-describedby="rate-pop-card">Rates</button>
+            </div>
+            <div class="rate-pop-card" id="rate-pop-card" role="tooltip"></div>
+          </div>
+          <div class="price-clock rate-clock" id="rate-clock" role="status" title="PoE 2 trade: searches used of the limit, then the window resets.">
+            <span id="rate-clock-label">Rate limiting</span>
+            <strong id="rate-clock-time">0 of 1 · resets 5s</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="stats" id="stats"></section>
+
+      <section class="toolbar" id="boss-toolbar">
+        <input id="search" type="search" aria-label="Search bosses or uniques" placeholder="Search bosses or uniques…" />
+        <div class="filters" id="filters"></div>
+      </section>
+
+      <main id="main"></main>
+    </div>
+    </div>
+
+    <dialog id="boss-dialog" class="sheet">
+      <div id="boss-dialog-body"></div>
+    </dialog>
+
+    <dialog id="log-dialog" class="sheet">
+      <div id="log-dialog-body"></div>
+    </dialog>
+
+    <input id="import-file" type="file" accept="application/json" hidden />
+    <div id="toast" class="toast" hidden></div>
+    <div id="price-overlay" class="price-overlay" hidden></div>
+    <div id="item-tip" class="item-tip" hidden></div>
+
+    <script src="bosses.js"></script>
+    <script src="guides.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
