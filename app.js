@@ -2783,7 +2783,7 @@ function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
     const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
     const text = stripAdvancedRanges(parseAffixStrings(raw));
     if (!isTradeableRoll(text, kind, roll)) continue;
-    const tradeKind = roll?.fractured ? "fractured" : kind;
+    const tradeKind = roll?.fractured && extra.fractured !== false ? "fractured" : kind;
     const hit = findTradeStat(index, text, tradeKind, { preferLocal: localModApplies(foldTradeMatcher(text), extra) });
     if (!hit?.id) continue;
     const inverted = invertedTradeRoll(raw);
@@ -5361,6 +5361,15 @@ function wantsRavenTouched(drop) {
   return !!(drop?.ravenTouched && drop.pickRaven !== false);
 }
 
+function isFracturedDrop(drop) {
+  return !!(drop && !Array.isArray(drop) && (drop.fractured || (drop.rolls || []).some((roll) => roll?.fractured)));
+}
+
+function searchFractured(drop) {
+  if (!isFracturedDrop(drop)) return undefined;
+  return drop.pickFractured !== false;
+}
+
 function searchCorrupted(drop) {
   if (typeof drop?.corrupted !== "boolean") return undefined;
   if (typeof drop.pickCorrupt === "boolean") return drop.pickCorrupt;
@@ -6100,6 +6109,16 @@ function handleOverlayClick(msg) {
     paintPriceOverlay();
     return;
   }
+  if (msg.pickFractured) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickFractured);
+    if (!drop) return;
+    drop.pickFractured = searchFractured(drop) === false;
+    drop.quoteTried = false;
+    delete drop.quote;
+    if (log?.id) save();
+    paintPriceOverlay();
+    return;
+  }
   if (msg.pickRunes != null) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
     setDropRunePick(log, drop, msg.pickRunes);
@@ -6814,14 +6833,15 @@ function overlayRavenHtml(log, drop) {
   return `<button type="button" class="price-overlay-raven${on ? " is-on" : ""}" data-pick-raven="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${on ? "Raven-Touched" : "Not Raven-Touched"}</button>`;
 }
 
-function overlayFracturedHtml(drop) {
-  if (!drop?.fractured && !(drop?.rolls || []).some((roll) => roll?.fractured)) return "";
-  return `<span class="price-overlay-fractured is-on">Fractured</span>`;
+function overlayFracturedHtml(log, drop) {
+  if (!isFracturedDrop(drop)) return "";
+  const on = searchFractured(drop) !== false;
+  return `<button type="button" class="price-overlay-fractured${on ? " is-on" : ""}" data-pick-fractured="${esc(drop.id)}" data-pick-log="${esc(log.id)}" title="${on ? "Searching fractured mods" : "Searching as regular mods"}">${on ? "Fractured" : "Not fractured"}</button>`;
 }
 
 function overlayFlagsHtml(log, drop) {
   const raven = overlayRavenHtml(log, drop);
-  const fractured = overlayFracturedHtml(drop);
+  const fractured = overlayFracturedHtml(log, drop);
   const corrupt = overlayCorruptHtml(log, drop);
   const unid = overlayUnidHtml(log, drop);
   if (!raven && !fractured && !corrupt && !unid) return "";
@@ -8080,7 +8100,7 @@ async function tradeSiteUrl(drop) {
   try {
     const index = await ensureTradeStats();
     const picked = pickedRolls(drop).filter((roll) => !isTabletUsesRoll(roll.text));
-    filters = mergeTabletUseFilter(drop, index, mapRollsToTradeFilters(picked, index, true, { props: drop.props, className: drop.className })).concat(pickedPropFilters(drop));
+    filters = mergeTabletUseFilter(drop, index, mapRollsToTradeFilters(picked, index, true, { props: drop.props, className: drop.className, fractured: searchFractured(drop) })).concat(pickedPropFilters(drop));
   } catch {
     filters = [];
   }
@@ -8736,10 +8756,12 @@ function rollChipsHtml(drop, logId) {
       ? `<button type="button" class="roll-chip is-flag is-raven${drop.pickRaven !== false ? " is-on" : ""}" data-pick-raven="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${drop.pickRaven !== false ? "Searching Raven-Touched" : "Not searching Raven-Touched"}">${drop.pickRaven !== false ? "Raven-Touched" : "Not Raven-Touched"}</button>`
       : `<span class="roll-chip is-flag is-raven is-on">Raven-Touched</span>`
     : "";
-  const fracturedFlag =
-    drop && !Array.isArray(drop) && (drop.fractured || (drop.rolls || []).some((roll) => roll?.fractured))
-      ? `<span class="roll-chip is-flag is-fractured is-on">Fractured</span>`
-      : "";
+  const fracturedOn = searchFractured(drop) !== false;
+  const fracturedFlag = isFracturedDrop(drop)
+    ? canPick
+      ? `<button type="button" class="roll-chip is-flag is-fractured${fracturedOn ? " is-on" : ""}" data-pick-fractured="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${fracturedOn ? "Searching fractured mods" : "Searching as regular mods"}">${fracturedOn ? "Fractured" : "Not fractured"}</button>`
+      : `<span class="roll-chip is-flag is-fractured is-on">Fractured</span>`
+    : "";
   const unidFlag = drop && !Array.isArray(drop) && drop.unidentified
     ? canPick
       ? `<button type="button" class="roll-chip is-flag is-unid${searchUnidentified(drop) !== false ? " is-on" : ""}" data-pick-unid="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${searchUnidentified(drop) !== false ? "Searching unidentified" : "Searching identified"}">${searchUnidentified(drop) !== false ? "Unidentified" : "Identified"}</button>`
@@ -8813,7 +8835,7 @@ async function quoteRolledDrop(log, drop, force = false) {
     } else {
       const index = await ensureTradeStats();
       const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
-      const mappedMods = mapRollsToTradeFilters(pickedMods, index, true, { props: drop.props, className: drop.className });
+      const mappedMods = mapRollsToTradeFilters(pickedMods, index, true, { props: drop.props, className: drop.className, fractured: searchFractured(drop) });
       const filters = mergeTabletUseFilter(drop, index, mappedMods);
       if (pickedMods.length && mappedMods.length < pickedMods.length) {
         const skipped = pickedMods.length - mappedMods.length;
@@ -10614,6 +10636,20 @@ function onClick(event) {
     const { log, drop } = overlayLogDrop(pickRaven.dataset.pickLog, pickRaven.dataset.pickRaven);
     if (!drop) return;
     drop.pickRaven = drop.pickRaven === false;
+    drop.quoteTried = false;
+    delete drop.quote;
+    if (log?.id) save();
+    if (ui.inspect) paintPriceOverlay();
+    else render();
+    return;
+  }
+  const pickFractured = event.target.closest("[data-pick-fractured]");
+  if (pickFractured) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickFractured.dataset.pickLog, pickFractured.dataset.pickFractured);
+    if (!drop) return;
+    drop.pickFractured = searchFractured(drop) === false;
     drop.quoteTried = false;
     delete drop.quote;
     if (log?.id) save();

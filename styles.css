@@ -4260,8 +4260,6 @@ button.roll-chip:hover {
   font-weight: 700;
   font-style: normal;
   text-transform: uppercase;
-  cursor: default;
-  pointer-events: none;
 }
 
 .price-overlay-raven.is-on {
@@ -4281,6 +4279,10 @@ button.roll-chip:hover {
   color: #f05a4a;
   border-color: #f05a4a;
   background: color-mix(in srgb, #f05a4a 16%, transparent);
+}
+
+.roll-chip.is-flag.is-fractured:not(.is-on) {
+  color: var(--muted);
 }
 
 .price-overlay-identify {

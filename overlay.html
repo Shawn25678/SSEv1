@@ -139,7 +139,6 @@
         color: #e85a4a;
         font-weight: 700;
         text-transform: uppercase;
-        cursor: default;
       }
       .price-overlay-raven.is-on {
         color: #7aa2ff;
@@ -832,7 +831,7 @@
           return;
         }
         const t = event.target.closest(
-          "[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-dps-type],[data-pick-search],[data-pick-base],[data-pick-have],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-runes],[data-pick-runes-toggle],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
+          "[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-dps-type],[data-pick-search],[data-pick-base],[data-pick-have],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-fractured],[data-pick-runes],[data-pick-runes-toggle],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
         );
         if (!t || !window.chrome?.webview) return;
         event.preventDefault();
