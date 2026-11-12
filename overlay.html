@@ -161,7 +161,7 @@
         width: 120px;
       }
       .price-overlay-corrupt.is-on {
-        color: #f05a4a;
+        color: #ff0000;
         font-weight: 600;
         text-transform: none;
       }
@@ -191,8 +191,9 @@
         flex: none;
         cursor: grab;
       }
-      .price-overlay-card.is-drag {
-        cursor: grabbing;
+      .price-overlay-card.is-drag,
+      .price-overlay-card.is-drag * {
+        cursor: grabbing !important;
       }
       .price-overlay-card :is(button, a, input, .price-overlay-offers, .price-overlay-mods, .price-overlay-span, .price-overlay-prop) {
         cursor: pointer;
@@ -213,7 +214,7 @@
     <script>
       const root = document.getElementById("root");
       let drag = null;
-      let skipClick = false;
+      let skipClick = 0;
       let sizedItem = "";
       let itemHeight = 0;
       let itemContentScale = 1;
@@ -247,9 +248,10 @@
         const bar = card.querySelector(".price-overlay-bar");
         const foot = card.querySelector(".price-overlay-foot");
         const barH = bar ? bar.offsetHeight : 0;
+        const bannerH = card.querySelector('.is-item-banner-head')?.offsetHeight || 0;
         const bodyH = bodyEl ? bodyEl.scrollHeight : 0;
         const footH = foot ? foot.offsetHeight : 0;
-        let h = Math.max(card.scrollHeight, barH + bodyH + footH) + 20;
+        let h = Math.max(card.scrollHeight, bannerH + barH + bodyH + footH) + 20;
         const cs = getComputedStyle(card);
         h += (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
         let w = card.classList.contains("has-offers") ? 766 : 466;
@@ -271,10 +273,11 @@
           || card.querySelector(".item-tip-name")?.textContent || "";
         if (!itemKey || itemKey !== sizedItem || !itemHeight) {
           sizedItem = itemKey;
-          // Keep toolbar controls at full size. Scale only item content on tall items.
-          const fixedH = barH + footH + 24;
-          itemContentScale = Math.min(1, Math.max(1, availableHeight - fixedH) / Math.max(1, h - barH - footH));
-          itemHeight = Math.min(availableHeight, Math.max(90, Math.ceil(fixedH + (h - barH - footH) * itemContentScale)));
+          // Keep the frame and toolbar full width. Scale only item content on tall items.
+          const fixedH = bannerH + barH + footH + 24;
+          const contentH = h - bannerH - barH - footH;
+          itemContentScale = Math.min(1, Math.max(1, availableHeight - fixedH) / Math.max(1, contentH));
+          itemHeight = Math.min(availableHeight, Math.max(90, Math.ceil(fixedH + contentH * itemContentScale)));
         }
         if (bodyEl) bodyEl.style.zoom = String(itemContentScale);
         // Freeze size and scale for the item, including Fractured/Raven toggles.
@@ -291,6 +294,9 @@
 
       function sameOverlayItem(a, b) {
         if (!a || !b) return false;
+        const itemA = a.querySelector("[data-pick-drop]")?.dataset.pickDrop;
+        const itemB = b.querySelector("[data-pick-drop]")?.dataset.pickDrop;
+        if (itemA !== itemB) return false;
         const nameA = a.querySelector(".item-tip-name")?.textContent || "";
         const nameB = b.querySelector(".item-tip-name")?.textContent || "";
         if (!nameA || nameA !== nameB) return false;
@@ -325,12 +331,20 @@
         if (oldBar && nextBar && oldBar.innerHTML !== nextBar.innerHTML) oldBar.replaceWith(nextBar);
         else if (nextBar && !oldBar && oldMain) oldMain.prepend(nextBar);
 
-        const oldHead = oldCard.querySelector(".item-tip-head");
-        const nextHead = nextCard.querySelector(".item-tip-head");
-        if (oldHead && nextHead && oldHead.innerHTML !== nextHead.innerHTML) oldHead.replaceWith(nextHead);
+        const oldHeads = oldCard.querySelectorAll(".item-tip-head");
+        const nextHeads = nextCard.querySelectorAll(".item-tip-head");
+        if (oldHeads.length !== nextHeads.length) return false;
+        oldHeads.forEach((oldHead, i) => {
+          const nextHead = nextHeads[i];
+          if (oldHead.innerHTML !== nextHead.innerHTML) oldHead.replaceWith(nextHead);
+        });
 
-        syncOverlayChild(oldBody, nextBody, ".price-overlay-meta", ".price-overlay-props");
-        syncOverlayChild(oldBody, nextBody, ".price-overlay-props", ".price-overlay-mods");
+        if (oldBody?.querySelector(".price-overlay-properties") || nextBody?.querySelector(".price-overlay-properties")) {
+          syncOverlayChild(oldBody, nextBody, ".price-overlay-properties", ".price-overlay-mods");
+        } else {
+          syncOverlayChild(oldBody, nextBody, ".price-overlay-meta", ".price-overlay-props");
+          syncOverlayChild(oldBody, nextBody, ".price-overlay-props", ".price-overlay-mods");
+        }
 
         const oldSide = oldCard.querySelector(".price-overlay-side");
         const nextSide = nextCard.querySelector(".price-overlay-side");
@@ -374,6 +388,7 @@
           if (msg.vars) document.documentElement.style.cssText = msg.vars;
           const html = msg.html || "";
           const cur = root.querySelector(".price-overlay-card");
+          const oldResState = cur?.querySelector('[data-res-state]')?.dataset.resState;
           const previousScroll = cur?.querySelector(".price-overlay-body")?.scrollTop || 0;
           const previousModsScroll = cur?.querySelector(".price-overlay-mods")?.scrollTop || 0;
           let retainScroll = false;
@@ -404,6 +419,14 @@
             if (mods) mods.scrollTop = previousModsScroll;
           };
           restoreModsScroll();
+          const newResState = root.querySelector('[data-res-state]')?.dataset.resState;
+          const newMods = root.querySelector('.price-overlay-mods');
+          if (retainScroll && oldResState != null && newResState?.split(':')[0] !== oldResState.split(':')[0] && newMods &&
+              !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            // Keep layout measurements stable while the native window fits the item.
+            newMods.animate([{ opacity: 0.85 }, { opacity: 1 }],
+              { duration: 140, easing: 'ease-out' });
+          }
           requestAnimationFrame(() => { fit(); restoreModsScroll(); });
         }
         if (msg?.type === "notice") {
@@ -442,11 +465,14 @@
       });
 
       const overlayControlSel =
-        "button, a, input, textarea, select, [data-pick-text], .price-overlay-mods, .price-overlay-flags, .price-overlay-base-modes, .price-overlay-dps-tags, .price-overlay-offers, .price-overlay-prop-quality, .price-overlay-prop-num, .price-overlay-q-edit, .price-overlay-rate-wrap";
+        "button, a, input, textarea, select, [data-res-action], [data-pick-text], .price-overlay-mods, .price-overlay-flags, .price-overlay-base-modes, .price-overlay-dps-tags, .price-overlay-offers, .price-overlay-prop-quality, .price-overlay-prop-num, .price-overlay-q-edit, .price-overlay-rate-wrap";
 
       document.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
-        if (event.target.closest(overlayControlSel)) {
+        endDrag();
+        const headerControl = event.target.closest(".item-tip-head") &&
+          !event.target.closest("input, textarea, select, a");
+        if (event.target.closest(overlayControlSel) && !headerControl) {
           if (event.target.closest("input, textarea, .price-overlay-q-edit, .price-overlay-prop-quality, .price-overlay-prop-num")) {
             chrome.webview?.postMessage({ type: "overlay-activate" });
           }
@@ -454,50 +480,60 @@
         }
         const card = event.target.closest(".price-overlay-card");
         if (!card || !window.chrome?.webview) return;
-        drag = { startX: event.screenX, startY: event.screenY, x: event.screenX, y: event.screenY, moved: false, id: event.pointerId };
+        const capture = event.target.closest("button") || document.body;
+        drag = { startX: event.screenX, startY: event.screenY, clientX: event.clientX,
+          clientY: event.clientY, viewportWidth: innerWidth, moved: false, id: event.pointerId, capture };
+        try { capture.setPointerCapture(event.pointerId); } catch { /* Pointer may already have ended. */ }
       });
 
       document.addEventListener("pointermove", (event) => {
         if (!drag || event.pointerId !== drag.id || !window.chrome?.webview) return;
+        if (!(event.buttons & 1)) { endDrag(event); return; }
         if (!drag.moved && Math.hypot(event.screenX - drag.startX, event.screenY - drag.startY) < 8) return;
-        const dx = event.screenX - drag.x;
-        const dy = event.screenY - drag.y;
-        if (!dx && !dy) return;
-        drag.x = event.screenX;
-        drag.y = event.screenY;
-        if (!drag.moved) {
-          root.querySelector(".price-overlay-card")?.classList.add("is-drag");
-          try {
-            document.body.setPointerCapture(event.pointerId);
-          } catch {
-            /* keep going */
-          }
-        }
+        const start = !drag.moved;
+        if (start) root.querySelector(".price-overlay-card")?.classList.add("is-drag");
         drag.moved = true;
-        chrome.webview.postMessage({ type: "overlay-drag", dx, dy });
+        chrome.webview.postMessage({ type: "overlay-drag", start,
+          clientX: drag.clientX, clientY: drag.clientY, viewportWidth: drag.viewportWidth });
       });
 
       function endDrag(event) {
-        if (!drag || (event && event.pointerId !== drag.id)) return;
-        if (drag.moved) skipClick = true;
-        root.querySelector(".price-overlay-card")?.classList.remove("is-drag");
+        if (!drag || (event?.pointerId != null && event.pointerId !== drag.id)) return;
+        const previous = drag;
         drag = null;
+        skipClick = previous.moved && event?.type === "pointerup" ? performance.now() + 250 : 0;
+        root.querySelector(".price-overlay-card")?.classList.remove("is-drag");
+        try {
+          if (previous.capture.hasPointerCapture(previous.id)) previous.capture.releasePointerCapture(previous.id);
+        } catch { /* The originating control may have been replaced by a repaint. */ }
+        if (previous.moved) chrome.webview?.postMessage({ type: "overlay-drag-end" });
       }
 
       document.addEventListener("pointerup", endDrag);
       document.addEventListener("pointercancel", endDrag);
+      document.addEventListener("lostpointercapture", endDrag);
+      window.addEventListener("blur", () => endDrag());
 
       document.addEventListener(
         "click",
         (event) => {
-          if (!skipClick) return;
-          skipClick = false;
+          const suppress = skipClick > performance.now();
+          skipClick = 0;
+          if (!suppress) return;
           event.preventDefault();
           event.stopPropagation();
           event.stopImmediatePropagation();
         },
         true
       );
+
+      function paintDpsValue(el, value) {
+        if (!el || !Number.isFinite(value)) return;
+        const shown = (Math.round(value * 100 + Number.EPSILON) / 100).toFixed(2);
+        if (el.tagName === "INPUT") {
+          if (el.dataset.liveDefault === "1" && document.activeElement !== el) el.value = shown;
+        } else el.textContent = shown;
+      }
 
       function paintLiveDps(card) {
         const d = card?.dataset;
@@ -601,13 +637,12 @@
         if (!Number.isFinite(edps) && useClip && Number.isFinite(clipEdps) && clipEdps > 0) edps = clipEdps;
         let dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
         if (!(dps > 0) && useClip && Number.isFinite(clipTdps) && clipTdps > 0) dps = clipTdps;
-        const show = (n) => (Math.round(n * 100 + Number.EPSILON) / 100).toFixed(2);
         const pdpsEl = card.querySelector("[data-live-pdps]");
-        if (pdpsEl && Number.isFinite(pdps)) pdpsEl.textContent = show(pdps);
+        paintDpsValue(pdpsEl, pdps);
         const edpsEl = card.querySelector("[data-live-edps]");
-        if (edpsEl && Number.isFinite(edps)) edpsEl.textContent = show(edps);
+        paintDpsValue(edpsEl, edps);
         const dpsEl = card.querySelector("[data-live-dps]");
-        if (dpsEl && dps > 0) dpsEl.textContent = show(dps);
+        if (dps > 0) paintDpsValue(dpsEl, dps);
         const typedEl = card.querySelector("[data-live-typed-dps]");
         if (!typedEl) return;
         const type = typedEl.getAttribute("data-live-typed-dps");
@@ -619,10 +654,22 @@
           return aps * Math.max(0, clip - was + eleAddBy[name]);
         }
         const typed = type === "physical" ? pdps : type === "any" ? edps : partDps(type);
-        if (Number.isFinite(typed) && typed > 0) typedEl.textContent = show(typed);
+        if (typed > 0) paintDpsValue(typedEl, typed);
+      }
+
+      function paintSocketPreview(input) {
+        const preview = input.closest(".is-sockets")?.querySelector(".price-overlay-socket-preview");
+        if (!preview) return;
+        const sockets = [...preview.querySelectorAll(".price-overlay-socket")];
+        const count = Math.max(0, Math.min(sockets.length, Math.round(Number(input.value) || 0)));
+        sockets.forEach((socket, i) => { socket.hidden = i >= count; });
+        const none = preview.querySelector(".price-overlay-no-sockets");
+        if (none) none.hidden = count > 0;
+        preview.setAttribute("aria-label", `${count} sockets`);
       }
 
       function sanitizeBox(t) {
+        if (t.dataset.liveDefault != null) t.dataset.liveDefault = "0";
         const raw = String(t.value || "");
         let next = raw;
         if (t.dataset.spanDec) {
@@ -632,15 +679,9 @@
         } else {
           next = raw.replace(/\D/g, "");
         }
+        if (t.dataset.spanRid === "total-resistance" && raw.trimStart().startsWith("-")) next = "-" + next;
         if (next !== raw) t.value = next;
-        if (t.dataset.spanRid === "runes") {
-          const preview = t.closest(".is-sockets")?.querySelector(".price-overlay-socket-preview");
-          const count = Math.max(0, Math.min(6, Math.round(Number(t.value) || 0)));
-          if (preview) {
-            [...preview.children].forEach((socket, i) => { socket.hidden = i >= count; });
-            preview.title = count + " sockets";
-          }
-        }
+        if (t.dataset.spanRid === "runes") paintSocketPreview(t);
       }
 
       function paintSpan(t) {
@@ -868,7 +909,20 @@
       document.addEventListener("change", (event) => {
         const t = event.target.closest("[data-span-rid]");
         if (!t) return;
+        if (t.dataset.spanRid === "runes") return;
+        if (t.classList.contains("price-overlay-q-input") && t.value.trim() === "") return;
         paintSpan(t);
+        postSpan(t, false);
+      });
+
+      document.addEventListener("focusout", (event) => {
+        const t = event.target.closest('.price-overlay-q-input[data-span-rid]');
+        if (!t) return;
+        if (t.dataset.spanRid !== "runes" && t.value.trim() !== "") return;
+        if (t.value.trim() !== "") {
+          t.value = String(Math.max(0, Math.min(6, Math.round(Number(t.value) || 0))));
+          paintSpan(t);
+        }
         postSpan(t, false);
       });
 
@@ -922,7 +976,7 @@
           return;
         }
         const t = event.target.closest(
-          "[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-dps-type],[data-pick-search],[data-pick-base],[data-pick-have],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-fractured],[data-pick-runes],[data-pick-runes-toggle],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
+          "[data-res-action],[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-dps-type],[data-pick-search],[data-pick-base],[data-pick-rarity],[data-pick-have],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-fractured],[data-pick-runes],[data-pick-runes-toggle],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
         );
         if (!t || !window.chrome?.webview) return;
         event.preventDefault();
@@ -940,7 +994,7 @@
             event.target.blur();
             return;
           }
-          if (event.key.length === 1 && !/[0-9]/.test(event.key) && !(event.target.dataset.spanDec && event.key === ".") && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          if (event.key.length === 1 && !/[0-9]/.test(event.key) && !(event.target.dataset.spanDec && event.key === ".") && !(event.target.dataset.spanRid === "total-resistance" && event.key === "-") && !event.ctrlKey && !event.metaKey && !event.altKey) {
             event.preventDefault();
           }
           return;

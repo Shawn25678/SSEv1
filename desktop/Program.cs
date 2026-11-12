@@ -1105,7 +1105,7 @@ sealed class TrackerWindow : Form
         }
     }
 
-    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool exchange = false, string havePref = "", bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null)
+    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool exchange = false, string havePref = "", bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null, string rarityFilter = "")
     {
         name = (name ?? "").Trim();
         league = (league ?? "").Trim();
@@ -1140,6 +1140,7 @@ sealed class TrackerWindow : Form
         extra += runeSockets is int rs ? ":r" + rs : "";
         extra += ":st:" + (useExchange ? TradeExchangeLive : TradeLive);
         extra += ":" + rarity.ToLowerInvariant();
+        extra += ":rf:" + rarityFilter.ToLowerInvariant();
         extra += typeLine.Length > 0 ? ":t:" + typeLine.ToLowerInvariant() : "";
         extra += exactBase ? "" : ":xb0";
         extra += ilvlMin is int il && il > 0 ? ":il" + il : "";
@@ -1164,7 +1165,7 @@ sealed class TrackerWindow : Form
             if (useExchange)
                 payload = await LookupExchangeListing(league, name, typeLine, havePref);
             if (payload is null || (payload.Json is null && !payload.RateLimited && !payload.Forbidden))
-                payload = await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin);
+                payload = await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin, rarityFilter);
             if (payload is { RateLimited: true })
             {
                 Reply(id, false, 429, "{\"error\":\"rate limited\"}");
@@ -1524,7 +1525,7 @@ sealed class TrackerWindow : Form
         return n;
     }
 
-    static IEnumerable<string> RolledQueries(string name, string typeLine, IReadOnlyList<RollFilter> filters, bool relax = false, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null)
+    static IEnumerable<string> RolledQueries(string name, string typeLine, IReadOnlyList<RollFilter> filters, bool relax = false, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null, string rarityFilter = "")
     {
         JsonArray FilterArray()
         {
@@ -1604,7 +1605,7 @@ sealed class TrackerWindow : Form
             else if (rarity.Equals("Rare", StringComparison.OrdinalIgnoreCase) ||
                      rarity.Equals("Magic", StringComparison.OrdinalIgnoreCase) ||
                      rarity.Equals("Normal", StringComparison.OrdinalIgnoreCase))
-                bag["rarity"] = new JsonObject { ["option"] = "nonunique" };
+                bag["rarity"] = new JsonObject { ["option"] = rarityFilter is "normal" or "magic" or "rare" ? rarityFilter : "nonunique" };
             if (ilvlMin is int il && il > 0)
                 bag["ilvl"] = new JsonObject { ["min"] = il };
             if (qualityMin is int ql && ql > 0)
@@ -1669,7 +1670,7 @@ sealed class TrackerWindow : Form
             yield return Body(false, false).ToJsonString();
     }
 
-    async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null)
+    async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null, string rarityFilter = "")
     {
         var searchUri = "https://www.pathofexile.com/api/trade2/search/poe2/" + Uri.EscapeDataString(league);
         string? lastId = null;
@@ -1711,7 +1712,7 @@ sealed class TrackerWindow : Form
             }
         }
 
-        foreach (var body in RolledQueries(name, typeLine, filters, false, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin))
+        foreach (var body in RolledQueries(name, typeLine, filters, false, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin, rarityFilter))
         {
             var got = await Run(body);
             if (got is { RateLimited: true } or { Forbidden: true }) return got;
@@ -1720,7 +1721,7 @@ sealed class TrackerWindow : Form
         }
         if (filters.Count > 0 && lastTotal == 0)
         {
-            foreach (var body in RolledQueries(name, typeLine, filters, true, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin).Take(1))
+            foreach (var body in RolledQueries(name, typeLine, filters, true, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin, rarityFilter).Take(1))
             {
                 var got = await Run(body);
                 if (got is { RateLimited: true } or { Forbidden: true }) return got;
@@ -2493,6 +2494,8 @@ sealed class TrackerWindow : Form
                     else if (corrEl.ValueKind == JsonValueKind.False) corrupted = false;
                 }
                 var rarity = root.TryGetProperty("rarity", out var rarityEl) ? rarityEl.GetString() ?? "" : "";
+                var rarityFilter = root.TryGetProperty("rarityFilter", out var rfEl) && rfEl.ValueKind == JsonValueKind.String ? rfEl.GetString() ?? "" : "";
+                if (rarityFilter is not ("normal" or "magic" or "rare")) rarityFilter = "";
                 var category = root.TryGetProperty("category", out var catEl) ? catEl.GetString() ?? "" : "";
                 int? runeSockets = null;
                 if (root.TryGetProperty("runeSockets", out var runeEl) && JsonInt(runeEl, out var runeN) && runeN is >= 0 and <= 6)
@@ -2516,7 +2519,7 @@ sealed class TrackerWindow : Form
                 int? qualityMin = null;
                 if (root.TryGetProperty("qualityMin", out var qualEl) && JsonInt(qualEl, out var qualN) && qualN is > 0 and <= 100)
                     qualityMin = qualN;
-                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets, category, ravenTouched, exchange, havePref, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin);
+                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets, category, ravenTouched, exchange, havePref, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin, rarityFilter);
                 return;
             }
             if (type == "backup-info")
@@ -3558,6 +3561,8 @@ sealed class PriceOverlayForm : Form
     readonly Func<Rectangle> _gameBounds;
     Rectangle _placementArea;
     double _contentZoom = 1;
+    bool _pointerDragging;
+    Point _pointerDragOffset;
     bool _ready;
     bool _allowActivate;
     bool _clickAway;
@@ -3819,6 +3824,7 @@ sealed class PriceOverlayForm : Form
 
     public void HideOverlay()
     {
+        _pointerDragging = false;
         _showGen++;
         _pendingKind = null;
         _allowActivate = false;
@@ -3950,6 +3956,28 @@ sealed class PriceOverlayForm : Form
         SetWindowPos(Handle, HwndTopmost, x, y, 0, 0, SwpNoActivate | SwpNoSize);
     }
 
+    void BeginPointerDrag(double clientX, double clientY, double viewportWidth)
+    {
+        _pointerDragging = false;
+        if (!Visible || !double.IsFinite(clientX) || !double.IsFinite(clientY) ||
+            !double.IsFinite(viewportWidth) || viewportWidth <= 0) return;
+        // Relate browser CSS coordinates to this WebView's actual client pixels.
+        // The OS cursor then drives absolute placement without summed/scaled deltas.
+        var scale = _web.ClientSize.Width / viewportWidth;
+        if (!double.IsFinite(scale) || scale <= 0) return;
+        var origin = _web.PointToScreen(Point.Empty);
+        _pointerDragOffset = new Point(
+            origin.X - Left + (int)Math.Round(Math.Clamp(clientX * scale, 0, _web.ClientSize.Width)),
+            origin.Y - Top + (int)Math.Round(Math.Clamp(clientY * scale, 0, _web.ClientSize.Height)));
+        _pointerDragging = true;
+    }
+
+    void MovePointerDrag(Point cursor)
+    {
+        if (!_pointerDragging) return;
+        MoveBy(cursor.X - _pointerDragOffset.X - Left, cursor.Y - _pointerDragOffset.Y - Top);
+    }
+
     void OnMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         try
@@ -3966,12 +3994,23 @@ sealed class PriceOverlayForm : Form
             }
             if (type == "overlay-drag")
             {
-                var dx = doc.RootElement.TryGetProperty("dx", out var dxEl) && dxEl.ValueKind == JsonValueKind.Number ? (int)Math.Round(dxEl.GetDouble()) : 0;
-                var dy = doc.RootElement.TryGetProperty("dy", out var dyEl) && dyEl.ValueKind == JsonValueKind.Number ? (int)Math.Round(dyEl.GetDouble()) : 0;
-                if (dx == 0 && dy == 0) return;
-                void Move() => MoveBy(dx, dy);
+                var start = doc.RootElement.TryGetProperty("start", out var startEl) && startEl.ValueKind == JsonValueKind.True;
+                double Number(string key) => doc.RootElement.TryGetProperty(key, out var el) && el.ValueKind == JsonValueKind.Number ? el.GetDouble() : double.NaN;
+                var x = Number("clientX");
+                var y = Number("clientY");
+                var width = Number("viewportWidth");
+                void Move()
+                {
+                    if (start) BeginPointerDrag(x, y, width);
+                    if (GetCursorPos(out var cursor)) MovePointerDrag(new Point(cursor.X, cursor.Y));
+                }
                 if (InvokeRequired) BeginInvoke(Move);
                 else Move();
+                return;
+            }
+            if (type == "overlay-drag-end")
+            {
+                _pointerDragging = false;
                 return;
             }
             if (type == "overlay-activate")

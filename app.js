@@ -1,6 +1,53 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.39";
+const APP_VERSION = "1.0.40";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
+
+// Cultivated/Vaal unique identities, including copies without a Vaal property line.
+// Source: https://poe2db.tw/us/Unique_item#CultivatedUniques (2026-11-12).
+const VAAL_HEADER_UNIQUES = new Set([
+  "Apep's Supremacy", "Atziri's Acuity", "Atziri's Contempt", "Atziri's Disdain",
+  "Atziri's Rule", "Atziri's Splendour", "Atziri's Step", "Belly of the Beast",
+  "Constricting Command", "Corona of the Red Sun", "Coward's Legacy", "Demon Stitcher",
+  "Doryani's Prototype", "Flesh Crucible", "Glimpse of Chaos", "Greed's Embrace",
+  "Idle Hands", "Mahuxotl's Machination", "Mask of the Stitched Demon", "Quatl's Molt",
+  "Rathpith Globe", "Redflare Conduit", "Rise of the Phoenix", "Saitha's Spear",
+  "Serpent's Egg", "Serpent's Lesson", "Shackles of the Wretched", "Soul Mantle",
+  "Soul Tether", "Tetzlapokal's Desire", "The Adorned", "The Covenant", "The Flesh Poppet",
+  "Zerphi's Genesis", "Zerphi's Serape",
+].map((name) => name.toLowerCase()));
+
+// Local PoE 2 base names for Magic item identity; no trade requests are needed.
+// Source: https://repoe-fork.github.io/poe2/base_items.json (2026-11-12).
+const MAGIC_ITEM_BASES = {
+  "accessory.amulet": ["Runemastered Veridical Chain","Pearlescent Amulet","Bloodstone Amulet","Distorted Amulet","Tenebrous Amulet","Penumbra Amulet","Veridical Chain","Crimson Amulet","Portent Amulet","Stellar Amulet","Twisted Amulet","Absent Amulet","Corona Amulet","Lament Amulet","Amber Amulet","Azure Amulet","Gloam Amulet","Lapis Amulet","Lunar Amulet","Solar Amulet","Dusk Amulet","Gold Amulet","Jade Amulet"],
+  "accessory.belt": ["Runemastered Heavy Belt","Invoking Belt","Stalking Belt","Forking Belt","Rawhide Belt","Utility Belt","Double Belt","Ornate Belt","Heavy Belt","Linen Belt","Plate Belt","Sinew Belt","Fine Belt","Long Belt","Mail Belt","Wide Belt"],
+  "accessory.ring": ["Refined Breach Ring","Abyssal Signet","Biostatic Ring","Prismatic Ring","Tenebrous Ring","Two-Stone Ring","Amethyst Ring","Grasping Ring","Mnemonic Ring","Penumbra Ring","Sapphire Ring","Emerald Ring","Kinetic Ring","Oneiric Ring","Vitalic Ring","Breach Ring","Lazuli Ring","Gloam Ring","Pearl Ring","Topaz Ring","Unset Ring","Dusk Ring","Gold Ring","Iron Ring","Ruby Ring","Ring"],
+  "armour.boots": ["Runeforged Shamanistic Leggings","Runeforged Blacksteel Sabatons","Runemastered Feathered Sandals","Runemastered Lizardscale Boots","Runeforged Dunerunner Sandals","Runeforged Leatherplate Boots","Runeforged Luxurious Slippers","Runeforged Serpentscale Boots","Runemastered Ancient Leggings","Runemastered Covered Sabatons","Runemastered Secured Leggings","Runemastered Stacked Sabatons","Runeforged Dragonscale Boots","Runeforged Elaborate Sandals","Runeforged Embroidered Boots","Runeforged Faithful Leggings","Runeforged Feathered Sandals","Runeforged Fortress Sabatons","Runeforged Lizardscale Boots","Runeforged Reefsteel Greaves","Runeforged Sandsworn Sandals","Runemastered Braced Sabatons","Runemastered Lattice Sandals","Runemastered Trimmed Greaves","Runemastered Wrapped Sandals","Runeforged Apostle Leggings","Runeforged Bastion Sabatons","Runeforged Covered Sabatons","Runeforged Cryptic Leggings","Runeforged Daggerfoot Shoes","Runeforged Elegant Slippers","Runeforged Flexile Sabatons","Runeforged Monument Greaves","Runeforged Secured Leggings","Runeforged Stacked Sabatons","Runeforged Steelpoint Shoes","Runeforged Tasalian Greaves","Runeforged Treerunner Shoes","Runeforged Veteran Sabatons","Runeforged Warlock Leggings","Runemastered Bronze Greaves","Runemastered Embossed Boots","Runemastered Steeltoe Boots","Runemastered Threaded Shoes","Runeforged Braced Sabatons","Runeforged Bulwark Greaves","Runeforged Drakeskin Boots","Runeforged Elegant Greaves","Runeforged Lattice Sandals","Runeforged Padded Leggings","Runeforged Quickslip Shoes","Runeforged Sekhema Sandals","Runeforged Studded Sandals","Runeforged Totemic Greaves","Runeforged Trimmed Greaves","Runeforged Weaver Leggings","Runeforged Wrapped Sandals","Runemastered Cinched Boots","Runemastered Grand Cuisses","Runemastered Hunting Shoes","Runemastered Mail Sabatons","Runemastered Rough Greaves","Runemastered Silk Slippers","Runemastered Stone Greaves","Runemastered Straw Sandals","Runeforged Bronze Greaves","Runeforged Carved Greaves","Runeforged Embossed Boots","Runeforged Noble Sabatons","Runeforged Ornate Greaves","Runeforged Pious Leggings","Runeforged Steeltoe Boots","Runeforged Threaded Shoes","Runeforged Wanderer Shoes","Runemastered Iron Greaves","Runemastered Velour Shoes","Runeforged Bold Sabatons","Runeforged Bound Sandals","Runeforged Cavalry Boots","Runeforged Charmed Shoes","Runeforged Cinched Boots","Runeforged Gilt Leggings","Runeforged Grand Cuisses","Runeforged Hunting Shoes","Runeforged Mail Sabatons","Runeforged Pelt Leggings","Runeforged Rawhide Boots","Runeforged Rough Greaves","Runeforged Silk Slippers","Runeforged Stone Greaves","Runeforged Straw Sandals","Runeforged Studded Boots","Runemastered Laced Boots","Runeforged Bladed Shoes","Runeforged Flared Boots","Runeforged Flax Sandals","Runeforged Frayed Shoes","Runeforged Iron Greaves","Runeforged Vaal Greaves","Runeforged Velour Shoes","Runeforged Laced Boots","Shamanistic Leggings","Blacksteel Sabatons","Silverbuckled Shoes","Soldiering Sabatons","Dunerunner Sandals","Leatherplate Boots","Luxurious Slippers","Serpentscale Boots","Adherent Leggings","Dragonscale Boots","Elaborate Sandals","Embroidered Boots","Faithful Leggings","Feathered Sandals","Fortress Sabatons","Goldwork Sabatons","Lionheart Greaves","Lizardscale Boots","Reefsteel Greaves","Sandsworn Sandals","Ancient Leggings","Apostle Leggings","Bastion Sabatons","Covered Sabatons","Cryptic Leggings","Daggerfoot Shoes","Elegant Slippers","Flexile Sabatons","Monument Greaves","Secured Leggings","Stacked Sabatons","Steelpoint Shoes","Tasalian Greaves","Treerunner Shoes","Veteran Sabatons","Warlock Leggings","Bangled Sandals","Braced Sabatons","Bulwark Greaves","Drakeskin Boots","Elegant Greaves","Lattice Sandals","Padded Leggings","Quickslip Shoes","Sekhema Sandals","Studded Sandals","Totemic Greaves","Trimmed Greaves","Weaver Leggings","Wrapped Sandals","Bound Leggings","Bronze Greaves","Carved Greaves","Embossed Boots","Golden Greaves","Noble Sabatons","Ornate Greaves","Pious Leggings","Plated Greaves","Steeltoe Boots","Threaded Shoes","Wanderer Shoes","Wayfarer Shoes","Bold Sabatons","Bound Sandals","Cavalry Boots","Charmed Shoes","Cinched Boots","Gilt Leggings","Grand Cuisses","Hunting Shoes","Laced Sandals","Mail Sabatons","Pelt Leggings","Rawhide Boots","Rough Greaves","Silk Slippers","Stone Greaves","Straw Sandals","Studded Boots","Bladed Shoes","Flared Boots","Flax Sandals","Frayed Shoes","Iron Greaves","Vaal Greaves","Velour Shoes","Bound Boots","Laced Boots","Sleek Boots"],
+  "armour.buckler": ["Runemastered Venerable Defender","Runeforged Bladeguard Buckler","Runeforged Spikeward Buckler","Runemastered Leather Buckler","Runeforged Gutspike Buckler","Runeforged Jingling Buckler","Runeforged Laminate Buckler","Runemastered Ornate Buckler","Runemastered Plated Buckler","Runemastered Ridged Buckler","Runemastered Spiked Buckler","Runemastered Wooden Buckler","Runeforged Ancient Buckler","Runeforged Leather Buckler","Runemastered Array Buckler","Runeforged Desert Buckler","Runeforged Ornate Buckler","Runeforged Plated Buckler","Runeforged Ridged Buckler","Runeforged Ringed Buckler","Runeforged Spiked Buckler","Runeforged Wooden Buckler","Runemastered Iron Buckler","Runeforged Aegis Buckler","Runeforged Array Buckler","Runeforged Edged Buckler","Runeforged Pearl Buckler","Runeforged Iron Buckler","Bladeguard Buckler","Spikeward Buckler","Gutspike Buckler","Jingling Buckler","Laminate Buckler","Ancient Buckler","Leather Buckler","Painted Buckler","Coiled Buckler","Desert Buckler","Ornate Buckler","Plated Buckler","Ridged Buckler","Ringed Buckler","Spiked Buckler","Wooden Buckler","Aegis Buckler","Array Buckler","Edged Buckler","Pearl Buckler","Iron Buckler","Oak Buckler"],
+  "armour.chest": ["Runemastered Sacrificial Regalia","Runemastered Ironclad Vestments","Runemastered Sacrificial Mantle","Runeforged Sacrificial Regalia","Runemastered Elementalist Robe","Runemastered Pilgrim Vestments","Runemastered Revered Vestments","Runemastered Serpentscale Coat","Runeforged Adherent's Raiment","Runeforged Clandestine Jacket","Runeforged Heartcarver Mantle","Runeforged Ironclad Vestments","Runeforged Sacrificial Mantle","Runeforged Trailblazer Armour","Runemastered Cleric Vestments","Runemastered Enlightened Robe","Runemastered Gilded Vestments","Runemastered Maraketh Cuirass","Runemastered Scalper's Jacket","Runeforged Chieftain Cuirass","Runeforged Elementalist Robe","Runeforged Falconer's Jacket","Runeforged Feathered Raiment","Runeforged Pilgrim Vestments","Runeforged Revered Vestments","Runeforged Serpentscale Coat","Runeforged Swiftstalker Coat","Runemastered Explorer Armour","Runemastered Ornate Ringmail","Runemastered Pathfinder Coat","Runemastered Primal Markings","Runemastered Tideseer Mantle","Runemastered Vagabond Armour","Runemastered Wayfarer Jacket","Runeforged Champion Cuirass","Runeforged Cleric Vestments","Runeforged Enlightened Robe","Runeforged Gilded Vestments","Runeforged Gladiator Armour","Runeforged Hardleather Coat","Runeforged Itinerant Jacket","Runeforged Juggernaut Plate","Runeforged Lizardscale Coat","Runeforged Maraketh Cuirass","Runeforged Occultist Mantle","Runeforged Plated Vestments","Runeforged Sacramental Robe","Runeforged Scalper's Jacket","Runeforged Scoundrel Jacket","Runeforged Venerated Mantle","Runeforged Zenith Vestments","Runemastered Ancestral Mail","Runemastered Anchorite Garb","Runemastered Exquisite Vest","Runemastered Feathered Robe","Runemastered Mail Vestments","Runemastered Plated Raiment","Runemastered Rusted Cuirass","Runemastered Votive Raiment","Runefather's Grasping Mail","Runeforged Abyssal Cuirass","Runeforged Ceremonial Robe","Runeforged Colosseum Plate","Runeforged Conjurer Mantle","Runeforged Conqueror Plate","Runeforged Explorer Armour","Runeforged Flowing Raiment","Runeforged Hawker's Jacket","Runeforged Pathfinder Coat","Runeforged Primal Markings","Runeforged Seastorm Mantle","Runeforged Slipstrike Vest","Runeforged Soldier Cuirass","Runeforged Tideseer Mantle","Runeforged Tournament Mail","Runeforged Vagabond Armour","Runeforged Warlord Cuirass","Runeforged Wayfarer Jacket","Runeforged Wolfskin Mantle","Runemastered Armoured Vest","Runemastered Assassin Garb","Runemastered Corvus Mantle","Runemastered Grand Regalia","Runemastered Grasping Mail","Runemastered Havoc Raiment","Runemastered Heroic Armour","Runemastered Knight Armour","Runemastered Marabout Garb","Runemastered Rhoahide Coat","Runemastered Shaman Mantle","Runemastered Shrouded Vest","Runemastered Smuggler Coat","Runemastered Tattered Robe","Runeforged Ancestral Mail","Runeforged Anchorite Garb","Runeforged Arcane Raiment","Runeforged Dastard Armour","Runeforged Exquisite Vest","Runeforged Feathered Robe","Runeforged Glorious Plate","Runeforged Mail Vestments","Runeforged Mystic Raiment","Runeforged Plated Raiment","Runeforged Rambler Jacket","Runeforged Rusted Cuirass","Runeforged Torment Jacket","Runeforged Utzaal Cuirass","Runeforged Votive Raiment","Runeforged Wyrmscale Coat","Runemastered Ancient Mail","Runemastered Bone Raiment","Runemastered Cloaked Mail","Runemastered Hexer's Robe","Runemastered Iron Cuirass","Runemastered Keth Raiment","Runemastered Leather Vest","Runemastered Quilted Vest","Runemastered Raider Plate","Runemastered Rogue Armour","Runemastered Scout's Vest","Runemastered Strider Vest","Runemastered Studded Vest","Runemastered Vaal Cuirass","Runemastered Waxed Jacket","Runeforged Armoured Vest","Runeforged Assassin Garb","Runeforged Corvus Mantle","Runeforged Elegant Plate","Runeforged Grand Regalia","Runeforged Grasping Mail","Runeforged Havoc Raiment","Runeforged Heroic Armour","Runeforged Imperial Robe","Runeforged Knight Armour","Runeforged Lamellar Mail","Runeforged Marabout Garb","Runeforged Monastic Garb","Runeforged Rhoahide Coat","Runeforged River Raiment","Runeforged Shaman Mantle","Runeforged Shrouded Mail","Runeforged Shrouded Vest","Runeforged Slayer Armour","Runeforged Smuggler Coat","Runeforged Stone Cuirass","Runeforged Tattered Robe","Runemastered Hermit Garb","Runemastered Steel Plate","Runeforged Ascetic Garb","Runeforged Austere Garb","Runeforged Bone Raiment","Runeforged Cloaked Mail","Runeforged Corsair Coat","Runeforged Corsair Vest","Runeforged Death Mantle","Runeforged Hatungo Garb","Runeforged Hexer's Robe","Runeforged Iron Cuirass","Runeforged Keth Raiment","Runeforged Layered Vest","Runeforged Leather Vest","Runeforged Mantled Mail","Runeforged Ornate Plate","Runeforged Quilted Vest","Runeforged Raider Plate","Runeforged Rogue Armour","Runeforged Scout's Vest","Runeforged Sleek Jacket","Runeforged Strider Vest","Runeforged Studded Vest","Runeforged Vaal Cuirass","Runeforged Waxed Jacket","Runemastered Altar Robe","Runemastered Chain Mail","Runemastered Full Plate","Runemastered Scale Mail","Runeforged Devout Garb","Runeforged Golden Mail","Runeforged Heavy Plate","Runeforged Hermit Garb","Runeforged Pelt Mantle","Runeforged Runner Vest","Runeforged Steel Plate","Runemastered Silk Robe","Runeforged Altar Robe","Runeforged Chain Mail","Runeforged Death Mail","Runeforged Full Plate","Runeforged Scale Mail","Runeforged Thane Mail","Runeforged Fur Plate","Runeforged Mail Coat","Runeforged Silk Robe","Runeforged Vile Robe","Runemastered Garment","Cursespeaker's Robe","Sacrificial Regalia","Adherent's Raiment","Clandestine Jacket","Heartcarver Mantle","Ironclad Vestments","Runeforged Garment","Sacrificial Mantle","Trailblazer Armour","Chieftain Cuirass","Elementalist Robe","Falconer's Jacket","Feathered Raiment","Pilgrim Vestments","Revered Vestments","Sandsworn Cuirass","Serpentscale Coat","Swiftstalker Coat","Templar Vestments","Champion Cuirass","Cleric Vestments","Enlightened Robe","Gilded Vestments","Gladiator Armour","Hardleather Coat","Itinerant Jacket","Juggernaut Plate","Lizardscale Coat","Maraketh Cuirass","Occultist Mantle","Plated Vestments","Sacramental Robe","Scalper's Jacket","Scoundrel Armour","Scoundrel Jacket","Venerated Mantle","Zenith Vestments","Abyssal Cuirass","Barbarian Plate","Bearskin Mantle","Ceremonial Robe","Chain Vestments","Colosseum Plate","Conjurer Mantle","Conqueror Plate","Evangelist Garb","Explorer Armour","Flowing Raiment","Hawker's Jacket","Ornate Ringmail","Pathfinder Coat","Primal Markings","Seastorm Mantle","Slipstrike Vest","Soldier Cuirass","Tideseer Mantle","Tournament Mail","Vagabond Armour","Wanderer Armour","Warlord Cuirass","Wayfarer Jacket","Wolfskin Mantle","Ancestral Mail","Anchorite Garb","Arcane Raiment","Dastard Armour","Exquisite Vest","Feathered Robe","Glorious Plate","Luxurious Robe","Mail Vestments","Mystic Raiment","Patchwork Vest","Plated Raiment","Rambler Jacket","Rugged Cuirass","Rusted Cuirass","Torment Jacket","Utzaal Cuirass","Votive Raiment","Wyrmscale Coat","Armoured Vest","Assassin Garb","Corvus Mantle","Elegant Plate","Grand Regalia","Grasping Mail","Havoc Raiment","Heroic Armour","Imperial Robe","Knight Armour","Lamellar Mail","Marabout Garb","Monastic Garb","Rhoahide Coat","River Raiment","Shaman Mantle","Shrouded Mail","Shrouded Vest","Slayer Armour","Smuggler Coat","Stone Cuirass","Tattered Robe","Ancient Mail","Ascetic Garb","Austere Garb","Bone Raiment","Cloaked Mail","Corsair Coat","Corsair Vest","Death Mantle","Golden Plate","Hatungo Garb","Hexer's Robe","Hunting Coat","Iron Cuirass","Keth Raiment","Layered Vest","Leather Vest","Mantled Mail","Oiled Jacket","Ornate Plate","Quilted Vest","Raider Plate","Rogue Armour","Scout's Vest","Sleek Jacket","Strider Vest","Studded Vest","Vaal Cuirass","Waxed Jacket","Devout Garb","Golden Mail","Heavy Plate","Hermit Garb","Pelt Mantle","Riding Coat","Runner Vest","Steel Plate","Altar Robe","Avian Robe","Chain Mail","Death Mail","Full Plate","Scale Mail","Thane Mail","Fur Plate","Mail Coat","Ring Mail","Silk Robe","Vile Robe","Garment"],
+  "armour.focus": ["Runemastered Engraved Focus","Runemastered Crystal Focus","Runeforged Engraved Focus","Runeforged Hallowed Focus","Runeforged Tasalian Focus","Runemastered Antler Focus","Runemastered Plumed Focus","Runemastered Voodoo Focus","Runeforged Arrayed Focus","Runeforged Attuned Focus","Runeforged Crystal Focus","Runeforged Cultist Focus","Runeforged Druidic Focus","Runeforged Elegant Focus","Runeforged Leyline Focus","Runemastered Tonal Focus","Runemastered Woven Focus","Runeforged Antler Focus","Runeforged Plumed Focus","Runeforged Sacred Focus","Runeforged Voodoo Focus","Runemastered Twig Focus","Runeforged Magus Focus","Runeforged Runed Focus","Runeforged Tonal Focus","Runeforged Whorl Focus","Runeforged Woven Focus","Runeforged Twig Focus","Engraved Focus","Hallowed Focus","Jingling Focus","Staghorn Focus","Tasalian Focus","Arrayed Focus","Attuned Focus","Crystal Focus","Cultist Focus","Druidic Focus","Elegant Focus","Leyline Focus","Antler Focus","Plumed Focus","Sacred Focus","Voodoo Focus","Wreath Focus","Magus Focus","Runed Focus","Tonal Focus","Whorl Focus","Woven Focus","Twig Focus"],
+  "armour.gloves": ["Runemastered Burnished Gauntlets","Runeforged Blacksteel Gauntlets","Runemastered Embroidered Gloves","Runemastered Ringmail Gauntlets","Runeforged Burnished Gauntlets","Runeforged Commander Gauntlets","Runeforged Steelmail Gauntlets","Runemastered Doubled Gauntlets","Runemastered Layered Gauntlets","Runemastered Sectioned Bracers","Runeforged Embroidered Gloves","Runeforged Ringmail Gauntlets","Runemastered Grand Manchettes","Runemastered Intricate Gloves","Runemastered Pauascale Gloves","Runeforged Cultist Gauntlets","Runeforged Doubled Gauntlets","Runeforged Layered Gauntlets","Runeforged Sectioned Bracers","Runeforged Sirenscale Gloves","Runemastered Bolstered Mitts","Runemastered Jewelled Gloves","Runemastered Plate Gauntlets","Runemastered Stitched Gloves","Runeforged Engraved Bracers","Runeforged Grand Manchettes","Runeforged Hardened Bracers","Runeforged Intricate Gloves","Runeforged Ornate Gauntlets","Runeforged Pauascale Gloves","Runeforged Polished Bracers","Runeforged Stalking Bracers","Runeforged Zealot Gauntlets","Runemastered Goldcast Cuffs","Runemastered Spined Bracers","Runemastered Tempered Mitts","Runemastered Verisium Cuffs","Runeforged Bolstered Mitts","Runeforged Feathered Mitts","Runeforged Jewelled Gloves","Runeforged Kalguuran Cuffs","Runeforged Plate Gauntlets","Runeforged Refined Bracers","Runeforged Righteous Cuffs","Runeforged Stitched Gloves","Runemastered Furtive Wraps","Runemastered Moulded Mitts","Runemastered Riveted Mitts","Runemastered Sombre Gloves","Runemastered Suede Bracers","Runemastered Utility Wraps","Runeforged Adherent Cuffs","Runeforged Adorned Gloves","Runeforged Barbed Bracers","Runeforged Baroque Gloves","Runeforged Detailed Mitts","Runeforged Fists of Stone","Runeforged Gleaming Cuffs","Runeforged Goldcast Cuffs","Runeforged Knightly Mitts","Runeforged Opulent Gloves","Runeforged Spiked Bracers","Runeforged Spined Bracers","Runeforged Tempered Mitts","Runemastered Fine Bracers","Runemastered Firm Bracers","Runemastered Spiral Wraps","Runemastered Stocky Mitts","Runeforged Adorned Wraps","Runeforged Ancient Cuffs","Runeforged Ancient Mitts","Runeforged Bound Bracers","Runeforged Buckled Wraps","Runeforged Elegant Wraps","Runeforged Furtive Wraps","Runeforged Grand Bracers","Runeforged Massive Mitts","Runeforged Moulded Mitts","Runeforged Riveted Mitts","Runeforged Secured Wraps","Runeforged Sombre Gloves","Runeforged Suede Bracers","Runeforged Utility Wraps","Runemastered Gauze Wraps","Runemastered Linen Wraps","Runemastered Titan Mitts","Runemastered Torn Gloves","Runeforged Fine Bracers","Runeforged Firm Bracers","Runeforged Ornate Cuffs","Runeforged Ornate Mitts","Runeforged Signet Cuffs","Runeforged Spiral Wraps","Runeforged Stocky Mitts","Runemastered Aged Cuffs","Runemastered Rope Cuffs","Runeforged Bound Cuffs","Runeforged Gauze Wraps","Runeforged Gold Gloves","Runeforged Grand Mitts","Runeforged Grim Gloves","Runeforged Linen Wraps","Runeforged Titan Mitts","Runeforged Torn Gloves","Runeforged Vaal Gloves","Runeforged Aged Cuffs","Runeforged Rope Cuffs","Runeforged Vaal Mitts","Runeforged Vaal Wraps","Blacksteel Gauntlets","Runeforged War Wraps","Burnished Gauntlets","Commander Gauntlets","Steelmail Gauntlets","Embellished Gloves","Embroidered Gloves","Ironmail Gauntlets","Ringmail Gauntlets","Ancient Gauntlets","Captain Gauntlets","Cultist Gauntlets","Doubled Gauntlets","Layered Gauntlets","Sectioned Bracers","Sirenscale Gloves","Engraved Bracers","Grand Manchettes","Hardened Bracers","Intricate Gloves","Ornate Gauntlets","Pauascale Gloves","Polished Bracers","Stalking Bracers","Zealot Gauntlets","Bolstered Mitts","Feathered Mitts","Hunting Bracers","Jewelled Gloves","Kalguuran Cuffs","Plate Gauntlets","Refined Bracers","Righteous Cuffs","Stitched Gloves","Tethering Bands","Adherent Cuffs","Adorned Gloves","Barbed Bracers","Baroque Gloves","Detailed Mitts","Fists of Stone","Gleaming Cuffs","Goldcast Cuffs","Golden Bracers","Heirloom Cuffs","Knightly Mitts","Ominous Gloves","Opulent Gloves","Spiked Bracers","Spined Bracers","Tempered Mitts","Adorned Wraps","Ancient Cuffs","Ancient Mitts","Bandage Wraps","Bound Bracers","Braided Cuffs","Buckled Wraps","Cambric Wraps","Elegant Mitts","Elegant Wraps","Furtive Wraps","Grand Bracers","Massive Mitts","Moulded Mitts","Riveted Mitts","Secured Wraps","Sombre Gloves","Suede Bracers","Swift Bracers","Utility Wraps","Fine Bracers","Firm Bracers","Ornate Cuffs","Ornate Mitts","Plated Mitts","Signet Cuffs","Spiral Wraps","Stocky Mitts","Bound Cuffs","Gauze Wraps","Gold Gloves","Grand Mitts","Grim Gloves","Linen Wraps","Titan Mitts","Torn Gloves","Vaal Gloves","Aged Cuffs","Rope Cuffs","Vaal Mitts","Vaal Wraps","War Wraps"],
+  "armour.helmet": ["Runeforged Commander Greathelm","Runeforged Warmonger Greathelm","Runemastered Leatherbound Hood","Runemastered Soldier Greathelm","Runemastered Warrior Greathelm","Runemastered Wrapped Greathelm","Runeforged Guardian Greathelm","Runeforged Imperial Greathelm","Runeforged Sentinel Greathelm","Runemastered Fierce Greathelm","Runemastered Rusted Greathelm","Runemastered Spired Greathelm","Runemastered Spiritbone Crown","Runeforged Elegant Greathelm","Runeforged Gladiatorial Helm","Runeforged Goliath Greathelm","Runeforged Leatherbound Hood","Runeforged Paragon Greathelm","Runeforged Soldier Greathelm","Runeforged Warrior Greathelm","Runeforged Wrapped Greathelm","Runemastered Elite Greathelm","Runemastered Feathered Tiara","Runemastered Tenebrous Crown","Runemastered Vermeil Circlet","Runeforged Deerstalker Hood","Runeforged Fierce Greathelm","Runeforged Inquisitor Crown","Runeforged Masked Greathelm","Runeforged Rusted Greathelm","Runeforged Spired Greathelm","Runeforged Spiritbone Crown","Runemastered Beaded Circlet","Runemastered Decorated Helm","Runemastered Twilight Tiara","Runeforged Ancestral Tiara","Runeforged Elite Greathelm","Runeforged Feathered Tiara","Runeforged Noble Greathelm","Runeforged Sandsworn Tiara","Runeforged Sorcerous Tiara","Runeforged Vermeil Circlet","Runemastered Ancient Visor","Runemastered Cultist Crown","Runemastered Shielded Helm","Runeforged Beaded Circlet","Runeforged Decorated Helm","Runeforged Freebooter Cap","Runeforged Hallowed Crown","Runeforged Skycrown Tiara","Runeforged Twilight Tiara","Runemastered Armoured Cap","Runemastered Brimmed Helm","Runemastered Gold Circlet","Runemastered Grand Visage","Runemastered Guarded Helm","Runemastered Horned Crown","Runemastered Martyr Crown","Runemastered Twig Circlet","Runemastered Visored Helm","Runemastered Wicker Tiara","Runeforged Cabalist Helm","Runeforged Champion Helm","Runeforged Cryptic Crown","Runeforged Cultist Crown","Runeforged Druidic Crown","Runeforged Grinning Mask","Runeforged Kamasan Tiara","Runeforged Noble Circlet","Runeforged Saintly Crown","Runeforged Shielded Helm","Runemastered Chain Tiara","Runemastered Corsair Cap","Runemastered Covert Hood","Runemastered Cowled Helm","Runemastered Heavy Crown","Runemastered Hooded Mask","Runemastered Hunter Hood","Runemastered Magus Tiara","Runemastered Shabby Hood","Runemastered Tribal Mask","Runemastered Veiled Mask","Runeforged Archon Crown","Runeforged Armoured Cap","Runeforged Brigand Mask","Runeforged Brimmed Helm","Runeforged Cryptic Helm","Runeforged Divine Crown","Runeforged Faridun Mask","Runeforged Gallant Helm","Runeforged Gold Circlet","Runeforged Grand Visage","Runeforged Guarded Helm","Runeforged Horned Crown","Runeforged Jungle Tiara","Runeforged Lavish Crown","Runeforged Martyr Crown","Runeforged Soaring Mask","Runeforged Trapper Hood","Runeforged Twig Circlet","Runeforged Visored Helm","Runeforged Wicker Tiara","Runemastered Death Mask","Runemastered Iron Crown","Runemastered Jade Tiara","Runemastered Solid Mask","Runemastered Velvet Cap","Runeforged Chain Tiara","Runeforged Closed Helm","Runeforged Corsair Cap","Runeforged Covert Hood","Runeforged Cowled Helm","Runeforged Heavy Crown","Runeforged Hooded Mask","Runeforged Hunter Hood","Runeforged Magus Tiara","Runeforged Pariah Mask","Runeforged Shabby Hood","Runeforged Shaded Mask","Runeforged Swathed Cap","Runeforged Tribal Mask","Runeforged Veiled Mask","Runeforged Warded Helm","Runeforged Wrapped Cap","Runemastered Face Mask","Runemastered Hewn Mask","Runemastered Viper Cap","Runeforged Avian Mask","Runeforged Death Mask","Runeforged Desert Cap","Runeforged Iron Crown","Runeforged Jade Tiara","Runeforged Solid Mask","Runeforged Velvet Cap","Runemastered Felt Cap","Runeforged Face Mask","Runeforged Hewn Mask","Runeforged Lace Hood","Runeforged Viper Cap","Runeforged Woven Cap","Commander Greathelm","Homeguard Greathelm","Mercenary Greathelm","Runeforged Felt Cap","Warmonger Greathelm","Corroded Greathelm","Guardian Greathelm","Imperial Greathelm","Sentinel Greathelm","Elegant Greathelm","Gladiatorial Helm","Goliath Greathelm","Leatherbound Hood","Paragon Greathelm","Soldier Greathelm","Warrior Greathelm","Wrapped Greathelm","Deerstalker Hood","Fierce Greathelm","Inquisitor Crown","Masked Greathelm","Rusted Greathelm","Spired Greathelm","Spiritbone Crown","Ancestral Tiara","Druidic Circlet","Elite Greathelm","Feathered Tiara","Noble Greathelm","Sandsworn Tiara","Sorcerous Tiara","Tenebrous Crown","Vermeil Circlet","Beaded Circlet","Decorated Helm","Desert Circlet","Freebooter Cap","Hallowed Crown","Skycrown Tiara","Twilight Tiara","Ancient Visor","Cabalist Helm","Champion Helm","Cryptic Crown","Cultist Crown","Druidic Crown","Engraved Helm","Golden Visage","Grinning Mask","Kamasan Tiara","Noble Circlet","Saintly Crown","Shielded Helm","Skulking Mask","Archon Crown","Armoured Cap","Brigand Mask","Brimmed Helm","Cryptic Helm","Divine Crown","Faridun Mask","Forest Crown","Gallant Helm","Gold Circlet","Grand Visage","Guarded Helm","Horned Crown","Jungle Tiara","Lavish Crown","Mailed Crown","Martyr Crown","Soaring Mask","Soldier Helm","Trapper Hood","Twig Circlet","Visored Helm","Wicker Tiara","Zealot Crown","Avian Tiara","Bandit Mask","Cassis Helm","Chain Tiara","Closed Helm","Corsair Cap","Covert Hood","Cowled Helm","Heavy Crown","Hooded Mask","Hunter Hood","Magus Tiara","Narrow Hood","Pariah Mask","Rotted Hood","Shabby Hood","Shaded Mask","Swathed Cap","Tribal Mask","Veiled Mask","Warded Helm","Wrapped Cap","Avian Mask","Death Mask","Desert Cap","Domed Helm","Iron Crown","Jade Tiara","Solid Mask","Velvet Cap","Face Mask","Hewn Mask","Lace Hood","Viper Cap","Woven Cap","Felt Cap","Oak Mask","Wool Cap"],
+  "armour.quiver": ["Penetrating Quiver","Broadhead Quiver","Two-Point Quiver","Serrated Quiver","Visceral Quiver","Primed Quiver","Sacral Quiver","Volant Quiver","Blunt Quiver","Toxic Quiver","Fire Quiver"],
+  "armour.shield": ["Runemastered Blacksteel Tower Shield","Runemastered Splintered Tower Shield","Runemastered Barricade Tower Shield","Runemastered Heraldric Tower Shield","Runemastered Intricate Crest Shield","Runeforged Blacksteel Crest Shield","Runeforged Blacksteel Tower Shield","Runeforged Goldworked Tower Shield","Runeforged Splintered Tower Shield","Runemastered Crucible Tower Shield","Runemastered Effigial Tower Shield","Runemastered Jingling Crest Shield","Runeforged Barricade Tower Shield","Runeforged Glowering Crest Shield","Runeforged Heraldric Tower Shield","Runeforged Intricate Crest Shield","Runeforged Quartered Crest Shield","Runeforged Sectarian Crest Shield","Runemastered Painted Tower Shield","Runemastered Rampart Tower Shield","Runeforged Ancestor Tower Shield","Runeforged Crucible Tower Shield","Runeforged Dekharan Crest Shield","Runeforged Effigial Tower Shield","Runeforged Empyreal Crest Shield","Runeforged Fortress Tower Shield","Runeforged Jingling Crest Shield","Runeforged Sekheman Crest Shield","Runemastered Blazon Crest Shield","Runemastered Braced Tower Shield","Runemastered Emblem Crest Shield","Runeforged Bulwark Tower Shield","Runeforged Defiant Tower Shield","Runeforged Deified Crest Shield","Runeforged Painted Tower Shield","Runeforged Phalanx Tower Shield","Runeforged Rampart Tower Shield","Runeforged Tawhoan Tower Shield","Runeforged Wayward Crest Shield","Runemastered Sigil Crest Shield","Runemastered Venerable Defender","Runeforged Blazon Crest Shield","Runeforged Braced Tower Shield","Runeforged Emblem Crest Shield","Runemastered Omen Crest Shield","Runemastered Vaal Tower Shield","Runeforged Noble Tower Shield","Runeforged Royal Tower Shield","Runeforged Sigil Crest Shield","Runeforged Stoic Crest Shield","Runeforged Stone Tower Shield","Runemastered Glacial Fortress","Runeforged Omen Crest Shield","Runeforged Seer Crest Shield","Runeforged Vaal Crest Shield","Runeforged Vaal Tower Shield","Runeforged Stratified Targe","Runemastered Crescent Targe","Runemastered Hardwood Targe","Runeforged Feathered Targe","Runeforged Chiseled Targe","Runeforged Crescent Targe","Runeforged Hardwood Targe","Runeforged Polished Targe","[DNT] Venerable Defender","Metalworked Tower Shield","Runeforged Aureate Targe","Runeforged Baroque Targe","Runeforged Mammoth Targe","Runeforged Soaring Targe","Runeforged Studded Targe","Blacksteel Crest Shield","Blacksteel Tower Shield","Goldworked Tower Shield","Runeforged Carved Targe","Runeforged Golden Targe","Runeforged Mosaic Targe","Runeforged Pelage Targe","Splintered Tower Shield","Barricade Tower Shield","Glowering Crest Shield","Heraldric Tower Shield","Intricate Crest Shield","Quartered Crest Shield","Runeforged Avian Targe","Runeforged Grand Targe","Runeforged Stone Targe","Sectarian Crest Shield","Ancestor Tower Shield","Crucible Tower Shield","Dekharan Crest Shield","Effigial Tower Shield","Empyreal Crest Shield","Engraved Crest Shield","Fortress Tower Shield","Jingling Crest Shield","Sekheman Crest Shield","Bulwark Tower Shield","Cultist Tower Shield","Defiant Tower Shield","Deified Crest Shield","Painted Crest Shield","Painted Tower Shield","Phalanx Tower Shield","Rampart Tower Shield","Tawhoan Tower Shield","Wayward Crest Shield","Blazon Crest Shield","Braced Tower Shield","Descry Crest Shield","Emblem Crest Shield","Noble Tower Shield","Royal Tower Shield","Sigil Crest Shield","Stoic Crest Shield","Stone Tower Shield","Venerable Defender","Aged Tower Shield","Omen Crest Shield","Seer Crest Shield","Vaal Crest Shield","Vaal Tower Shield","Glacial Fortress","Stratified Targe","Feathered Targe","Fur-lined Targe","Mercenary Targe","Chiseled Targe","Crescent Targe","Hardwood Targe","Ironwood Targe","Polished Targe","Aureate Targe","Baroque Targe","Golden Shield","Mammoth Targe","Soaring Targe","Studded Targe","Carved Targe","Golden Targe","Mosaic Targe","Pelage Targe","Avian Targe","Grand Targe","Stone Targe"],
+  "weapon.bow": ["Runeforged Dualstring Bow","Runeforged Composite Bow","Runeforged Recurve Bow","Runeforged Warden Bow","Runeforged Zealot Bow","Runeforged Crude Bow","Runeforged Shortbow","Heartwood Shortbow","Snakewood Shortbow","Ironwood Shortbow","Double Limb Bow","Obliterator Bow","Dualstring Bow","Artillery Bow","Composite Bow","Protector Bow","Warmonger Bow","Adherent Bow","Guardian Bow","Militant Bow","Cavalry Bow","Cultist Bow","Fanatic Bow","Recurve Bow","Gemini Bow","Tribal Bow","Warden Bow","Zealot Bow","Crude Bow","Heavy Bow","Rider Bow","Greatbow","Shortbow","Twin Bow"],
+  "weapon.claw": ["Razorglass Claw","Sharktooth Claw","Armoured Claw","Piercing Claw","Wolfbone Claw","Forked Claw","Hooked Claw","Plated Claw","Arced Claw","Crude Claw","Edged Claw","Talon Claw","Pict Claw"],
+  "weapon.crossbow": ["Runeforged Makeshift Crossbow","Runeforged Bombard Crossbow","Runemastered Tense Crossbow","Runeforged Sturdy Crossbow","Runemastered Dyad Crossbow","Runeforged Tense Crossbow","Runeforged Dyad Crossbow","Blackfire Crossbow","Cannonade Crossbow","Construct Crossbow","Makeshift Crossbow","Varnished Crossbow","Cumbrous Crossbow","Dedalian Crossbow","Desolate Crossbow","Engraved Crossbow","Esoteric Crossbow","Piercing Crossbow","Bombard Crossbow","Elegant Crossbow","Painted Crossbow","Flexed Crossbow","Gemini Crossbow","Robust Crossbow","Sturdy Crossbow","Trarthan Cannon","Alloy Crossbow","Bleak Crossbow","Siege Crossbow","Stout Crossbow","Tense Crossbow","Dyad Crossbow","Taut Crossbow","Twin Crossbow"],
+  "weapon.dagger": ["[DNT] Crystalline Dagger","[DNT] Ritualistic Dagger","[DNT] Prominent Dagger","[DNT] Crescent Dagger","[DNT] Intricade Knife","[DNT] Midnight Dagger","[DNT] Carving Knife","Bloodletting Dagger","[DNT] Hag Knife","Obsidian Dagger","Parrying Dagger","Engraved Knife","Skinning Knife","Simple Dagger","Mail Breaker","Arcane Dirk","Crone Knife","Glass Shank","Moon Dagger","Kris Knife","Cinquedea"],
+  "weapon.flail": ["[DNT] Righteous Flail","[DNT] Shackled Flail","[DNT] Slivered Flail","[DNT] Boulder Flail","[DNT] Twofold Flail","[DNT] Winding Flail","[DNT] Banded Flail","[DNT] Ferric Flail","Splintered Flail","Abyssal Flail","Guarded Flail","Slender Flail","Tearing Flail","Icicle Flail","Chain Flail","Great Flail","Stone Flail","Holy Flail","Iron Flail","Ring Flail","Twin Flail"],
+  "weapon.oneaxe": ["[DNT] Callous Hatchet","[DNT] Hacking Hatchet","[DNT] Ritualistic Axe","[DNT] Moonlight Axe","[DNT] Towering Axe","[DNT] Vagabond Axe","[DNT] Catcher Axe","Boarding Hatchet","Extended Cleaver","Carving Hatchet","Profane Cleaver","Sacrificial Axe","[DNT] Aged Axe","Bandit Hatchet","Dread Hatchet","Crescent Axe","Dull Hatchet","Fury Cleaver","Bearded Axe","Battle Axe","Hook Axe"],
+  "weapon.onemace": ["Runeforged Kalguuran Forgehammer","Runemastered Torment Club","Runeforged Marching Mace","Runemastered Wooden Club","Runeforged Morning Star","Runeforged Spiked Club","Runeforged Wooden Club","Kalguuran Forgehammer","Runeforged Slim Mace","Runeforged Warpick","Structured Hammer","Calescent Hammer","Construct Hammer","Execratus Hammer","Fortified Hammer","Smithing Hammer","Marauding Mace","Marching Mace","Molten Hammer","Brigand Mace","Flanged Mace","Morning Star","Torment Club","Akoyan Club","Bandit Mace","Battle Pick","Flared Mace","Plated Mace","Spiked Club","Strife Pick","Wooden Club","Crown Mace","Lumen Mace","Jade Club","Slim Mace","Warpick"],
+  "weapon.onesword": ["[DNT] Siphoning Sword","[DNT] Coveted Blade","[DNT] Carved Blade","[DNT] Molten Blade","[DNT] Reaper Sword","Charred Shortsword","[DNT] Rider Blade","[DNT] Flat Blade","Runic Shortsword","[DNT] Halfsword","Commander Sword","Treasured Blade","Vampiric Blade","Energy Blade","Golden Blade","Sickle Sword","Broadsword","Dark Blade","Shortsword","Falchion","Scimitar","Cutlass","Messer"],
+  "weapon.sceptre": ["Devotional Sceptre","Devouring Sceptre","Aromatic Sceptre","Hallowed Sceptre","Rattling Sceptre","Clasped Sceptre","Lupine Sceptre","Shrine Sceptre","Ochre Sceptre","Pious Sceptre","Stoic Sceptre","Wrath Sceptre","Omen Sceptre"],
+  "weapon.spear": ["Runemastered Ironhead Spear","Runeforged Hardwood Spear","Runeforged Ironhead Spear","Runeforged Hunting Spear","Runeforged Barbed Spear","Runeforged Forked Spear","Runeforged Winged Spear","Runeforged War Spear","Crossblade Spear","Orichalcum Spear","Steelhead Spear","Branched Spear","Coursing Spear","Guardian Spear","Hardwood Spear","Ironhead Spear","Seaglass Spear","Stalking Spear","Striking Spear","Hunting Spear","Massive Spear","Pronged Spear","Soaring Spear","Akoyan Spear","Barbed Spear","Flying Spear","Forked Spear","Jagged Spear","Spiked Spear","Winged Spear","Broad Spear","Grand Spear","Helix Spear","Swift Spear","Sword Spear","War Spear"],
+  "weapon.staff": ["[DNT] Cragbreaker Staff","[DNT] Driftwood Oar","Paralysing Staff","Permafrost Staff","Reflecting Staff","Sanctified Staff","Pyrophyte Staff","Perching Staff","Ravenous Staff","Spriggan Staff","Chiming Staff","Reaping Staff","Rending Staff","Roaring Staff","Voltaic Staff","Icicle Staff","Ashen Staff","Gelid Staff","Dark Staff"],
+  "weapon.talisman": ["Runeforged Changeling Talisman","Runemastered Familial Talisman","Runeforged Familial Talisman","Runemastered Nettle Talisman","Runeforged Vicious Talisman","Runeforged Nettle Talisman","Changeling Talisman","Cinderbark Talisman","Condemned Talisman","Lumbering Talisman","Familial Talisman","Frenzied Talisman","Voltfang Talisman","Wildwood Talisman","Wingbeat Talisman","Ashbark Talisman","Howling Talisman","Roaring Talisman","Thunder Talisman","Vicious Talisman","Fungal Talisman","Nettle Talisman","Primal Talisman","Alpha Talisman","Cruel Talisman","Rabid Talisman","Spiny Talisman","Fang Talisman","Fury Talisman","Jade Talisman","Maji Talisman"],
+  "weapon.twoaxe": ["[DNT] Feathersteel Halberd","[DNT] Intricate Greataxe","[DNT] Dividing Greataxe","[DNT] Notched Greataxe","[DNT] Severing Halberd","[DNT] Violent Greataxe","[DNT] Clawed Greataxe","Executioner Greataxe","[DNT] Grimhold Axe","Ceremonial Halberd","Splitting Greataxe","Monument Greataxe","Arched Greataxe","Jagged Greataxe","Rending Halberd","Savage Greataxe","Elegant Glaive","Ember Greataxe","Light Halberd","Reaver Glaive","Vile Greataxe"],
+  "weapon.twomace": ["Runeforged Cultist Greathammer","Runemastered Studded Greatclub","Runeforged Leaden Greathammer","Runemastered Felled Greatclub","Runeforged Studded Greatclub","Runemastered Aberrant Sledge","Runemastered Oak Greathammer","Runeforged Felled Greatclub","Runeforged Oak Greathammer","Runeforged Crumbling Maul","Runeforged Pointed Maul","Runeforged Temple Maul","Runeforged Forge Maul","Snakewood Greathammer","Ironwood Greathammer","Cultist Greathammer","Disintegrating Maul","Fanatic Greathammer","Massive Greathammer","Precise Greathammer","Leaden Greathammer","Zealot Greathammer","Heavy Greathammer","Studded Greatclub","Tawhoan Greatclub","Totemic Greatclub","Felled Greatclub","Aberrant Sledge","Blacksmith Maul","Oak Greathammer","Crumbling Maul","Ruination Maul","Pointed Maul","Sacred Maul","Solemn Maul","Temple Maul","Anvil Maul","Forge Maul","Giant Maul","Greatmace"],
+  "weapon.twosword": ["[DNT] Midnight Greatsword","[DNT] Crested Greatsword","[DNT] Ancient Longsword","[DNT] Carved Greatsword","[DNT] Ferric Greatsword","[DNT] Jagged Greatsword","[DNT] Holy Greatblade","[DNT] Wide Greatsword","Obsidian Greatsword","Ancient Greatblade","Corroded Longsword","Flanged Greatblade","Rippled Greatsword","Regalia Longsword","Blessed Claymore","Broad Greatsword","Stone Greatsword","Ultra Greatsword","Arced Longsword","Iron Greatsword","Keen Greatsword","Energy Blade"],
+  "weapon.wand": ["Runemastered Runic Fork","Primordial Wand","Siphoning Wand","Critical Wand","Galvanic Wand","Offering Wand","Volatile Wand","Withered Wand","Attuned Wand","Dueling Wand","Torture Wand","Twisted Wand","Frigid Wand","Acrid Wand","Runic Fork","Bone Wand"],
+  "weapon.warstaff": ["Runeforged Steelpoint Quarterstaff","Runemastered Warding Quarterstaff","Runeforged Crescent Quarterstaff","Runemastered Gothic Quarterstaff","Runeforged Wrapped Quarterstaff","Runeforged Gothic Quarterstaff","Runemastered Long Quarterstaff","Runeforged Long Quarterstaff","Skullcrusher Quarterstaff","Steelpoint Quarterstaff","Barbarous Quarterstaff","Crackling Quarterstaff","Crescent Quarterstaff","Dreaming Quarterstaff","Graceful Quarterstaff","Guardian Quarterstaff","Reaching Quarterstaff","Sinister Quarterstaff","Striking Quarterstaff","Barrier Quarterstaff","Bolting Quarterstaff","Slicing Quarterstaff","Warding Quarterstaff","Wrapped Quarterstaff","Arcing Quarterstaff","Bladed Quarterstaff","Gothic Quarterstaff","Smooth Quarterstaff","Waxing Quarterstaff","Aegis Quarterstaff","Anima Quarterstaff","Hefty Quarterstaff","Lunar Quarterstaff","Razor Quarterstaff","Long Quarterstaff","Wyrm Quarterstaff"],
+};
 
 const FILTERS = [
   ["all", "All"],
@@ -1722,6 +1769,7 @@ function tradeFetch(name, league, bust = false, thorough = false, extra = {}) {
       bust: !!bust,
       thorough: !!thorough,
       rarity: extra.rarity || "",
+      rarityFilter: extra.rarityFilter || "",
       typeLine: extra.typeLine || "",
       category: extra.category || "",
       exactBase: extra.exactBase !== false,
@@ -1796,6 +1844,12 @@ function tradeCategory(className) {
   return "";
 }
 
+function magicItemBase(name, className) {
+  const title = " " + stripItemQualityPrefix(name).toLowerCase().replace(/\s+/g, " ") + " ";
+  const bases = MAGIC_ITEM_BASES[tradeCategory(className)] || [];
+  return bases.find((base) => title.includes(" " + base.toLowerCase() + " ")) || "";
+}
+
 function tradeBaseType(drop) {
   const rarity = String(drop?.rarity || "").toLowerCase();
   const name = isUnidentifiedLine(drop?.name) ? "" : stripItemQualityPrefix(drop?.name);
@@ -1804,7 +1858,7 @@ function tradeBaseType(drop) {
   if (/currency|gem|divination/i.test(rarity) || /currency|gem|divination/i.test(className)) return name || base;
   if (rarity === "magic") {
     if (base && base.toLowerCase() !== String(drop?.name || "").toLowerCase()) return base;
-    return "";
+    return magicItemBase(name, className);
   }
   if (rarity === "unique" || rarity === "rare") {
     if (base && base.toLowerCase() !== String(drop?.name || "").toLowerCase()) return base;
@@ -2773,6 +2827,10 @@ function applyRollSpan(row, raw) {
 function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
   const grouped = new Map();
   for (const roll of rolls || []) {
+    if (roll?.totalResistance === true) {
+      grouped.set("pseudo.pseudo_total_resistance", { id: "pseudo.pseudo_total_resistance", min: roll.wantMin, n: 1 });
+      continue;
+    }
     const raw = rollLineText(roll);
     const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
     const text = stripAdvancedRanges(parseAffixStrings(raw));
@@ -3925,7 +3983,7 @@ function itemNameHtml(name, size) {
 function dropIconNames(drop) {
   const unique = /^unique$/i.test(String(drop?.rarity || ""));
   const name = isUnidentifiedLine(drop?.name) ? "" : stripItemQualityPrefix(drop?.name);
-  const base = isUnidentifiedLine(drop?.baseType) ? "" : stripItemQualityPrefix(drop?.baseType);
+  const base = isUnidentifiedLine(drop?.baseType) ? "" : stripItemQualityPrefix(drop?.baseType) || tradeBaseType(drop);
   return [...new Set((unique ? [name, base] : [base, name]).filter(Boolean))];
 }
 
@@ -5545,7 +5603,7 @@ function parsePoeItem(text) {
   if (isUnidentifiedLine(baseType)) baseType = "";
   if (/^(currency|gem|divination card)$/i.test(rarity)) baseType = name || baseType;
   else if (/^normal$/i.test(rarity)) baseType = name || baseType;
-  else if (/^magic$/i.test(rarity) && (!baseType || namesMatch(baseType, name))) baseType = "";
+  else if (/^magic$/i.test(rarity) && (!baseType || namesMatch(baseType, name))) baseType = magicItemBase(name, className);
   if (!baseType && /^(rare|unique|normal)$/i.test(rarity)) baseType = name;
   if (!name) return null;
   const { unidentified, unidentifiedTier } = parseUnidentifiedFlag(raw);
@@ -5558,6 +5616,11 @@ function parsePoeItem(text) {
   const flagLines = String(raw).split("\n");
   const mirrored = flagLines.some((line) => isMirroredLine(line));
   const sanctified = flagLines.some((line) => isSanctifiedLine(line));
+  const foil = /^unique$/i.test(rarity) && flagLines.some((line) => /^foil unique$/i.test(foldItemFlagLine(line)));
+  const vaalUnique = /^unique$/i.test(rarity) && (
+    /^\s*(?:Item Class:\s*)?Vaal\s+(?:Body Armours?|Helmets?|Gloves|Boots|Shields?|Foc(?:us|i)|Weapons?|Quarterstaves|Staves|Bows|Quivers|Sceptres?|Wands?|Rings?|Amulets?|Belts)\s*$/im.test(raw) ||
+    /^\{[^}\n]*\bVaal Unique\b/im.test(raw)
+  );
   const props = parseLocalProps(raw);
   const parsedMods = parseClipboardMods(blocks.slice(1), rarity, corrupted, name, baseType, className, props);
   const mods = parsedMods.mods;
@@ -5579,7 +5642,8 @@ function parsePoeItem(text) {
   const charmHit = raw.match(/^Charm Slots:\s*(\d+)/im);
   const charmSlots = charmHit ? Math.max(0, Number(charmHit[1]) || 0) : 0;
   const isCorrupted = corrupted || mods.some((mod) => canonicalRollKind(mod.kind) === "corrupt");
-  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, mirrored, sanctified, unidentified, unidentifiedTier, ravenTouched, fractured, mods, usesRemaining, runeSockets, charmSlots, props };
+  const desecrated = mods.some((mod) => mod.desecrated) || /^\s*(?:Unrevealed )?Desecrated (?:Modifier|Item)\s*$/im.test(raw);
+  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, mirrored, sanctified, foil, vaalUnique, desecrated, unidentified, unidentifiedTier, ravenTouched, fractured, mods, usesRemaining, runeSockets, charmSlots, props };
 }
 
 function canonicalRollKind(kind) {
@@ -5690,7 +5754,8 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         isUnidentifiedLine(rawLine) ||
         isSanctifiedLine(rawLine) ||
         isFracturedItemLine(rawLine) ||
-        /^(mirrored|split|synthesised item)$/i.test(rawLine)
+        /^(mirrored|split|synthesised item|foil unique)$/i.test(rawLine) ||
+        /^Vaal\s+(?:Body Armours?|Helmets?|Gloves|Boots|Shields?|Foc(?:us|i)|Weapons?)$/i.test(rawLine)
       ) {
         if (isFracturedItemLine(rawLine)) itemFractured = true;
         if (isCorruptedLine(rawLine) || isMirroredLine(rawLine)) afterFooter = true;
@@ -5994,8 +6059,47 @@ function withTabletUsesRoll(drop, rolls) {
 }
 
 function pickedRolls(drop) {
-  const rolls = withTabletUsesRoll(drop, normalizeRolls(drop?.rolls, drop)).filter((roll) => roll.pick);
+  let rolls = withTabletUsesRoll(drop, normalizeRolls(drop?.rolls, drop)).filter((roll) => roll.pick);
+  if (drop?.collapseRes) {
+    rolls = rolls.filter((roll) => resistanceValue(roll) == null);
+    if (drop.pickTotalRes) rolls.push({ text: "Total Resistance", totalResistance: true, wantMin: Number.isFinite(drop.wantTotalRes) ? drop.wantTotalRes : resistanceTotal(drop).value, pick: true });
+  }
   return rolls;
+}
+
+function resistanceValue(roll) {
+  const text = stripAdvancedRanges(parseAffixStrings(roll?.text || "")).trim();
+  const match = text.match(/^([+-]?\d+(?:\.\d+)?)% to (all elemental resistances|all resistances|(?:fire|cold|lightning|chaos)(?: and (?:fire|cold|lightning|chaos))? resistances?)$/i);
+  if (!match) return null;
+  const types = match[2].toLowerCase();
+  const count = types === "all elemental resistances" ? 3 : types === "all resistances" ? 4 : types.includes(" and ") ? 2 : 1;
+  return Number(match[1]) * count;
+}
+
+function resistanceTotal(drop) {
+  const rows = inspectRolls(drop).filter((roll) => resistanceValue(roll) != null);
+  return { count: rows.length, value: rows.reduce((sum, roll) => sum + resistanceValue(roll), 0) };
+}
+
+function changeResistanceView(log, drop, action, value) {
+  if (!drop) return;
+  const key = action === "collapse" ? "collapseRes" : action === "pick" ? "pickTotalRes" : "";
+  if (!key) return;
+  // Apply the state requested by the rendered control, even if a message is repeated.
+  const next = value === "true" || value === true;
+  if (!!drop[key] === next) return;
+  drop[key] = next;
+  commitDropSliderMin(log, drop);
+}
+
+function resistanceControlsHtml(log, drop) {
+  const total = resistanceTotal(drop);
+  if (!total.count) return "";
+  const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
+  const lo = Math.min(0, total.value, Number.isFinite(drop.wantTotalRes) ? drop.wantTotalRes : 0);
+  const hi = Math.max(1, total.value, Number.isFinite(drop.wantTotalRes) ? drop.wantTotalRes : 0);
+  const value = Math.max(lo, Math.min(hi, Number.isFinite(drop.wantTotalRes) ? drop.wantTotalRes : total.value));
+  return `<div class="price-overlay-resistance-controls" data-res-state="${!!drop.collapseRes}:${!!drop.pickTotalRes}">${drop.collapseRes ? `<div class="price-overlay-mod-wrap${drop.pickTotalRes ? " is-on" : ""}"><div class="price-overlay-mod-line" data-res-action="pick" data-res-value="${!drop.pickTotalRes}" ${mark} title="Total fire, cold, lightning and chaos resistance"><button type="button" class="price-overlay-q-toggle" aria-pressed="${!!drop.pickTotalRes}" aria-label="Select total resistance"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod"><span class="price-overlay-mod-main"><span class="price-overlay-mod-text"><b data-roll-live="total-resistance">${value}</b>% Total Resistance</span></span></div></div><div class="price-overlay-span"><span>${lo}</span><div class="price-overlay-span-bar"><input type="range" min="${lo}" max="${hi}" step="1" value="${value}" data-span-rid="total-resistance" ${mark} style="--fill:${(value-lo)/(hi-lo)*100}" aria-label="Total resistance minimum" /></div><span>${hi}</span></div></div>` : ""}<button type="button" class="btn" data-res-action="collapse" data-res-value="${!drop.collapseRes}" ${mark} aria-expanded="${!drop.collapseRes}">${drop.collapseRes ? "Expand resistances" : "Collapse resistances"}</button></div>`;
 }
 
 function inspectRolls(drop) {
@@ -6061,6 +6165,12 @@ function openInspect(log, drop) {
 
 function handleOverlayClick(msg) {
   if (!msg) return;
+  if (msg.resAction) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    changeResistanceView(log, drop, msg.resAction, msg.resValue);
+    return;
+  }
+  if (!msg) return;
   if (msg.closeInspect != null) {
     closeInspect();
     return;
@@ -6071,6 +6181,11 @@ function handleOverlayClick(msg) {
   if (msg.pickBase) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
     applyDropBaseMode(log, drop, msg.pickBase);
+    return;
+  }
+  if (msg.pickRarity) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    applyDropRarity(log, drop, msg.pickRarity);
     return;
   }
   if (msg.pickUnique) {
@@ -6425,7 +6540,7 @@ function rollKindLabel(roll, tierOverride) {
   else if (kind === "implicit") tag = "Implicit";
   else if (kind === "corrupt") tag = "Corrupted";
   else if (kind === "enchant") tag = "Enchant";
-  else if (kind === "rune") tag = "Rune";
+  else if (kind === "rune") tag = "Augment";
   else {
     const slot = rollSlot(roll);
     if (slot === "prefix") tag = "Prefix";
@@ -6775,6 +6890,14 @@ function charmSlotBounds(drop) {
   return { roll, value, lo: Math.max(1, lo), hi: Math.max(Math.max(1, lo), hi) };
 }
 
+function itemSocketCount(drop) {
+  return Math.max(0, Math.min(6, Number.isInteger(drop?.runeSockets) ? drop.runeSockets : 0));
+}
+
+function socketSearchCount(drop) {
+  return Number.isInteger(drop?.pickRunes) ? Math.max(0, Math.min(6, drop.pickRunes)) : null;
+}
+
 function setDropRunePick(log, drop, value, live) {
   if (!drop) return;
   if (value == null || value === "" || value === "any" || value === "off") drop.pickRunes = null;
@@ -6803,12 +6926,13 @@ function toggleDropRunePick(log, drop) {
 function overlayRuneHtml(log, drop) {
   if (!canHaveRunes(drop)) return "";
   const on = Number.isInteger(drop.pickRunes);
-  const itemN = Number.isInteger(drop.runeSockets) ? drop.runeSockets : 0;
-  const shown = on ? drop.pickRunes : itemN;
-  const count = Math.max(0, Math.min(6, shown));
-  const sockets = `<span class="price-overlay-socket-preview" aria-hidden="true" title="${count} sockets">${Array.from({ length: 6 }, (_, i) => `<i${i >= count ? " hidden" : ""}></i>`).join("")}</span>`;
+  const itemN = itemSocketCount(drop);
+  const count = on ? socketSearchCount(drop) : itemN;
   const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
-  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-sockets${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-runes-toggle ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>Sockets</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${esc(String(shown))}" data-span-rid="runes" ${mark} /></span>${sockets}</div>`;
+  const sockets = Array.from({ length: 6 }, (_, i) => {
+    return `<i class="price-overlay-socket" aria-hidden="true"${i >= count ? " hidden" : ""}></i>`;
+  }).join("") + `<span class="price-overlay-no-sockets"${count ? " hidden" : ""}>None</span>`;
+  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-sockets${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-runes-toggle ${mark} title="${on ? "Clear socket filter" : `Search exactly ${itemN} sockets`}"><span>Sockets</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${count}" data-span-rid="runes" ${mark} aria-label="Socket count" /></span><span class="price-overlay-socket-preview" role="img" aria-label="${count} sockets">${sockets}</span></div>`;
 }
 
 function overlayCharmHtml(log, drop) {
@@ -6884,6 +7008,34 @@ function canRelaxBase(drop) {
 function searchExactBase(drop) {
   if (!canRelaxBase(drop)) return true;
   return drop?.pickExactBase !== false;
+}
+
+function canPickRarity(drop) {
+  return /^(normal|magic|rare)$/i.test(drop?.rarity || "");
+}
+
+function searchRarityFilter(drop) {
+  if (!canPickRarity(drop)) return /^unique$/i.test(drop?.rarity || "") ? "unique" : "";
+  return ["nonunique", "normal", "magic", "rare"].includes(drop.pickRarity) ? drop.pickRarity : "nonunique";
+}
+
+function applyDropRarity(log, drop, rarity) {
+  if (!canPickRarity(drop) || !["nonunique", "normal", "magic", "rare"].includes(rarity)) return;
+  if (searchRarityFilter(drop) === rarity) return;
+  drop.pickRarity = rarity;
+  drop.quoteTried = false;
+  delete drop.quote;
+  if (log?.id) save();
+  paintPriceOverlay();
+}
+
+function overlayRarityHtml(log, drop) {
+  if (!canPickRarity(drop)) return "";
+  const options = ["nonunique", "normal", "magic", "rare"];
+  const labels = { nonunique: "Any rarity", normal: "Normal", magic: "Magic", rare: "Rare" };
+  const letters = { nonunique: "A", normal: "N", magic: "M", rare: "R" };
+  const current = searchRarityFilter(drop);
+  return `<span class="price-overlay-rarity-picker"><span class="price-overlay-rarity-label">Rarity</span><span class="price-overlay-rarity-options" role="group" aria-label="Search rarity">${options.map((rarity) => `<button type="button" class="price-overlay-rarity is-${rarity}${rarity === current ? " is-selected" : ""}" data-pick-rarity="${rarity}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" title="${labels[rarity]}" aria-label="Search rarity: ${labels[rarity]}" aria-pressed="${rarity === current}"><span class="price-overlay-rarity-letter">${letters[rarity]}</span></button>`).join("")}</span></span>`;
 }
 
 function maxUsefulItemLevel(category) {
@@ -7022,8 +7174,12 @@ function percentRollMin(value, pct) {
   return Math.floor(n - (Math.abs(n) * pct) / 100 + Number.EPSILON);
 }
 
+function isDecimalPropId(id) {
+  return isDpsPropId(id) || ["item.aps", "item.crit", "item.block"].includes(id);
+}
+
 function snapTypedProp(id, n) {
-  if (id === "item.aps" || id === "item.crit") return Math.round(n * 100) / 100;
+  if (isDecimalPropId(id)) return Math.round(n * 100 + Number.EPSILON) / 100;
   return Math.round(n);
 }
 
@@ -7034,12 +7190,9 @@ function propNumState(drop, id, value) {
   let hi = 99999;
   if (id === "item.aps") hi = 99;
   else if (id === "item.crit") hi = 100;
-  else if (!isDpsPropId(id)) hi = Math.max(1, Math.round(n));
+  else if (!isDpsPropId(id)) hi = Math.max(1, Math.ceil(n));
   const want = Number(drop?.wantProps?.[id]);
-  const slack = n - (Math.abs(n) * dpsSearchSlack(drop)) / 100;
-  const exactDefence = ["item.armour", "item.evasion_rating", "item.energy_shield"].includes(id);
-  const raw = id === "item.aps" || id === "item.crit" || exactDefence ? n : slack;
-  const seed = Number.isFinite(want) ? snapTypedProp(id, want) : snapTypedProp(id, raw);
+  const seed = snapTypedProp(id, Number.isFinite(want) ? want : n);
   return { lo: 0, hi, value: Math.min(hi, Math.max(0, seed)) };
 }
 
@@ -7271,9 +7424,7 @@ function flattenFlatDamageRoll(row, drop) {
   row.extra = [{ value: snapped, lo: snapped, hi: snapped }];
   if (
     firstPass ||
-    !Number.isFinite(prevWant) ||
-    Math.abs(prevWant - a) < 0.02 ||
-    Math.abs(prevWant - b) < 0.02
+    !Number.isFinite(prevWant)
   ) {
     row.wantMin = snapped;
   }
@@ -7823,20 +7974,27 @@ function setDropDpsType(log, drop, tag) {
   else render();
 }
 
-function overlayBaseHtml(log, drop) {
-  let base = drop.baseType || drop.className || "";
+function overlayBaseHtml(log, drop, includeRarity = true, asTitle = false) {
+  const rarity = includeRarity ? overlayRarityHtml(log, drop) : "";
+  let base = tradeBaseType(drop) || drop.baseType || drop.className || "";
   if (!base) return "";
-  if (namesMatch(base, drop.name)) {
+  const canToggle = canRelaxBase(drop);
+  if (namesMatch(base, drop.name) && !canToggle && !asTitle) {
     if (overlayUsesExchange(drop) && drop.className && !namesMatch(drop.className, drop.name)) {
       base = drop.className;
     } else {
       return "";
     }
   }
-  if (!canRelaxBase(drop)) return `<div class="item-tip-base">${esc(base)}</div>`;
+  if (!canToggle) return `<div class="price-overlay-base-row"><div class="item-tip-base${asTitle ? " item-tip-name" : ""}">${esc(base)}</div>${rarity}</div>`;
   const on = searchExactBase(drop);
   const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
-  return `<div class="price-overlay-base-row"><div class="item-tip-base">${esc(base)}</div><span class="price-overlay-base-modes"><button type="button" class="price-overlay-base-mode${on ? " is-on" : ""}" data-pick-base="exact" aria-pressed="${on}" title="Search this exact item base" ${mark}>Base</button><button type="button" class="price-overlay-base-mode${on ? "" : " is-on"}" data-pick-base="any" aria-pressed="${!on}" title="Search any compatible item base" ${mark}>Any</button></span></div>`;
+  const category = String(drop.className || base).trim();
+  const irregular = { quarterstaves: "Quarterstaff", warstaves: "Warstaff", staves: "Staff", foci: "Focus" };
+  const broad = irregular[category.toLowerCase()] || (/^(gloves|boots|focus)$/i.test(category) ? category : category.replace(/s$/i, ""));
+  const shown = on ? base : `Any ${broad}`;
+  const hint = on ? `Search any ${broad}; click again to return to ${base}` : `Search this exact base: ${base}`;
+  return `<div class="price-overlay-base-row"><button type="button" class="item-tip-base price-overlay-base-choice" data-pick-base="${on ? "any" : "exact"}" aria-pressed="${on}" title="${esc(hint)}" ${mark}><span class="price-overlay-base-label${asTitle ? " item-tip-name" : ""}">${esc(shown)}</span></button>${rarity}</div>`;
 }
 
 function overlayPropSliderHtml(log, drop, opt) {
@@ -7859,6 +8017,7 @@ function overlayPropSlidersHtml(log, drop, rows) {
 
 function sanitizeOverlayMinInput(el) {
   if (!el) return;
+  if (el.dataset.liveDefault != null) el.dataset.liveDefault = "0";
   const raw = String(el.value || "");
   let next = raw;
   if (el.dataset.spanDec) {
@@ -7868,15 +8027,20 @@ function sanitizeOverlayMinInput(el) {
   } else {
     next = raw.replace(/\D/g, "");
   }
+  if (el.dataset.spanRid === "total-resistance" && raw.trimStart().startsWith("-")) next = "-" + next;
   if (next !== raw) el.value = next;
-  if (el.dataset.spanRid === "runes") {
-    const preview = el.closest(".is-sockets")?.querySelector(".price-overlay-socket-preview");
-    const count = Math.max(0, Math.min(6, Math.round(Number(el.value) || 0)));
-    if (preview) {
-      [...preview.children].forEach((socket, i) => { socket.hidden = i >= count; });
-      preview.title = count + " sockets";
-    }
-  }
+  if (el.dataset.spanRid === "runes") paintSocketPreview(el);
+}
+
+function paintSocketPreview(input) {
+  const preview = input.closest(".is-sockets")?.querySelector(".price-overlay-socket-preview");
+  if (!preview) return;
+  const sockets = [...preview.querySelectorAll(".price-overlay-socket")];
+  const count = Math.max(0, Math.min(sockets.length, Math.round(Number(input.value) || 0)));
+  sockets.forEach((socket, i) => { socket.hidden = i >= count; });
+  const none = preview.querySelector(".price-overlay-no-sockets");
+  if (none) none.hidden = count > 0;
+  preview.setAttribute("aria-label", `${count} sockets`);
 }
 
 function overlayMinFilterHtml(log, drop, row, compact = false) {
@@ -7901,15 +8065,17 @@ function overlayPropsHtml(log, drop) {
   const quality = rows.find((row) => row.qInput && row.pick === "quality");
   const ilvl = rows.find((row) => row.qInput && row.pick === "ilvl");
   const rest = rows.filter((row) => row !== quality && row !== ilvl);
+  const weaponOrder = ["item.crit", "item.aps", "item.physical_dps", "item.elemental_dps", "item.total_dps"];
+  const weaponRank = (row) => row.dpsType ? 3 : weaponOrder.indexOf(row.id);
+  rest.sort((a, b) => weaponRank(a) - weaponRank(b));
+  const compactWeapon = tradeCategory(drop.className).startsWith("weapon.") && rest.some((row) => weaponRank(row) >= 0);
   const rune = overlayRuneHtml(log, drop);
   const metaBits = [
-    quality ? overlayMinFilterHtml(log, drop, quality, true) : "",
     ilvl ? overlayMinFilterHtml(log, drop, ilvl, true) : "",
-    rune,
+    quality ? overlayMinFilterHtml(log, drop, quality, true) : "",
   ].filter(Boolean);
   const meta = metaBits.length ? `<div class="price-overlay-meta">${metaBits.join("")}</div>` : "";
-  if (!rest.length) return meta;
-  return `${meta}<div class="price-overlay-props">${rest
+  const props = rest.length ? `<div class="price-overlay-props">${rest
     .map((row) => {
       const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
       if (row.qInput) return overlayMinFilterHtml(log, drop, row);
@@ -7926,16 +8092,16 @@ function overlayPropsHtml(log, drop) {
       if (row.numInput) {
         const n = row.numInput;
         const on = row.on ? " is-on" : "";
-        const defence = ["item.armour", "item.evasion_rating", "item.energy_shield"].includes(row.id) ? " is-defence" : "";
         const tags = (row.dpsTags || [])
           .map((tag) => `<button type="button" class="price-overlay-dps-tag is-${esc(tag)}${tag === row.dpsType ? " is-on" : ""}" data-pick-dps-type="${esc(tag)}" ${mark}>${esc(dpsTypeLabel(tag))}</button>`)
           .join("");
-        const dec = row.kind === "aps" || row.kind === "crit" ? ` data-span-dec="1" step="0.1"` : "";
-        const typed = row.kind === "aps" || row.kind === "crit" ? Number(n.value).toFixed(2) : n.value;
-        if (defence) {
-          return `<div class="price-overlay-prop price-overlay-prop-num is-defence${on}"><button type="button" class="price-overlay-q-toggle" data-pick-prop="${esc(row.id)}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(row.label)}:</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${n.lo}" max="${n.hi}" value="${typed}" data-span-rid="${esc(row.id)}" ${mark} aria-label="${esc(row.label)} minimum" /></span></div>`;
-        }
-        return `<div class="price-overlay-prop price-overlay-prop-num${defence}${on}"><button type="button" class="price-overlay-q-toggle" data-pick-prop="${esc(row.id)}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(row.label)}: </span><b${live}>${esc(row.shown)}</b>${row.q20 ? `<em class="price-overlay-q20">${esc(row.q20Label || "Q 20%")}</em>` : ""}</button><span class="price-overlay-q-edit"><input type="text" inputmode="decimal" pattern="[0-9.]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${n.lo}" max="${n.hi}" value="${typed}" data-span-rid="${esc(row.id)}"${dec} ${mark} /></span></div>${tags ? `<div class="price-overlay-dps-tags">${tags}</div>` : ""}`;
+        const decimal = isDecimalPropId(row.id);
+        const dec = decimal ? ` data-span-dec="1" step="0.01"` : "";
+        const typed = decimal ? Number(n.value).toFixed(2) : n.value;
+        const automatic = !Number.isFinite(Number(drop.wantProps?.[row.id]));
+        const unit = row.kind === "crit" || row.kind === "block" ? '<span class="price-overlay-prop-unit">%</span>' : "";
+        const compactClass = compactWeapon ? row.id === "item.crit" ? " is-weapon-crit" : row.id === "item.aps" ? " is-weapon-aps" : "" : "";
+        return `<div class="price-overlay-prop price-overlay-prop-num is-inline-value${on}${compactClass}"><button type="button" class="price-overlay-q-toggle" data-pick-prop="${esc(row.id)}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(row.label)}:</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="${decimal ? "decimal" : "numeric"}" pattern="${decimal ? "[0-9.]*" : "[0-9]*"}" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${n.lo}" max="${n.hi}" value="${typed}" data-span-rid="${esc(row.id)}"${dec}${live} data-live-default="${automatic ? "1" : "0"}" ${mark} aria-label="${esc(row.label)} minimum" />${unit}</span>${row.q20 ? `<em class="price-overlay-q20">${esc(row.q20Label || "Q 20%")}</em>` : ""}</div>${tags ? `<div class="price-overlay-dps-tags">${tags}</div>` : ""}`;
       }
       const shown = `<span>${esc(row.label)}</span><b${live}>${esc(row.shown)}</b>`;
       if (row.pick) return `<button type="button" class="price-overlay-prop${row.on ? " is-on" : ""}" data-pick-search="${esc(row.pick)}" ${mark}>${shown}</button>`;
@@ -7944,7 +8110,9 @@ function overlayPropsHtml(log, drop) {
       const defence = ["item.armour", "item.evasion_rating", "item.energy_shield"].includes(row.id) ? " is-defence" : "";
       return `<button type="button" class="price-overlay-prop${defence}${on}" data-pick-prop="${esc(row.id)}" ${mark}>${shown}</button>`;
     })
-    .join("")}</div>`;
+    .join("")}</div>` : "";
+  if (!meta && !props && !rune) return "";
+  return `<div class="price-overlay-properties${compactWeapon ? " is-weapon-layout" : ""}"><div class="price-overlay-property-column">${meta}${props}</div>${rune ? `<div class="price-overlay-sockets-column">${rune}</div>` : ""}</div>`;
 }
 
 function overlayUsesExchange(drop) {
@@ -8066,7 +8234,7 @@ function tradeSiteQuery(drop, filters) {
   const typeBag = {};
   if (category) typeBag.category = { option: category };
   if (unique) typeBag.rarity = { option: "unique" };
-  else if (/^(rare|magic|normal)$/i.test(rarity)) typeBag.rarity = { option: "nonunique" };
+  else if (canPickRarity(drop)) typeBag.rarity = { option: searchRarityFilter(drop) };
   const ilvl = ilvlFilterState(drop);
   if (ilvl?.on) typeBag.ilvl = { min: ilvl.min };
   const quality = qualityFilterState(drop);
@@ -8080,9 +8248,9 @@ function tradeSiteQuery(drop, filters) {
   }
   if (Object.keys(misc).length) query.filters.misc_filters = { filters: misc };
   const equip = {};
-  if (Number.isInteger(drop?.pickRunes)) {
-    const n = Math.max(0, Math.min(6, drop.pickRunes));
-    equip.rune_sockets = { min: n, max: n };
+  const sockets = socketSearchCount(drop);
+  if (sockets !== null) {
+    equip.rune_sockets = { min: sockets, max: sockets };
   }
   for (const row of filters || []) {
     const key = equipTradeKey(row.id);
@@ -8199,10 +8367,22 @@ function overlayAffixDisplayOrder(groups) {
   return orderResistances(regular).concat(orderResistances(desecrated));
 }
 
+function overlayHeaderClasses(drop) {
+  const classes = [];
+  if (drop?.runeforged === true || isRuneforgedBaseType(drop?.baseType)) classes.push("has-runic-header");
+  if (drop?.desecrated === true || (drop?.rolls || []).some((roll) => roll.desecrated)) classes.push("has-desecrated-header");
+  if (/^unique$/i.test(drop?.rarity || "")) {
+    if (drop.foil === true || drop.isFoil === true) classes.push("has-foil-header");
+    const vaalProperty = (lookupLore(drop.name)?.properties || []).some((line) => /^Vaal\s/i.test(line));
+    if (drop.vaalUnique === true || vaalProperty || VAAL_HEADER_UNIQUES.has(String(drop.name || "").trim().toLowerCase())) classes.push("has-vaal-header");
+  }
+  return classes.join(" ");
+}
+
 function priceOverlayHtml(log, drop) {
   if (isClipboardCurrency(drop)) return currencyOverlayHtml(drop);
   const fracturedSearchOn = searchFractured(drop) !== false;
-  const rolls = inspectRolls(drop).map((roll) =>
+  const rolls = inspectRolls(drop).filter((roll) => !drop.collapseRes || resistanceValue(roll) == null).map((roll) =>
     roll?.fractured && !fracturedSearchOn ? { ...roll, fractured: false } : roll
   );
   const order = ["enchant", "corrupt", "rune", "skill", "implicit", "explicit"];
@@ -8326,18 +8506,18 @@ function priceOverlayHtml(log, drop) {
       kind,
       rolls: rolls.filter((roll) => canonicalRollKind(roll.kind) === kind && !isCharmSlotRoll(roll) && !isWeaponEleFlatRoll(roll, drop)),
     }))
-    .filter((group) => group.rolls.length);
+    .filter((group) => group.rolls.length || group.kind === "explicit" && resistanceTotal(drop).count);
   const modGroupLabels = {
     enchant: "Enchantments",
     corrupt: "Corrupted modifiers",
-    rune: "Runes",
+    rune: "Augments",
     skill: "Granted Skills",
     implicit: "Implicit modifiers",
     explicit: "Affixes",
   };
   const modsBody = listedByKind
     .map(({ kind, rolls: list }) => {
-      const body = modButtons(list);
+      const body = modButtons(list) + (kind === "explicit" ? resistanceControlsHtml(log, drop) : "");
       return `<div class="price-overlay-mod-group is-${kind}"><div class="price-overlay-mod-group-label is-${kind}" role="heading" aria-level="3">${modGroupLabels[kind] || "Modifiers"}</div>${body}</div>`;
     })
     .join("");
@@ -8355,18 +8535,23 @@ function priceOverlayHtml(log, drop) {
     ? `<aside class="price-overlay-side"><div class="price-overlay-side-head"><span class="price-overlay-side-label">PoE 2 trade</span></div>${offers}</aside>`
     : "";
   return `
-    <article class="price-overlay-card item-tip-card ${esc(kindClass)}${hasOffers ? " has-offers" : ""}"${weaponDpsCardAttrs(drop)}>
+    <article class="price-overlay-card item-tip-card is-item-framed ${esc(kindClass)} ${overlayHeaderClasses(drop)}${hasOffers ? " has-offers" : ""}"${weaponDpsCardAttrs(drop)}>
       <div class="price-overlay-shell">
         <div class="price-overlay-main">
           ${overlayBarHtml(!!tradeBtns)}
+          <div class="item-tip-head is-item-banner-head">
+            <div class="price-overlay-item-banner${/^(normal|magic)$/i.test(drop.rarity || "") ? " is-single-line" : ""}">
+              ${/^(normal|magic|rare)$/i.test(drop.rarity || "") ? overlayBaseHtml(log, drop, false, true) : `<div class="item-tip-name-row">
+                <div class="item-tip-name" title="${esc(drop.name)}">${esc(drop.name)}</div>
+              </div>
+              ${overlayBaseHtml(log, drop, false)}`}
+            </div>
+          </div>
           <div class="price-overlay-body">
-          <div class="item-tip-head">
+          <div class="item-tip-head is-item-header">
             ${dropIconHtml(drop, "lg")}
             <div class="item-tip-title">
-              <div class="item-tip-name-row">
-                <div class="item-tip-name">${esc(drop.name)}</div>
-              </div>
-              ${overlayBaseHtml(log, drop)}
+              ${overlayRarityHtml(log, drop)}
               ${overlayFlagsHtml(log, drop)}
             </div>
           </div>
@@ -8510,6 +8695,13 @@ function formatDpsLive(n) {
   return formatDpsShown(n);
 }
 
+function paintDpsValue(el, value) {
+  if (!el || !Number.isFinite(value)) return;
+  if (el.tagName === "INPUT") {
+    if (el.dataset.liveDefault === "1" && document.activeElement !== el) el.value = formatDpsLive(value);
+  } else el.textContent = formatDpsLive(value);
+}
+
 function paintLiveDps(card) {
   const d = card?.dataset;
   const baseAps = Number(d?.dpsAps);
@@ -8615,11 +8807,11 @@ function paintLiveDps(card) {
   let dps = [pdps, edps, cdps].filter((n) => Number.isFinite(n) && n > 0).reduce((a, b) => a + b, 0);
   if (!(dps > 0) && useClip && Number.isFinite(clipTdps) && clipTdps > 0) dps = clipTdps;
   const pdpsEl = card.querySelector("[data-live-pdps]");
-  if (pdpsEl && Number.isFinite(pdps)) pdpsEl.textContent = formatDpsLive(pdps);
+  paintDpsValue(pdpsEl, pdps);
   const edpsEl = card.querySelector("[data-live-edps]");
-  if (edpsEl && Number.isFinite(edps)) edpsEl.textContent = formatDpsLive(edps);
+  paintDpsValue(edpsEl, edps);
   const dpsEl = card.querySelector("[data-live-dps]");
-  if (dpsEl && dps > 0) dpsEl.textContent = formatDpsLive(dps);
+  if (dps > 0) paintDpsValue(dpsEl, dps);
   const typedEl = card.querySelector("[data-live-typed-dps]");
   if (!typedEl) return;
   const type = typedEl.getAttribute("data-live-typed-dps");
@@ -8631,7 +8823,7 @@ function paintLiveDps(card) {
     return aps * Math.max(0, clip - was + eleAddBy[name]);
   }
   const typed = type === "physical" ? pdps : type === "any" ? edps : partDps(type);
-  if (Number.isFinite(typed) && typed > 0) typedEl.textContent = formatDpsLive(typed);
+  if (typed > 0) paintDpsValue(typedEl, typed);
 }
 
 function paintOverlaySpanLive(input) {
@@ -8731,8 +8923,45 @@ function scaleLinkedRolls() {
   // Hybrid lines each have their own slider; do not force-link rolls.
 }
 
+function resetOverlayMin(log, drop, rid) {
+  if (!drop) return;
+  if (rid === "total-resistance") delete drop.wantTotalRes;
+  else if (rid === "ilvl") delete drop.wantIlvl;
+  else if (rid === "quality") delete drop.wantQuality;
+  else if (rid === "runes") {
+    setDropRunePick(log, drop, itemSocketCount(drop), false);
+    return;
+  } else if (isSliderPropId(rid) || isTypedPropId(rid)) {
+    if (drop.wantProps) delete drop.wantProps[rid];
+  } else {
+    drop.rolls = normalizeRolls(drop.rolls, drop);
+    const roll = drop.rolls.find((row) => String(row.rid) === rid);
+    if (!roll) return;
+    delete roll.wantMin;
+    delete roll.wantMax;
+    for (const extra of roll.extra || []) {
+      delete extra.wantMin;
+      delete extra.wantMax;
+    }
+  }
+  commitDropSliderMin(log, drop);
+}
+
 function setRollWantMin(log, drop, rid, raw, live) {
   if (!drop) return;
+  if (raw == null) return;
+  if (String(raw).trim() === "") {
+    if (!live) resetOverlayMin(log, drop, String(rid));
+    return;
+  }
+  if (String(rid) === "total-resistance") {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return;
+    drop.wantTotalRes = Math.max(-99999, Math.min(99999, value));
+    drop.pickTotalRes = true;
+    if (!live) commitDropSliderMin(log, drop);
+    return;
+  }
   if (String(rid) === "ilvl") {
     setDropIlvlMin(log, drop, raw, live);
     return;
@@ -8755,6 +8984,11 @@ function setRollWantMin(log, drop, rid, raw, live) {
   if (!row) return;
   const n0 = Number(raw);
   if (!Number.isFinite(n0)) return;
+  if (row.flatAvg) {
+    row.wantMin = snapRollNum(Math.min(99999, Math.max(0, n0)), row);
+    if (!live) commitDropSliderMin(log, drop);
+    return;
+  }
   const d = sliderDriver(row);
   const lo = Number(d.lo);
   const hi = Number(d.hi);
@@ -8855,6 +9089,7 @@ async function quoteRolledDrop(log, drop, force = false) {
       typeLine: tradeBaseType(drop),
       category: tradeCategory(drop.className),
       rarity: drop.rarity || "",
+      rarityFilter: searchRarityFilter(drop),
     };
     if (overlayUsesExchange(drop)) {
       extra.exchange = true;
@@ -8881,7 +9116,8 @@ async function quoteRolledDrop(log, drop, force = false) {
         if (Number(drop.unidentifiedTier) > 0) extra.unidentifiedTier = Number(drop.unidentifiedTier);
       }
       if (wantsRavenTouched(drop)) extra.ravenTouched = true;
-      if (Number.isInteger(drop.pickRunes)) extra.runeSockets = drop.pickRunes;
+      const sockets = socketSearchCount(drop);
+      if (sockets !== null) extra.runeSockets = sockets;
     }
     const row = await tradeFetch(drop.name, league, !!force, false, extra);
     const target = findLoggedDrop(log?.id, drop.id) || drop;
@@ -8986,6 +9222,9 @@ function ingestClipboardItem(text, mode) {
     };
     if (parsed.mirrored) drop.mirrored = true;
     if (parsed.sanctified) drop.sanctified = true;
+    if (parsed.foil) drop.foil = true;
+    if (parsed.vaalUnique) drop.vaalUnique = true;
+    if (parsed.desecrated) drop.desecrated = true;
     if (parsed.ravenTouched) {
       drop.ravenTouched = true;
       drop.pickRaven = true;
@@ -9023,6 +9262,9 @@ function ingestClipboardItem(text, mode) {
   };
   if (parsed.mirrored) entry.mirrored = true;
   if (parsed.sanctified) entry.sanctified = true;
+  if (parsed.foil) entry.foil = true;
+  if (parsed.vaalUnique) entry.vaalUnique = true;
+  if (parsed.desecrated) entry.desecrated = true;
   if (parsed.ravenTouched) {
     entry.ravenTouched = true;
     entry.pickRaven = true;
@@ -10667,6 +10909,14 @@ function onClick(event) {
     toggleDropRunePick(log, drop);
     return;
   }
+  const resistanceAction = event.target.closest("[data-res-action]");
+  if (resistanceAction) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(resistanceAction.dataset.pickLog, resistanceAction.dataset.pickDrop);
+    changeResistanceView(log, drop, resistanceAction.dataset.resAction, resistanceAction.dataset.resValue);
+    return;
+  }
   const pickProp = event.target.closest("[data-pick-prop]");
   if (pickProp) {
     event.preventDefault();
@@ -10689,6 +10939,14 @@ function onClick(event) {
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickSearch.dataset.pickLog, pickSearch.dataset.pickDrop);
     applyDropSearchToggle(log, drop, pickSearch.dataset.pickSearch);
+    return;
+  }
+  const pickRarity = event.target.closest("[data-pick-rarity]");
+  if (pickRarity) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickRarity.dataset.pickLog, pickRarity.dataset.pickDrop);
+    applyDropRarity(log, drop, pickRarity.dataset.pickRarity);
     return;
   }
   const pickBase = event.target.closest("[data-pick-base]");
@@ -10998,6 +11256,11 @@ function onChange(event) {
   }
   const span = event.target.closest("[data-span-rid]");
   if (span) {
+    if (span.dataset.spanRid === "runes" && event.type === "change") return;
+    if (span.classList.contains("price-overlay-q-input") && span.value.trim() === "" && event.type === "change") return;
+    if (span.dataset.spanRid === "runes" && span.value.trim() !== "") {
+      span.value = String(Math.max(0, Math.min(Number(span.max), Math.round(Number(span.value) || 0))));
+    }
     const { log, drop } = overlayLogDrop(span.dataset.pickLog, span.dataset.pickDrop);
     setRollWantMin(log, drop, span.dataset.spanRid, span.value);
     return;
@@ -11064,6 +11327,10 @@ document.addEventListener("mousedown", (event) => {
 });
 document.addEventListener("contextmenu", (event) => event.preventDefault());
 document.addEventListener("change", onChange);
+document.addEventListener("focusout", (event) => {
+  if (event.target.matches('input[data-span-rid="runes"]') ||
+      event.target.matches('.price-overlay-q-input[data-span-rid]') && event.target.value.trim() === "") onChange(event);
+});
 document.addEventListener("paste", (event) => {
   if (ui.view !== "settings") return;
   if (!document.getElementById("feedback-form")) return;
@@ -11198,6 +11465,11 @@ document.addEventListener("keydown", (event) => {
     save();
     syncHotkeys();
     render();
+    return;
+  }
+  if (event.key === "Enter" && event.target.matches('.price-overlay-q-input[data-span-rid]')) {
+    event.preventDefault();
+    event.target.blur();
     return;
   }
   if (event.key === "Escape" && ui.inspect) {
@@ -11391,9 +11663,10 @@ try {
 } catch (_) {}
 refreshBackupInfo();
 render();
+// Saved shortcuts must register even while the companion has never been shown.
+syncHotkeys();
 requestAnimationFrame(() => {
   startPriceClock();
-  syncHotkeys();
 });
 const afterPaint = typeof requestIdleCallback === "function"
   ? (fn) => requestIdleCallback(fn, { timeout: 1800 })

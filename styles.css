@@ -3748,41 +3748,69 @@ button.roll-chip:hover {
   min-width: 0;
 }
 
-.price-overlay-base-modes {
+.price-overlay-base-choice,
+.price-overlay-rarity {
   display: inline-flex;
-  gap: 5px;
-}
-
-.price-overlay-base-mode {
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   margin: 0;
-  min-width: 48px;
-  min-height: 27px;
-  padding: 3px 9px;
-  border: 1px solid #887552;
+  min-height: 32px;
+  padding: 3px 7px;
+  border: 1px solid #706044;
   border-radius: 4px;
   background: #24231e;
   color: #eee5d3;
   font: inherit;
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
+  font-size: 0.94rem;
+  font-weight: 600;
   line-height: 1.3;
-  text-transform: uppercase;
   cursor: pointer;
 }
 
-.price-overlay-base-mode:hover {
+.price-overlay-base-choice { color: #e6cd99; }
+.price-overlay-base-row:has(.price-overlay-rarity-options) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  width: 100%;
+}
+.price-overlay-base-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.price-overlay-rarity-picker { display: grid; justify-items: center; gap: 3px; }
+.price-overlay-rarity-label { color: #f6df9d; font-size: 0.68rem; font-weight: 800; letter-spacing: 0.08em; line-height: 1; text-transform: uppercase; text-shadow: 0 1px 1px #000; }
+.price-overlay-rarity-options { display: inline-flex; gap: 2px; }
+.price-overlay-rarity { flex: 0 0 29px; width: 29px; padding: 0; white-space: nowrap; font-size: 0.9rem; font-weight: 700; }
+.price-overlay-rarity.is-normal { color: #11141d; border-color: #eef1f7; background: #d0d5de; }
+.price-overlay-rarity.is-magic { color: #11141d; border-color: #a9bdff; background: #668dff; }
+.price-overlay-rarity.is-rare { color: #11141d; border-color: #ffe58b; background: #edbf33; }
+.price-overlay-rarity.is-selected { box-shadow: inset 0 0 0 2px #11141d, 0 0 0 1px #fff4d6; }
+.price-overlay-rarity.is-normal.is-selected { background: #fff; }
+.price-overlay-rarity.is-magic.is-selected { background: #9bb6ff; }
+.price-overlay-rarity.is-rare.is-selected { background: #ffe65c; }
+.price-overlay-rarity-letter { pointer-events: none; font-weight: 800; }
+.price-overlay-rarity.is-nonunique {
+  color: #fff;
+  border-color: #b7bfcc;
+  background: #252930;
+}
+.price-overlay-rarity.is-nonunique.is-selected {
+  background: #3e444f;
+}
+
+.price-overlay-base-choice:hover {
   border-color: #e3c88e;
   background: #393326;
 }
 
-.price-overlay-base-mode.is-on {
-  border-color: #e9ce94;
-  background: #d8bd82;
-  color: #19160f;
-}
+.price-overlay-rarity:hover { filter: brightness(1.15); }
 
-.price-overlay-base-mode:focus-visible {
+.price-overlay-base-choice:focus-visible,
+.price-overlay-rarity:focus-visible {
   outline: 2px solid #f2dba8;
   outline-offset: 2px;
 }
@@ -3975,6 +4003,7 @@ button.roll-chip:hover {
 
 .price-overlay-card.item-tip-card .item-tip-head {
   grid-template-columns: 80px 1fr;
+  align-items: center;
   margin: 4px 6px 0;
   padding: 10px 10px 8px;
   border-top: 1px solid color-mix(in srgb, var(--gold) 58%, transparent);
@@ -3989,6 +4018,7 @@ button.roll-chip:hover {
 
 .price-overlay-card.item-tip-card .item-tip-title {
   align-content: center;
+  gap: 4px;
   text-align: center;
 }
 
@@ -3999,6 +4029,7 @@ button.roll-chip:hover {
 
 .price-overlay-card.item-tip-card .item-tip-name {
   color: #e3c776;
+  font-size: 1.12rem;
   font-family: "Fontin SmallCaps", Fontin, "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
   font-variant: small-caps;
   letter-spacing: 0.045em;
@@ -4010,6 +4041,241 @@ button.roll-chip:hover {
 .price-overlay-card.item-tip-card .item-tip-title .price-overlay-flags {
   justify-content: center;
 }
+
+.price-overlay-card.item-tip-card .item-tip-head.is-item-header {
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 8px 10px;
+  margin: 0 0 6px;
+  padding: 0 0 6px;
+  border-top: 0;
+  background: none;
+}
+
+.price-overlay-item-banner {
+  position: relative;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  box-sizing: border-box;
+  display: grid;
+  align-content: center;
+  gap: 0;
+  min-width: 0;
+  min-height: 74px;
+  padding: 6px 64px;
+  background-image: var(--item-header-left), var(--item-header-right), var(--item-header-middle);
+  background-position: left top, right top, center top;
+  background-repeat: no-repeat, no-repeat, repeat-x;
+  background-size: auto 100%;
+  font-family: "Fontin SmallCaps", Fontin, "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+}
+
+.price-overlay-card.item-tip-card .price-overlay-item-banner .item-tip-name {
+  color: var(--item-header-ink);
+  font-size: 1.14rem;
+  line-height: 1.15;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.price-overlay-item-banner .price-overlay-base-row { justify-content: center; min-width: 0; }
+.price-overlay-item-banner .price-overlay-base-label.item-tip-name { text-transform: none; }
+.price-overlay-card.item-tip-card .price-overlay-item-banner .price-overlay-base-label.item-tip-name {
+  font-size: 1.4rem;
+}
+.price-overlay-item-banner .item-tip-name-row { min-width: 0; }
+.price-overlay-item-banner .item-tip-base {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--item-header-ink);
+  font-family: inherit;
+  font-size: 1.04rem;
+  font-weight: 400;
+  font-variant: small-caps;
+  line-height: 1.15;
+  text-align: center;
+  text-shadow: 0 1px #000;
+}
+.price-overlay-item-banner .price-overlay-base-choice {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 2px;
+  border-color: transparent;
+  background: transparent;
+}
+.price-overlay-item-banner .price-overlay-base-choice:hover {
+  color: color-mix(in srgb, var(--item-header-ink) 75%, white);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.price-overlay-item-banner.is-single-line {
+  min-height: 49px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.price-overlay-card.item-tip-card .is-item-header > .item-icon {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: center;
+  justify-self: center;
+}
+
+.price-overlay-card.item-tip-card .is-item-header > .item-tip-title {
+  display: grid;
+  grid-column: 2;
+  grid-row: 2;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+}
+
+.price-overlay-card.item-tip-card .is-item-header .price-overlay-flags {
+  justify-content: center;
+  margin-top: 0;
+}
+
+.price-overlay-card.is-item-framed {
+  --item-header-ink: #fee055;
+  --item-frame-edge: #ad914f;
+  --item-header-left: url("art/item-header-rare-left.png");
+  --item-header-middle: url("art/item-header-rare-middle.png");
+  --item-header-right: url("art/item-header-rare-right.png");
+  border-color: var(--item-frame-edge);
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--item-frame-edge) 45%, #080808), var(--shadow);
+}
+
+/* Follow the item's actual rarity; search rarity buttons never change this art. */
+.price-overlay-card.is-item-framed.normal {
+  --item-header-ink: #c8c8c8;
+  --item-frame-edge: #77756e;
+  --item-header-left: url("art/item-header-normal-left.webp");
+  --item-header-middle: url("art/item-header-normal-middle.webp");
+  --item-header-right: url("art/item-header-normal-right.webp");
+}
+
+.price-overlay-card.is-item-framed.magic {
+  --item-header-ink: #7a97fe;
+  --item-frame-edge: #7777ba;
+  --item-header-left: url("art/item-header-magic-left.png");
+  --item-header-middle: url("art/item-header-magic-middle.png");
+  --item-header-right: url("art/item-header-magic-right.png");
+}
+
+.price-overlay-card.is-item-framed.unique {
+  --item-header-ink: #f06916;
+  --item-frame-edge: #b7774b;
+  --item-header-left: url("art/item-header-unique-left.png");
+  --item-header-middle: url("art/item-header-unique-middle.png");
+  --item-header-right: url("art/item-header-unique-right.png");
+}
+
+.price-overlay-card.is-item-framed.has-runic-header {
+  --item-frame-edge: #768bb2;
+}
+
+.price-overlay-card.is-item-framed.normal.has-runic-header {
+  --item-header-left: url("art/item-header-runic-normal-left.webp");
+  --item-header-middle: url("art/item-header-runic-normal-middle.webp");
+  --item-header-right: url("art/item-header-runic-normal-right.webp");
+}
+
+.price-overlay-card.is-item-framed.magic.has-runic-header {
+  --item-header-left: url("art/item-header-runic-magic-left.webp");
+  --item-header-middle: url("art/item-header-runic-magic-middle.webp");
+  --item-header-right: url("art/item-header-runic-magic-right.webp");
+}
+
+.price-overlay-card.is-item-framed.rare.has-runic-header {
+  --item-header-left: url("art/item-header-runic-rare-left.webp");
+  --item-header-middle: url("art/item-header-runic-rare-middle.webp");
+  --item-header-right: url("art/item-header-runic-rare-right.webp");
+}
+
+.price-overlay-card.is-item-framed.unique.has-runic-header {
+  --item-header-left: url("art/item-header-runic-unique-left.webp");
+  --item-header-middle: url("art/item-header-runic-unique-middle.webp");
+  --item-header-right: url("art/item-header-runic-unique-right.webp");
+}
+
+.price-overlay-card.is-item-framed.unique.has-foil-header {
+  --item-header-ink: #a3ad35;
+  --item-frame-edge: #b19a28;
+  --item-header-left: url("art/item-header-foil-poe2-left.png");
+  --item-header-middle: url("art/item-header-foil-poe2-middle.png");
+  --item-header-right: url("art/item-header-foil-poe2-right.png");
+}
+
+.has-desecrated-header { --item-header-symbol: url("art/item-header-symbol-desecrated.png"); }
+.has-vaal-header { --item-header-symbol: url("art/item-header-symbol-vaal.png"); }
+
+.price-overlay-card:is(.has-desecrated-header, .has-vaal-header) .price-overlay-item-banner::before,
+.price-overlay-card:is(.has-desecrated-header, .has-vaal-header) .price-overlay-item-banner::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 36px;
+  height: 44px;
+  transform: translateY(-50%);
+  background: var(--item-header-symbol) center / contain no-repeat;
+  pointer-events: none;
+}
+
+.price-overlay-item-banner::before { left: 2px; }
+.price-overlay-item-banner::after { right: 2px; }
+
+.price-overlay-card.is-item-framed .price-overlay-main {
+  flex: 0 1 462px;
+  width: 462px;
+  max-width: 462px;
+}
+
+.price-overlay-card.is-item-framed .price-overlay-body {
+  padding: 8px 12px 10px;
+}
+
+.price-overlay-card.is-item-framed .item-tip-head.is-item-banner-head {
+  display: block;
+  flex: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.price-overlay-card.is-item-framed .is-item-header > .item-icon {
+  grid-row: 1;
+}
+
+.price-overlay-card.is-item-framed .is-item-header > .item-tip-title {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-width: 0;
+}
+
+.price-overlay-card.is-item-framed .is-item-header .price-overlay-flags {
+  max-width: calc(100% - 160px);
+}
+
+.price-overlay-card.is-item-framed .is-item-header > .item-icon {
+  position: relative;
+  pointer-events: none;
+}
+
+.price-overlay-card .price-overlay-corrupt,
+.price-overlay-card .price-overlay-fractured,
+.price-overlay-card .price-overlay-raven {
+  font-size: 1.04rem;
+  min-height: 26px;
+  gap: 5px;
+}
+
+.price-overlay-card .price-overlay-fractured { flex: 0 0 auto; width: auto; }
 
 .price-overlay-bar {
   display: grid;
@@ -4359,10 +4625,15 @@ button.roll-chip:hover {
 }
 
 .price-overlay-corrupt.is-on {
-  color: #f05a4a;
+  color: #ff0000;
   font-weight: 600;
   font-style: normal;
   text-transform: none;
+}
+
+.price-overlay-corrupt .flag-check.is-checked {
+  border-color: #ff0000;
+  background: #ff0000;
 }
 
 .price-overlay-fractured.is-on {
@@ -4467,6 +4738,17 @@ button.roll-chip:hover {
   padding-top: 4px;
   border-top: 1px solid var(--overlay-mod-divider);
 }
+
+.price-overlay-resistance-controls {
+  display: grid;
+  gap: 7px;
+  padding: 9px 4px 4px;
+}
+
+.price-overlay-resistance-controls .btn { justify-self: start; padding: 4px 9px; font-size: 0.76rem; }
+.price-overlay-resistance-controls .price-overlay-prop { justify-content: flex-start; gap: 10px; }
+.price-overlay-resistance-controls .price-overlay-prop-num { display: grid; grid-template-columns: minmax(0, 1fr) 80px; gap: 8px; }
+.price-overlay-resistance-controls .price-overlay-q-input { width: 100%; }
 
 .price-overlay-mod-group {
   display: grid;
@@ -4639,19 +4921,21 @@ button.roll-chip:hover {
 .price-overlay-socket-preview {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  flex: 0 0 140px;
-  width: 140px;
-  height: 24px;
+  gap: 5px;
+  flex: 0 0 205px;
+  width: 205px;
+  height: 30px;
   margin-left: 6px;
   pointer-events: none;
 }
 
-.price-overlay-socket-preview > i {
+.price-overlay-socket {
   display: block;
-  flex: 0 0 20px;
-  width: 20px;
-  height: 20px;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  margin: 0;
   box-sizing: border-box;
   border: 1px solid #4a4134;
   border-radius: 50%;
@@ -4661,9 +4945,12 @@ button.roll-chip:hover {
     #75634c;
   box-shadow: inset 1px 1px 1px #e1c99e88, inset -1px -1px 2px #090a08,
     0 1px 2px #000c;
+  cursor: default;
 }
 
-.price-overlay-socket-preview > i[hidden] { display: none; }
+.price-overlay-socket[hidden] { display: none; }
+
+.price-overlay-no-sockets { color: var(--muted); font-size: 0.85em; }
 
 .price-overlay-meta .price-overlay-prop-num.is-meta .price-overlay-q-toggle {
   flex: 0 0 auto;
@@ -4783,13 +5070,17 @@ button.roll-chip:hover {
   padding: 2px 0;
 }
 
-.price-overlay-prop-num.is-defence {
+.price-overlay-prop-num.is-inline-value {
   justify-content: flex-start;
   gap: 8px;
 }
 
-.price-overlay-prop-num.is-defence .price-overlay-q-toggle {
+.price-overlay-prop-num.is-inline-value .price-overlay-q-toggle {
   flex: 0 0 auto;
+}
+
+.price-overlay-prop-num.is-inline-value .price-overlay-q-input {
+  width: 8ch;
 }
 
 .price-overlay-dps-box {
@@ -4851,6 +5142,114 @@ button.roll-chip:hover {
 .price-overlay-prop-num .price-overlay-q-input {
   width: 4.2em;
 }
+
+.price-overlay-prop-unit { color: #9aa8ff; font-size: 0.8em; }
+
+.price-overlay-properties {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 158px;
+  align-items: start;
+  gap: 16px;
+  padding: 8px 4px;
+}
+
+.price-overlay-properties:not(:has(.price-overlay-sockets-column)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.price-overlay-property-column {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.price-overlay-properties .price-overlay-meta,
+.price-overlay-properties .price-overlay-props {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  padding: 0;
+}
+
+.price-overlay-properties .price-overlay-prop-num {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 80px;
+  grid-column: auto;
+  grid-row: auto;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+}
+
+.price-overlay-properties .price-overlay-meta .price-overlay-prop-num.is-meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 80px;
+  grid-column: 1;
+  grid-row: auto;
+  width: 100%;
+  gap: 8px;
+}
+
+.price-overlay-properties .price-overlay-q-toggle {
+  gap: 6px;
+  min-width: 0;
+}
+
+.price-overlay-properties .price-overlay-q-edit { min-width: 0; }
+.price-overlay-properties .price-overlay-q-input { width: 100%; min-width: 0; }
+.price-overlay-properties .price-overlay-q20 { grid-column: 1 / -1; justify-self: start; }
+
+.price-overlay-sockets-column { min-width: 0; }
+
+.price-overlay-sockets-column .price-overlay-prop-num.is-sockets {
+  grid-template-columns: minmax(0, 1fr) 64px;
+  gap: 6px;
+}
+
+.price-overlay-sockets-column .price-overlay-socket-preview {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, 30px);
+  grid-auto-rows: 30px;
+  justify-content: center;
+  align-content: start;
+  gap: 5px;
+  width: 100%;
+  height: 65px;
+  margin: 4px 0 0;
+}
+
+.price-overlay-sockets-column .price-overlay-no-sockets {
+  grid-column: 1 / -1;
+  justify-self: center;
+}
+
+.price-overlay-properties.is-weapon-layout { row-gap: 8px; }
+
+.is-weapon-layout .price-overlay-socket-preview {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 22px;
+  gap: 3px;
+}
+
+.is-weapon-layout .price-overlay-socket { flex: 0 0 22px; width: 22px; height: 22px; }
+
+.is-weapon-layout .price-overlay-props > .price-overlay-prop-num { position: relative; }
+.is-weapon-layout .price-overlay-q-edit { position: relative; }
+.is-weapon-layout .price-overlay-prop-unit { position: absolute; left: calc(100% + 3px); }
+
+.is-weapon-layout .price-overlay-props .price-overlay-q20 {
+  position: absolute;
+  left: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  grid-column: auto;
+  white-space: nowrap;
+}
+
+.is-weapon-layout .price-overlay-props > .price-overlay-dps-tags { padding: 0; }
 
 .price-overlay-dps-tags {
   display: flex;
