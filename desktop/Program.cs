@@ -59,6 +59,9 @@ sealed class TrackerWindow : Form
     const int HotHideoutId = 4;
     const int HotSettingsId = 5;
     static readonly Size CompanionMinimum = new(900, 640);
+    double _companionWindowScale = 1;
+    bool _companionSizeDirty;
+    Size ScaledCompanionMinimum => new((int)Math.Round(CompanionMinimum.Width * _companionWindowScale), (int)Math.Round(CompanionMinimum.Height * _companionWindowScale));
     bool _launcherHotkeyRegistered;
     bool _hotkeysPaused;
     bool _companionAboveGame;
@@ -90,6 +93,10 @@ sealed class TrackerWindow : Form
     bool _hookPoe2Focused;
     CoreWebView2Environment? _env;
     PriceOverlayForm? _overlay;
+    PriceOverlayForm? _previewOverlay;
+    Task? _previewInitialization;
+    int _previewGeneration;
+    bool _previewEnabled;
     GuideBrowserHost? _guideBrowser;
     NotifyIcon? _tray;
 
@@ -141,6 +148,7 @@ sealed class TrackerWindow : Form
             ClearHotkeys();
             _launcher?.Dispose();
             _overlay?.Dispose();
+            _previewOverlay?.Dispose();
             _guideBrowser?.Dispose();
             _tray?.Dispose();
             trayMenu.Dispose();
@@ -213,20 +221,30 @@ sealed class TrackerWindow : Form
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
+    void SetCompanionWindowScale(double scale)
+    {
+        _web.ZoomFactor = 1;
+        if (Math.Abs(_companionWindowScale - scale) < 0.001) return;
+        _companionWindowScale = scale;
+        _companionSizeDirty = true;
+        PlaceCompanionWindow(recenter: false);
+    }
+
     void PlaceCompanionWindow(bool recenter)
     {
         var area = CompanionArea();
         if (area.IsEmpty) return;
-        var minimum = new Size(Math.Min(CompanionMinimum.Width, area.Width), Math.Min(CompanionMinimum.Height, area.Height));
+        var minimum = new Size(Math.Min(ScaledCompanionMinimum.Width, area.Width), Math.Min(ScaledCompanionMinimum.Height, area.Height));
         if (MinimumSize != minimum) MinimumSize = minimum;
         var size = new Size(
-            Math.Max(minimum.Width, Math.Min(_companionPlaced ? Width : (int)(area.Width * 0.5328), area.Width - 24)),
-            Math.Max(minimum.Height, Math.Min(_companionPlaced ? Height : (int)(area.Height * 0.6048), area.Height - 24)));
+            Math.Max(minimum.Width, Math.Min(_companionPlaced && !_companionSizeDirty ? Width : (int)(area.Width * 0.5328 * _companionWindowScale), area.Width - 24)),
+            Math.Max(minimum.Height, Math.Min(_companionPlaced && !_companionSizeDirty ? Height : (int)(area.Height * 0.6048 * _companionWindowScale), area.Height - 24)));
         var point = recenter
             ? new Point(area.Left + Math.Max(0, (area.Width - size.Width) / 2), area.Top + Math.Max(0, (area.Height - size.Height) / 2))
             : Location;
         var bounds = FitCompanionBounds(new Rectangle(point, size), area);
         if (Bounds != bounds) Bounds = bounds;
+        _companionSizeDirty = false;
     }
 
     Rectangle CompanionArea()
@@ -238,10 +256,10 @@ sealed class TrackerWindow : Form
         return visible.IsEmpty ? game : visible;
     }
 
-    static Rectangle FitCompanionBounds(Rectangle bounds, Rectangle area)
+    Rectangle FitCompanionBounds(Rectangle bounds, Rectangle area)
     {
-        var width = Math.Clamp(bounds.Width, Math.Min(CompanionMinimum.Width, area.Width), area.Width);
-        var height = Math.Clamp(bounds.Height, Math.Min(CompanionMinimum.Height, area.Height), area.Height);
+        var width = Math.Clamp(bounds.Width, Math.Min(ScaledCompanionMinimum.Width, area.Width), area.Width);
+        var height = Math.Clamp(bounds.Height, Math.Min(ScaledCompanionMinimum.Height, area.Height), area.Height);
         return new Rectangle(Math.Clamp(bounds.X, area.Left, area.Right - width),
             Math.Clamp(bounds.Y, area.Top, area.Bottom - height), width, height);
     }
@@ -302,6 +320,7 @@ sealed class TrackerWindow : Form
         }
         if (!gameFocused) _gameMenus.ClearHeldKeys();
         _overlay?.ConstrainToGame();
+        _previewOverlay?.ConstrainToGame();
         if (_companionAboveGame && !_openingCompanion) PlaceCompanionWindow(recenter: false);
         // Keep the launcher-opened app above PoE, but never above unrelated apps.
         var foreground = GetForegroundWindow();
@@ -440,8 +459,8 @@ sealed class TrackerWindow : Form
             Marshal.WriteInt32(m.LParam, 20, area.Top - screen.Bounds.Top);
             if (!gameArea.IsEmpty)
             {
-                Marshal.WriteInt32(m.LParam, 24, Math.Min(CompanionMinimum.Width, area.Width));
-                Marshal.WriteInt32(m.LParam, 28, Math.Min(CompanionMinimum.Height, area.Height));
+                Marshal.WriteInt32(m.LParam, 24, Math.Min(ScaledCompanionMinimum.Width, area.Width));
+                Marshal.WriteInt32(m.LParam, 28, Math.Min(ScaledCompanionMinimum.Height, area.Height));
                 Marshal.WriteInt32(m.LParam, 32, area.Width);
                 Marshal.WriteInt32(m.LParam, 36, area.Height);
             }
@@ -820,7 +839,7 @@ sealed class TrackerWindow : Form
         _web.CoreWebView2.PostWebMessageAsJson(json);
     }
 
-    async Task ShowPriceOverlayAsync(string html, string vars, string? notice, bool fresh = false, bool clickAway = false)
+    async Task ShowPriceOverlayAsync(string html, string vars, string? notice, bool fresh = false, bool clickAway = false, double overlayScale = 1)
     {
         try
         {
@@ -829,11 +848,36 @@ sealed class TrackerWindow : Form
             var page = Path.Combine(AppDataDir(), "www", "overlay.html");
             await _overlay.EnsureAsync(_env, page);
             if (!string.IsNullOrWhiteSpace(notice)) _overlay.ShowNotice(notice, vars, clickAway);
-            else _overlay.ShowHtml(html, vars, fresh, clickAway);
+            else _overlay.ShowHtml(html, vars, fresh, clickAway, overlayScale);
         }
         catch
         {
             PushJson(new { type = "overlay-fallback" });
+        }
+    }
+
+    async Task ShowTradePreviewAsync(bool enabled, string html, string vars, double scale, int generation)
+    {
+        if (generation != _previewGeneration) return;
+        if (!enabled) { _previewOverlay?.HideOverlay(); return; }
+        try
+        {
+            _previewOverlay ??= new PriceOverlayForm(_ => { },
+                () => _launcher?.GameRunning == true ? _launcher.GameClientBounds : Rectangle.Empty, pinnedPreview: true);
+            _previewInitialization ??= _previewOverlay.EnsureAsync(_env, Path.Combine(AppDataDir(), "www", "overlay.html"));
+            await _previewInitialization;
+            if (generation != _previewGeneration || !_previewEnabled) return;
+            _previewOverlay.ShowHtml(html, vars, clickAway: false, overlayScale: scale);
+        }
+        catch
+        {
+            _previewInitialization = null;
+            if (generation == _previewGeneration)
+            {
+                _previewEnabled = false;
+                _previewOverlay?.HideOverlay();
+                PushJson(new { type = "trade-preview-error" });
+            }
         }
     }
 
@@ -2243,6 +2287,12 @@ sealed class TrackerWindow : Form
                 BeginInvoke(Close);
                 return;
             }
+            if (type == "app-scale")
+            {
+                var scale = root.TryGetProperty("scale", out var appScaleEl) && appScaleEl.ValueKind == JsonValueKind.Number && appScaleEl.TryGetDouble(out var appScale) && double.IsFinite(appScale) ? Math.Clamp(appScale, 0.75, 1.25) : 1;
+                BeginInvoke(() => SetCompanionWindowScale(scale));
+                return;
+            }
             if (type == "window-drag")
             {
                 BeginInvoke(DragWindow);
@@ -2421,7 +2471,19 @@ sealed class TrackerWindow : Form
                 var vars = root.TryGetProperty("vars", out var varsEl) ? varsEl.GetString() ?? "" : "";
                 var fresh = root.TryGetProperty("fresh", out var freshEl) && freshEl.ValueKind == JsonValueKind.True;
                 var clickAway = root.TryGetProperty("clickAway", out var clickEl) && clickEl.ValueKind == JsonValueKind.True;
-                BeginInvoke(() => _ = ShowPriceOverlayAsync(html, vars, null, fresh, clickAway));
+                var overlayScale = root.TryGetProperty("overlayScale", out var scaleEl) && scaleEl.ValueKind == JsonValueKind.Number && scaleEl.TryGetDouble(out var scaleValue) && double.IsFinite(scaleValue) ? Math.Clamp(scaleValue, 0.75, 1.25) : 1;
+                BeginInvoke(() => _ = ShowPriceOverlayAsync(html, vars, null, fresh, clickAway, overlayScale));
+                return;
+            }
+            if (type == "trade-preview")
+            {
+                var enabled = root.TryGetProperty("enabled", out var enabledEl) && enabledEl.ValueKind == JsonValueKind.True;
+                var html = root.TryGetProperty("html", out var previewHtml) ? previewHtml.GetString() ?? "" : "";
+                var vars = root.TryGetProperty("vars", out var previewVars) ? previewVars.GetString() ?? "" : "";
+                var scale = root.TryGetProperty("overlayScale", out var previewScale) && previewScale.ValueKind == JsonValueKind.Number && previewScale.TryGetDouble(out var scaleValue) && double.IsFinite(scaleValue) ? Math.Clamp(scaleValue, 0.75, 1.25) : 1;
+                _previewEnabled = enabled;
+                var generation = ++_previewGeneration;
+                BeginInvoke(() => _ = ShowTradePreviewAsync(enabled, html, vars, scale, generation));
                 return;
             }
             if (type == "overlay-hide")
@@ -3102,7 +3164,7 @@ sealed class TrackerWindow : Form
         var want = ExtractStamp();
         var needed = new[]
         {
-            "index.html", "overlay.html", "styles.css", "app.js", "affix-ladders.js",
+            "index.html", "overlay.html", "overlay.css", "styles.css", "app.js", "affix-ladders.js",
             "bosses.js", "guides.js", "icons.js", "still-sane-sigil.png",
         };
         if (File.Exists(stampPath)
@@ -3117,6 +3179,7 @@ sealed class TrackerWindow : Form
             WriteResource(asm, "www.fonts." + fontFile, Path.Combine(dir, "fonts", fontFile), skipUnchanged: true);
         WriteResource(asm, "www.index.html", index);
         WriteResource(asm, "www.overlay.html", Path.Combine(dir, "overlay.html"));
+        WriteResource(asm, "www.overlay.css", Path.Combine(dir, "overlay.css"));
         WriteResource(asm, "www.styles.css", Path.Combine(dir, "styles.css"));
         WriteResource(asm, "www.app.js", Path.Combine(dir, "app.js"));
         WriteResource(asm, "www.affix-ladders.js", Path.Combine(dir, "affix-ladders.js"), skipUnchanged: true);
@@ -3558,9 +3621,11 @@ sealed class PriceOverlayForm : Form
         TabStop = true,
     };
     readonly Action<string> _forward;
+    readonly bool _pinnedPreview;
     readonly Func<Rectangle> _gameBounds;
     Rectangle _placementArea;
     double _contentZoom = 1;
+    double _requestedZoom = 1;
     bool _pointerDragging;
     Point _pointerDragOffset;
     bool _ready;
@@ -3582,9 +3647,10 @@ sealed class PriceOverlayForm : Form
     const int OverlayNarrowCssW = 470;
     const int OverlayWideCssW = 770; // main 466 + side 300 + chrome
 
-    public PriceOverlayForm(Action<string> forward, Func<Rectangle>? gameBounds = null)
+    public PriceOverlayForm(Action<string> forward, Func<Rectangle>? gameBounds = null, bool pinnedPreview = false)
     {
         _forward = forward;
+        _pinnedPreview = pinnedPreview;
         _gameBounds = gameBounds ?? (() => Rectangle.Empty);
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -3594,6 +3660,7 @@ sealed class PriceOverlayForm : Form
         Height = 220;
         BackColor = Color.FromArgb(18, 14, 10);
         Controls.Add(_web);
+        FormClosing += (_, e) => { if (_pinnedPreview && e.CloseReason == CloseReason.UserClosing) e.Cancel = true; };
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -3617,6 +3684,7 @@ sealed class PriceOverlayForm : Form
     {
         if (keyData == Keys.Escape)
         {
+            if (_pinnedPreview) return true;
             HideOverlay();
             _forward("""{"type":"overlay-click","closeInspect":""}""");
             return true;
@@ -3729,8 +3797,10 @@ sealed class PriceOverlayForm : Form
         else _ready = true;
     }
 
-    public void ShowHtml(string html, string vars, bool fresh = false, bool clickAway = false)
+    public void ShowHtml(string html, string vars, bool fresh = false, bool clickAway = false, double overlayScale = 1)
     {
+        if (_pinnedPreview) clickAway = false;
+        _requestedZoom = double.IsFinite(overlayScale) ? Math.Clamp(overlayScale, 0.75, 1.25) : 1;
         var opening = fresh || !Visible;
         var rearm = opening || clickAway != _clickAway;
         _clickAway = clickAway;
@@ -3895,7 +3965,7 @@ sealed class PriceOverlayForm : Form
         var inGame = !_gameBounds().IsEmpty;
         var maxW = Math.Max(1, inGame ? screen.Width : screen.Width / 2);
         var maxH = Math.Max(1, (int)(screen.Height * 0.92));
-        _contentZoom = inGame ? Math.Min(1, maxW / (Math.Max(280, _cssW) * dpiScale)) : 1;
+        _contentZoom = Math.Min(_requestedZoom, maxW / (Math.Max(280, _cssW) * dpiScale));
         if (_web.CoreWebView2 is not null && Math.Abs(_web.ZoomFactor - _contentZoom) > 0.001)
             _web.ZoomFactor = _contentZoom;
         var scale = dpiScale * _contentZoom;
@@ -4027,6 +4097,7 @@ sealed class PriceOverlayForm : Form
             }
             if (type == "overlay-click")
             {
+                if (_pinnedPreview) return;
                 if (doc.RootElement.TryGetProperty("closeInspect", out _)) HideOverlay();
                 _forward(e.WebMessageAsJson);
             }

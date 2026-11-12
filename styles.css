@@ -4313,6 +4313,31 @@ button.roll-chip:hover {
   min-height: 38px;
 }
 
+.price-overlay-bar-actions {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.price-overlay-size-controls { display: inline-flex; gap: 3px; }
+.price-overlay-size-controls button {
+  width: 26px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #857449;
+  border-radius: 4px;
+  color: #f6df9d;
+  background: #24231d;
+  font: 700 1rem/1 sans-serif;
+  cursor: pointer;
+}
+.price-overlay-size-controls button:hover { background: #3a3527; }
+.price-overlay-size-controls button:disabled { opacity: 0.4; cursor: default; }
+.price-overlay-size-controls button:focus-visible { outline: 2px solid #f6df9d; outline-offset: 2px; }
+.price-overlay-bar-actions .price-overlay-x { margin-left: 0; }
+
 .price-overlay-bar > .price-overlay-x {
   grid-column: 2;
   grid-row: 1;
@@ -6532,7 +6557,7 @@ body.top-navigation .settings { max-width: none; }
 }
 @media (min-width: 1100px) {
   body.top-navigation .settings {
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
     align-items: start;
   }
   body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
@@ -6540,4 +6565,18 @@ body.top-navigation .settings { max-width: none; }
 @media (max-width: 560px) {
   :root body.top-navigation .app-menu { padding: 6px 12px; }
   :root body.top-navigation .menu-nav .menu-link { padding: 6px 10px; }
+}
+
+.ui-size-settings { display: grid; gap: 12px; margin: 14px 0; }
+.ui-size-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
+.ui-size-actions { display: inline-flex; align-items: center; gap: 6px; }
+.ui-size-actions .btn { min-width: 34px; padding: 6px 9px; }
+.ui-size-actions output { min-width: 48px; text-align: center; color: var(--gold-2); font-variant-numeric: tabular-nums; }
+
+
+.settings-primary { display: grid; gap: 16px; align-content: start; min-width: 0; }
+@media (max-width: 1099px) {
+  .settings-primary { display: contents; }
+  .settings-side { order: 1; }
+  .settings-storage-panel, .settings-app-panel { order: 2; }
 }

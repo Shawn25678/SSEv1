@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.40";
+const APP_VERSION = "1.0.41";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 // Cultivated/Vaal unique identities, including copies without a Vaal property line.
@@ -287,6 +287,8 @@ function defaultState() {
     hotkeyPrice: "F7",
     hotkeyHideout: "F6",
     overlayClickAway: true,
+    overlayScale: 1,
+    appScale: 1,
     theme: themeDefaults(),
   };
 }
@@ -1469,8 +1471,11 @@ function mountRankFx() {
   const element = stage.dataset.element || img.dataset.element;
   if (element === "ice") {
     const conf = RANK_ELEMENTAL[stage.dataset.rank] || RANK_ELEMENTAL[img.dataset.rank] || {};
-    const start = () =>
+    const start = () => {
+      // An older image may finish loading after a new dashboard replaces it.
+      if (!stage.isConnected || document.querySelector(".rank-stat .rank-icon-stage") !== stage) return;
       mountRankLiveIce(stage, canvas, img, conf.power || 1, stage.dataset.rank || img.dataset.rank || "");
+    };
     if (img.complete && img.naturalWidth) start();
     else img.addEventListener("load", start, { once: true });
     return;
@@ -2955,7 +2960,15 @@ if (window.chrome?.webview) {
       handleOverlayClick(msg);
       return;
     }
+    if (msg?.type === "trade-preview-error") {
+      ui.tradePreviewOpen = false;
+      const button = document.getElementById("trade-preview-toggle");
+      if (button) button.outerHTML = tradePreviewButtonHtml();
+      showToast("Could not open the trade preview. Try again.");
+      return;
+    }
     if (msg?.type === "overlay-fallback") {
+      delete pushNativeOverlay.last;
       paintPriceOverlay(true);
       return;
     }
@@ -4134,14 +4147,14 @@ function overlayRateCardHtml() {
     .join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-function overlayBarHtml(showTradeRate = false) {
+function overlayBarHtml(showTradeRate = false, preview = false) {
   const n = Math.round(Number(prices.exaltedPerDivine) || 0);
   overlayRateShown = n;
   const title = n > 0 ? "1 divine → " + n + " exalted" : "Conversions";
   const rate = `<span class="price-overlay-rate-wrap"><button type="button" class="price-overlay-rate${n > 0 ? "" : " is-empty"}" data-overlay-rate title="${esc(title)}" aria-label="${esc(title)}">${itemIconHtml("Divine Orb", "xs")}<span>1</span><svg class="price-overlay-swap" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 5h9.6L9.8 3.2 11 2l4 4-4 4-1.2-1.2L11.6 7H2V5zm12 6H4.4l1.8 1.8L5 14l-4-4 4-4 1.2 1.2L4.4 9H14v2z"/></svg><span>${n > 0 ? n : "—"}</span>${itemIconHtml("Exalted Orb", "xs")}</button>${overlayRateCardHtml()}</span>`;
-  const close = overlayClickAway() ? "" : '<button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button>';
+  const close = preview || overlayClickAway() ? "" : '<button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button>';
   const league = leagueName();
-  return `<div class="price-overlay-bar"><div class="price-overlay-bar-left">${rate}<span class="price-overlay-league" title="${esc(league)}" aria-label="${esc(league)}">${esc(league)}</span>${showTradeRate ? overlayTradeRateHtml() : ""}</div>${close}</div>`;
+  return `<div class="price-overlay-bar"><div class="price-overlay-bar-left">${rate}<span class="price-overlay-league" title="${esc(league)}" aria-label="${esc(league)}">${esc(league)}</span>${showTradeRate ? overlayTradeRateHtml() : ""}</div><div class="price-overlay-bar-actions">${close}</div></div>`;
 }
 
 function catalogNames() {
@@ -5249,6 +5262,97 @@ function hotkeys() {
   };
 }
 
+function overlayScaleValue() {
+  const value = Number(state.overlayScale);
+  return Number.isFinite(value) ? Math.max(0.75, Math.min(1.25, Math.round(value * 20) / 20)) : 1;
+}
+
+function setOverlayScale(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return;
+  const next = Math.max(0.75, Math.min(1.25, Math.round(n * 20) / 20));
+  if (next === overlayScaleValue()) return;
+  state.overlayScale = next;
+  save();
+  syncSizeSettings();
+  if (ui.tradePreviewOpen) syncTradePreview();
+  paintPriceOverlay();
+}
+
+function appScaleValue() {
+  const value = Number(state.appScale);
+  return Number.isFinite(value) ? Math.max(0.75, Math.min(1.25, Math.round(value * 20) / 20)) : 1;
+}
+
+function syncAppScale() {
+  const scale = appScaleValue();
+  if (window.chrome?.webview) chrome.webview.postMessage({ type: "app-scale", scale });
+  else document.body.style.zoom = "1";
+}
+
+function setAppScale(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return;
+  const next = Math.max(0.75, Math.min(1.25, Math.round(n * 20) / 20));
+  if (next === appScaleValue()) return;
+  state.appScale = next;
+  save();
+  syncAppScale();
+  syncSizeSettings();
+}
+
+function uiSizeSettingHtml(kind, label, scale) {
+  return `<div class="ui-size-row" data-ui-size-row="${kind}"><span>${label}</span><div class="ui-size-actions" role="group" aria-label="${label} size"><button type="button" class="btn ghost" data-ui-size="${kind}" data-size-value="${(scale - 0.05).toFixed(2)}" aria-label="Make ${label.toLowerCase()} smaller" ${scale <= 0.75 ? "disabled" : ""}>−</button><output aria-live="polite">${Math.round(scale * 100)}%</output><button type="button" class="btn ghost" data-ui-size="${kind}" data-size-value="${(scale + 0.05).toFixed(2)}" aria-label="Make ${label.toLowerCase()} bigger" ${scale >= 1.25 ? "disabled" : ""}>+</button><button type="button" class="btn ghost" data-ui-size="${kind}" data-size-value="1" ${scale === 1 ? "disabled" : ""}>Reset</button></div></div>`;
+}
+
+function syncSizeSettings() {
+  document.querySelectorAll("[data-ui-size-row]").forEach((row) => {
+    const app = row.dataset.uiSizeRow === "app";
+    row.outerHTML = uiSizeSettingHtml(app ? "app" : "overlay", app ? "Main window" : "Trade popup", app ? appScaleValue() : overlayScaleValue());
+  });
+}
+
+function tradePreviewDrop() {
+  return {
+    id: "settings-vile-robe-preview", uiPreview: true, name: "Pain Jack", baseType: "Vile Robe",
+    className: "Body Armours", rarity: "Rare", fractured: true, corrupted: true, runeSockets: 3,
+    props: { ilvl: 82, quality: 30, es: 966 },
+    rolls: [
+      { text: "12% increased Rarity of Items found", kind: "rune" },
+      { text: "+40% to Cold Resistance", kind: "rune" },
+      { text: "110% increased Energy Shield", kind: "explicit", fractured: true, affix: 1, tier: 1, slot: "prefix", value: 110, lo: 15, hi: 110 },
+      { text: "+30 to maximum Energy Shield", kind: "explicit", affix: 2, tier: 1, slot: "prefix", hybrid: true, value: 30, lo: 4, hi: 30 },
+      { text: "42% increased Energy Shield", kind: "explicit", affix: 2, tier: 1, slot: "prefix", hybrid: true, value: 42, lo: 6, hi: 42 },
+      { text: "+94 to maximum Energy Shield", kind: "explicit", affix: 3, tier: 1, slot: "prefix", value: 94, lo: 10, hi: 96 },
+      { text: "+45% to Fire Resistance", kind: "explicit", affix: 4, tier: 1, slot: "suffix", value: 45, lo: 6, hi: 45 },
+      { text: "+44% to Lightning Resistance", kind: "explicit", affix: 5, tier: 1, slot: "suffix", value: 44, lo: 6, hi: 45 },
+      { text: "+45% to Cold Resistance", kind: "explicit", affix: 6, tier: 1, slot: "suffix", desecrated: true, value: 45, lo: 6, hi: 45 },
+    ],
+  };
+}
+
+function tradePreviewButtonHtml() {
+  const enabled = !!ui.tradePreviewOpen;
+  return `<button type="button" class="btn ${enabled ? "gold" : "ghost"}" id="trade-preview-toggle" data-preview-enabled="${!enabled}" aria-pressed="${enabled}"${window.chrome?.webview ? "" : " disabled"}>${enabled ? "Hide trade preview" : "Show trade preview"}</button>`;
+}
+
+function syncTradePreview() {
+  if (!window.chrome?.webview) return;
+  const enabled = !!ui.tradePreviewOpen;
+  const drop = enabled ? tradePreviewDrop() : null;
+  chrome.webview.postMessage({ type: "trade-preview", enabled,
+    html: drop ? priceOverlayHtml({ id: "", drops: [drop] }, drop) : "",
+    vars: overlayThemeVars(), overlayScale: overlayScaleValue() });
+}
+
+function setTradePreviewEnabled(enabled) {
+  if (!window.chrome?.webview) return;
+  ui.tradePreviewOpen = !!enabled;
+  const button = document.getElementById("trade-preview-toggle");
+  if (button) button.outerHTML = tradePreviewButtonHtml();
+  syncTradePreview();
+}
+
 function overlayClickAway() {
   return !!state.overlayClickAway;
 }
@@ -6343,20 +6447,22 @@ function overlayThemeVars() {
 function pushNativeOverlay(html, notice, fresh) {
   if (!window.chrome?.webview) return false;
   if (notice) {
+    delete pushNativeOverlay.last;
     chrome.webview.postMessage({ type: "overlay-notice", text: notice, vars: overlayThemeVars(), clickAway: overlayClickAway() });
     return true;
   }
   if (!html) {
+    delete pushNativeOverlay.last;
     chrome.webview.postMessage({ type: "overlay-hide" });
     return true;
   }
-  chrome.webview.postMessage({
-    type: "overlay-show",
-    html,
-    vars: overlayThemeVars(),
-    fresh: !!fresh,
-    clickAway: overlayClickAway(),
-  });
+  const vars = overlayThemeVars();
+  const clickAway = overlayClickAway();
+  const overlayScale = overlayScaleValue();
+  const previous = pushNativeOverlay.last;
+  if (!fresh && previous?.html === html && previous.vars === vars && previous.clickAway === clickAway && previous.overlayScale === overlayScale) return true;
+  chrome.webview.postMessage({ type: "overlay-show", html, vars, fresh: !!fresh, clickAway, overlayScale });
+  pushNativeOverlay.last = { html, vars, clickAway, overlayScale };
   return true;
 }
 
@@ -8525,7 +8631,9 @@ function priceOverlayHtml(log, drop) {
   const props = overlayPropsHtml(log, drop);
   const offers = pickHtml ? "" : overlayOffersHtml(drop);
   const hasOffers = !!offers;
-  const tradeBtns = pickHtml
+  const tradeBtns = drop.uiPreview
+    ? `<span class="price-overlay-trade-btns"><button type="button" class="btn gold" disabled>Check trade</button><button type="button" class="btn ghost" disabled>Trade ↗</button></span>`
+    : pickHtml
     ? ""
     : `<span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span>`;
   const exchange = overlayExchangeHaveHtml(log, drop);
@@ -8538,7 +8646,7 @@ function priceOverlayHtml(log, drop) {
     <article class="price-overlay-card item-tip-card is-item-framed ${esc(kindClass)} ${overlayHeaderClasses(drop)}${hasOffers ? " has-offers" : ""}"${weaponDpsCardAttrs(drop)}>
       <div class="price-overlay-shell">
         <div class="price-overlay-main">
-          ${overlayBarHtml(!!tradeBtns)}
+          ${overlayBarHtml(!!tradeBtns, !!drop.uiPreview)}
           <div class="item-tip-head is-item-banner-head">
             <div class="price-overlay-item-banner${/^(normal|magic)$/i.test(drop.rarity || "") ? " is-single-line" : ""}">
               ${/^(normal|magic|rare)$/i.test(drop.rarity || "") ? overlayBaseHtml(log, drop, false, true) : `<div class="item-tip-name-row">
@@ -8621,6 +8729,8 @@ function paintPriceOverlay(forceInApp = false, fresh = false) {
     ? `<div class="price-overlay-back" data-close-inspect></div>`
     : `<div class="price-overlay-back is-inert" aria-hidden="true"></div>`;
   root.innerHTML = `${back}${html}`;
+  const card = root.querySelector(".price-overlay-card");
+  if (card) card.style.zoom = String(overlayScaleValue());
 }
 
 function toggleInspectRoll(log, drop, text, kind, rid) {
@@ -9067,6 +9177,7 @@ function tradeWaiting() {
 }
 
 async function quoteRolledDrop(log, drop, force = false) {
+  if (drop?.uiPreview) return;
   if (isClipboardCurrency(drop)) { paintPriceOverlay(); return; }
   if (!window.chrome?.webview) return;
   if (unidentifiedUniqueNeedsPick(drop) && uniqueVariantsForBase(drop.baseType || drop.name, drop.className).length > 1) return;
@@ -9966,14 +10077,21 @@ function renderDivineTape() {
 }
 
 function renderStats() {
+  const stats = document.getElementById("stats");
+  const html = rankBadgeHtml();
+  if (renderStats.html === html && stats.querySelector(".rank-stat")) return;
+  renderStats.html = html;
+  const generation = (renderStats.generation || 0) + 1;
+  renderStats.generation = generation;
   destroyRankFx();
-  document.getElementById("stats").innerHTML = `
-    ${rankBadgeHtml()}
-
-  `;
+  stats.innerHTML = html;
+  const mount = () => {
+    if (renderStats.generation === generation) mountRankFx();
+  };
   requestAnimationFrame(() => {
-    if (typeof requestIdleCallback === "function") requestIdleCallback(() => mountRankFx(), { timeout: 800 });
-    else setTimeout(() => mountRankFx(), 120);
+    if (renderStats.generation !== generation) return;
+    if (typeof requestIdleCallback === "function") requestIdleCallback(mount, { timeout: 800 });
+    else setTimeout(mount, 120);
   });
 }
 
@@ -10167,6 +10285,7 @@ function renderSettings() {
         <h2 class="section-title">Settings</h2>
         <p class="muted">Changes save automatically.</p>
       </div>
+      <div class="settings-primary">
       ${
         window.chrome?.webview
           ? `<article class="panel">
@@ -10209,8 +10328,8 @@ function renderSettings() {
         </label>
       </article>`
       }
-      <div class="settings-side">
-      <article class="panel">
+
+      <article class="panel settings-storage-panel">
         <h3>Default save folder</h3>
         ${
           window.chrome?.webview
@@ -10224,7 +10343,7 @@ function renderSettings() {
           <button class="btn gold" id="settings-export-btn" type="button">Export</button>
         </div>
       </article>
-      <article class="panel">
+      <article class="panel settings-app-panel">
         <h3>App</h3>
         <p class="muted" id="update-status" style="margin-top:8px">v${esc(APP_VERSION)}</p>
         <div class="row-actions">
@@ -10233,31 +10352,18 @@ function renderSettings() {
         </div>
       </article>
       </div>
-      <article class="panel" id="feedback">
-        <h3>Feedback</h3>
-        <form id="feedback-form" class="feedback-form">
-          <label>Title
-            <input id="feedback-title" name="title" required maxlength="80" />
-          </label>
-          <label>Menu / feature
-            <select name="feature" required>${feedbackFeatureOptions("")}</select>
-          </label>
-          <textarea name="body" rows="5" maxlength="2000" aria-label="Feedback" placeholder="What went wrong or what you want?"></textarea>
-          <div class="feedback-shot">
-            <div class="feedback-shot-preview" id="feedback-shot-preview" hidden></div>
-            <div class="row-actions feedback-shot-actions">
-              <button class="btn ghost" data-feedback-shot="pick" type="button">Add screenshot</button>
-              <button class="btn ghost" data-feedback-shot="clear" type="button" hidden>Remove</button>
-            </div>
-            <p class="muted">Paste a screenshot with Ctrl+V.</p>
-            <input id="feedback-shot-file" type="file" accept="image/*" hidden />
-          </div>
-          <div class="row-actions">
-            <button class="btn ghost" data-feedback-send="copy" type="button">Copy</button>
-            <button class="btn gold" type="submit">Send</button>
-          </div>
-        </form>
+      <div class="settings-side">
+      <article class="panel">
+        <h3>Interface size</h3>
+        <p class="muted" style="margin-top:8px">Adjust each view separately. Changes save automatically.</p>
+        <div class="ui-size-settings">
+          ${uiSizeSettingHtml("app", "Main window", appScaleValue())}
+          ${uiSizeSettingHtml("overlay", "Trade popup", overlayScaleValue())}
+        </div>
+        ${tradePreviewButtonHtml()}
       </article>
+      </div>
+
     </section>
   `;
 }
@@ -10760,7 +10866,6 @@ function render() {
   }
   if (ui.view === "settings") {
     main.innerHTML = renderSettings();
-    paintFeedbackShot();
     checkAppUpdate();
   }
 
@@ -10788,6 +10893,21 @@ function render() {
 }
 
 function onClick(event) {
+  const previewToggle = event.target.closest("[data-preview-enabled]");
+  if (previewToggle) {
+    event.preventDefault();
+    event.stopPropagation();
+    setTradePreviewEnabled(previewToggle.dataset.previewEnabled === "true");
+    return;
+  }
+  const uiSize = event.target.closest("[data-ui-size]");
+  if (uiSize) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (uiSize.dataset.uiSize === "app") setAppScale(uiSize.dataset.sizeValue);
+    else if (uiSize.dataset.uiSize === "overlay") setOverlayScale(uiSize.dataset.sizeValue);
+    return;
+  }
   if (event.target.closest("[data-title-quit]")) {
     if (window.chrome?.webview) chrome.webview.postMessage({ type: "window-hide" });
     else quitApp();
@@ -11665,6 +11785,7 @@ refreshBackupInfo();
 render();
 // Saved shortcuts must register even while the companion has never been shown.
 syncHotkeys();
+syncAppScale();
 requestAnimationFrame(() => {
   startPriceClock();
 });
