@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.38";
+const APP_VERSION = "1.0.39";
 const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
 
 const FILTERS = [
@@ -313,12 +313,6 @@ function applyTheme() {
     link.removeAttribute("href");
     link.disabled = true;
   }
-}
-
-function setTheme(partial) {
-  state.theme = { ...currentTheme(), ...partial, preset: "reliquary", ui: "Inter", display: "Inter" };
-  save();
-  applyTheme();
 }
 
 let state = loadState();
@@ -2822,7 +2816,7 @@ function fetchDbIcon(name) {
   if (!name) return Promise.resolve("");
   const lore = lookupLore(name);
   const haveArt = lookupIcon(name);
-  if (haveArt && loreIsRich(lore) && (lore.flavour || lore.descr) && (lore.variants?.length || !catalogUnique(name)?.rolls?.pool)) {
+  if (haveArt && lore?.complete) {
     return Promise.resolve(haveArt);
   }
   if (iconPending.has(name)) return iconPending.get(name);
@@ -2961,7 +2955,7 @@ function rateStatus() {
   const max = tradeRate.max || 1;
   const hits = tradeRate.hits || 0;
   const window = tradeRate.window || 5;
-  const counts = hits + " of " + max + " · resets " + window + "s";
+  const counts = hits + "/" + max + " · " + window + "s";
   const tipBase = "PoE 2 trade: " + hits + " of " + max + " searches used in a " + window + "s window.";
   if (left > 0) {
     const wait = formatRateWait(left);
@@ -3199,10 +3193,6 @@ function uniqMods(list) {
   return [...byFamily.values()];
 }
 
-function isRollMod(text) {
-  return /per socket|per socketed|one of |\[\d+\s+random/i.test(text || "");
-}
-
 function cleanFlavour(text) {
   const lines = String(text || "")
     .replace(/\r\n/g, "\n")
@@ -3239,8 +3229,7 @@ function partitionLoreMods(explicits, variants, note) {
       variantNote = variantNote || `${random[1]} random ${random[2].trim()}`;
       continue;
     }
-    if (isRollMod(mod)) extra.push(mod);
-    else fixed.push(mod);
+    fixed.push(mod);
   }
   return { fixed: uniqMods(fixed), variants: uniqMods(extra), variantNote };
 }
@@ -3249,7 +3238,11 @@ const loreCache = new Map();
 
 function rememberLore(name, lore) {
   if (!name || !lore) return;
-  const prev = lookupLore(name) || {};
+  const cached = lookupLore(name) || {};
+  // A complete item card replaces partial price-feed data, including old ranges.
+  // Later price refreshes must not reintroduce stale or alternate-form modifiers.
+  if (cached.complete && !lore.complete) return;
+  const prev = lore.complete ? {} : cached;
   const split = partitionLoreMods(
     [...(prev.explicits || []), ...(lore.explicits || [])],
     [...(prev.variants || []), ...(lore.variants || [])],
@@ -3262,13 +3255,14 @@ function rememberLore(name, lore) {
     icon: ninjaIcon(lore.icon) || prev.icon || "",
     baseType: cleanMod(lore.baseType) || prev.baseType || "",
     rarity: lore.rarity || prev.rarity || "",
+    complete: lore.complete === true,
     implicits: uniqMods([...(prev.implicits || []), ...(lore.implicits || [])]),
     explicits: split.fixed,
     variants: split.variants,
     variantNote: split.variantNote,
     flavour,
     descr: descr && flavour && descr.toLowerCase() === flavour.toLowerCase() ? "" : descr,
-    properties: uniqMods([...(prev.properties || []), ...(lore.properties || [])]).slice(0, 4),
+    properties: uniqMods([...(prev.properties || []), ...(lore.properties || [])]),
   };
   for (const key of lookupKeys(name).concat(next.name ? lookupKeys(next.name) : [])) {
     if (key) loreCache.set(key, next);
@@ -3711,7 +3705,7 @@ function rememberNinjaLore(line) {
   for (const mod of line.explicitModifiers || []) {
     const text = cleanMod(mod.text);
     if (!text) continue;
-    if (mod.optional || isRollMod(text)) variants.push(text);
+    if (mod.optional) variants.push(text);
     else explicits.push(text);
   }
   rememberLore(line.name, {
@@ -4082,13 +4076,14 @@ function overlayRateCardHtml() {
     .join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
-function overlayBarHtml(tradeBtns = "") {
+function overlayBarHtml(showTradeRate = false) {
   const n = Math.round(Number(prices.exaltedPerDivine) || 0);
   overlayRateShown = n;
   const title = n > 0 ? "1 divine → " + n + " exalted" : "Conversions";
-  const rate = `<span class="price-overlay-rate-wrap"><button type="button" class="price-overlay-rate${n > 0 ? "" : " is-empty"}" data-overlay-rate title="${esc(title)}"><svg class="price-overlay-swap" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 5h9.6L9.8 3.2 11 2l4 4-4 4-1.2-1.2L11.6 7H2V5zm12 6H4.4l1.8 1.8L5 14l-4-4 4-4 1.2 1.2L4.4 9H14v2z"/></svg>${n > 0 ? n : ""}</button>${overlayRateCardHtml()}</span>`;
-  const right = `${tradeBtns}${overlayClickAway() ? "" : '<button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button>'}`;
-  return `<div class="price-overlay-bar"><div class="price-overlay-bar-left">${rate}<span class="price-overlay-league">${esc(leagueName())}</span></div><div class="price-overlay-bar-right">${right}</div></div>`;
+  const rate = `<span class="price-overlay-rate-wrap"><button type="button" class="price-overlay-rate${n > 0 ? "" : " is-empty"}" data-overlay-rate title="${esc(title)}" aria-label="${esc(title)}">${itemIconHtml("Divine Orb", "xs")}<span>1</span><svg class="price-overlay-swap" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 5h9.6L9.8 3.2 11 2l4 4-4 4-1.2-1.2L11.6 7H2V5zm12 6H4.4l1.8 1.8L5 14l-4-4 4-4 1.2 1.2L4.4 9H14v2z"/></svg><span>${n > 0 ? n : "—"}</span>${itemIconHtml("Exalted Orb", "xs")}</button>${overlayRateCardHtml()}</span>`;
+  const close = overlayClickAway() ? "" : '<button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button>';
+  const league = leagueName();
+  return `<div class="price-overlay-bar"><div class="price-overlay-bar-left">${rate}<span class="price-overlay-league" title="${esc(league)}" aria-label="${esc(league)}">${esc(league)}</span>${showTradeRate ? overlayTradeRateHtml() : ""}</div>${close}</div>`;
 }
 
 function catalogNames() {
@@ -5660,6 +5655,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
     let sectionTier = 0;
     let sectionUnique = false;
     let sectionFractured = false;
+    let sectionDesecrated = false;
     let headerAffix = 0;
     let sawHeader = false;
     const collected = [];
@@ -5677,6 +5673,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         sectionTier = info.tier || 0;
         sectionUnique = !!info.unique;
         sectionFractured = !!info.fractured;
+        sectionDesecrated = /\bdesecrated\b/i.test(rawLine);
         if (sectionFractured) itemFractured = true;
         affix += 1;
         headerAffix = affix;
@@ -5707,13 +5704,14 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       const fractured = lineHasFracturedTag(rawLine) || (sawHeader && sectionFractured);
       if (fractured) itemFractured = true;
       collected.push({
-        text: parseAffixStrings(rawLine),
+        text: parseAffixStrings(rawLine).replace(/\s*\(desecrated\)/gi, ""),
         kind,
         slot: tagged ? "" : sectionSlot,
         affix: sawHeader ? headerAffix : 0,
         tier: sawHeader ? sectionTier : 0,
         unique: sawHeader ? sectionUnique : false,
         fractured,
+        desecrated: /\(desecrated\)/i.test(rawLine) || (sawHeader && sectionDesecrated),
         charm,
       });
     }
@@ -5830,6 +5828,7 @@ function keepRollMeta(roll, text, kind, slot, pick) {
   if (Number(roll?.tier) > 0) row.tier = Number(roll.tier);
   if (roll?.unique) row.unique = true;
   if (roll?.fractured) row.fractured = true;
+  if (roll?.desecrated) row.desecrated = true;
   if (roll?.charm) row.charm = true;
   if (Number.isInteger(roll?.rid) && roll.rid > 0) row.rid = roll.rid;
   if (Number.isFinite(roll?.lo) && Number.isFinite(roll?.hi)) {
@@ -6082,7 +6081,7 @@ function handleOverlayClick(msg) {
   if (msg.pickCorrupt) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickCorrupt);
     if (!drop) return;
-    drop.pickCorrupt = searchCorrupted(drop) === false;
+    drop.pickCorrupt = msg.current === "true" ? false : msg.current === "false" ? true : searchCorrupted(drop) === false;
     drop.quoteTried = false;
     delete drop.quote;
     if (log?.id) save();
@@ -6112,7 +6111,7 @@ function handleOverlayClick(msg) {
   if (msg.pickFractured) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickFractured);
     if (!drop) return;
-    drop.pickFractured = searchFractured(drop) === false;
+    drop.pickFractured = msg.current === "true" ? false : msg.current === "false" ? true : searchFractured(drop) === false;
     drop.quoteTried = false;
     delete drop.quote;
     if (log?.id) save();
@@ -6452,6 +6451,7 @@ function rollKindClass(roll) {
     else if (slot === "suffix") cls = " is-suffix";
   }
   if (roll?.fractured) cls += " is-fractured";
+  if (roll?.desecrated) cls += " is-desecrated";
   return cls;
 }
 
@@ -6649,6 +6649,14 @@ function overlayLiveValue(roll) {
 }
 
 function overlayModTextHtml(roll) {
+  const html = overlayModValuesHtml(roll);
+  if (canonicalRollKind(roll?.kind) !== "skill" && !isGrantedSkillRoll(roll?.text)) return html;
+  const match = html.match(/^Level\s+(<b\b[^>]*>.*?<\/b>|\d+)\s+(.+)$/i);
+  if (!match) return html;
+  return `<span class="price-overlay-granted-skill"><span>${match[2]}</span><span class="price-overlay-skill-level">Level ${match[1]}</span></span>`;
+}
+
+function overlayModValuesHtml(roll) {
   const text = overlayModText(roll);
   if (roll?.flatAvg) {
     const n = overlayLiveValue(roll);
@@ -6797,8 +6805,10 @@ function overlayRuneHtml(log, drop) {
   const on = Number.isInteger(drop.pickRunes);
   const itemN = Number.isInteger(drop.runeSockets) ? drop.runeSockets : 0;
   const shown = on ? drop.pickRunes : itemN;
+  const count = Math.max(0, Math.min(6, shown));
+  const sockets = `<span class="price-overlay-socket-preview" aria-hidden="true" title="${count} sockets">${Array.from({ length: 6 }, (_, i) => `<i${i >= count ? " hidden" : ""}></i>`).join("")}</span>`;
   const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
-  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-sockets${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-runes-toggle ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>Sockets</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${esc(String(shown))}" data-span-rid="runes" ${mark} /></span></div>`;
+  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-sockets${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-runes-toggle ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>Sockets</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${esc(String(shown))}" data-span-rid="runes" ${mark} /></span>${sockets}</div>`;
 }
 
 function overlayCharmHtml(log, drop) {
@@ -6816,8 +6826,7 @@ function overlayCorruptHtml(log, drop) {
   if (/currency|gem|divination/i.test(drop?.rarity || "") || /currency|gem|divination/i.test(drop?.className || "")) return "";
   if (typeof drop?.corrupted !== "boolean") return "";
   const on = searchCorrupted(drop) === true;
-  const label = on ? "Corrupted" : "Not corrupted";
-  return `<button type="button" class="price-overlay-corrupt${on ? " is-on" : ""}" data-pick-corrupt="${esc(drop.id)}" data-pick-log="${esc(log.id)}" title="${on ? "Searching corrupted" : "Searching not corrupted"}">${label}</button>`;
+  return `<button type="button" class="price-overlay-corrupt${on ? " is-on" : ""}" data-pick-corrupt="${esc(drop.id)}" data-pick-log="${esc(log.id)}" data-current="${on}" aria-pressed="${on}" title="${on ? "Searching corrupted" : "Searching not corrupted"}"><span class="flag-check${on ? " is-checked" : ""}" aria-hidden="true"></span><span>Corrupted</span></button>`;
 }
 
 function overlayUnidHtml(log, drop) {
@@ -6830,13 +6839,13 @@ function overlayUnidHtml(log, drop) {
 function overlayRavenHtml(log, drop) {
   if (!drop?.ravenTouched) return "";
   const on = drop.pickRaven !== false;
-  return `<button type="button" class="price-overlay-raven${on ? " is-on" : ""}" data-pick-raven="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${on ? "Raven-Touched" : "Not Raven-Touched"}</button>`;
+  return `<button type="button" class="price-overlay-raven${on ? " is-on" : ""}" data-pick-raven="${esc(drop.id)}" data-pick-log="${esc(log.id)}" aria-pressed="${on}" title="${on ? "Searching Raven-Touched" : "Not filtering for Raven-Touched"}"><span class="flag-check${on ? " is-checked" : ""}" aria-hidden="true"></span><span>Raven-Touched</span></button>`;
 }
 
 function overlayFracturedHtml(log, drop) {
   if (!isFracturedDrop(drop)) return "";
   const on = searchFractured(drop) !== false;
-  return `<button type="button" class="price-overlay-fractured${on ? " is-on" : ""}" data-pick-fractured="${esc(drop.id)}" data-pick-log="${esc(log.id)}" title="${on ? "Searching fractured mods" : "Searching as regular mods"}">${on ? "Fractured" : "Not fractured"}</button>`;
+  return `<button type="button" class="price-overlay-fractured${on ? " is-on" : ""}" data-pick-fractured="${esc(drop.id)}" data-pick-log="${esc(log.id)}" data-current="${on}" aria-pressed="${on}" title="${on ? "Searching fractured mods" : "Searching as regular mods"}"><span class="flag-check${on ? " is-checked" : ""}" aria-hidden="true"></span><span>Fractured</span></button>`;
 }
 
 function overlayFlagsHtml(log, drop) {
@@ -7028,7 +7037,8 @@ function propNumState(drop, id, value) {
   else if (!isDpsPropId(id)) hi = Math.max(1, Math.round(n));
   const want = Number(drop?.wantProps?.[id]);
   const slack = n - (Math.abs(n) * dpsSearchSlack(drop)) / 100;
-  const raw = id === "item.aps" || id === "item.crit" ? n : slack;
+  const exactDefence = ["item.armour", "item.evasion_rating", "item.energy_shield"].includes(id);
+  const raw = id === "item.aps" || id === "item.crit" || exactDefence ? n : slack;
   const seed = Number.isFinite(want) ? snapTypedProp(id, want) : snapTypedProp(id, raw);
   return { lo: 0, hi, value: Math.min(hi, Math.max(0, seed)) };
 }
@@ -7692,7 +7702,6 @@ function togglePickProp(log, drop, id) {
   delete drop.quote;
   if (log?.id) save();
   paintPriceOverlay();
-  if (isTypedPropId(id)) quoteRolledDrop(log, drop, true);
 }
 
 function applyDropSearchToggle(log, drop, what) {
@@ -7718,7 +7727,6 @@ function applyDropSearchToggle(log, drop, what) {
   if (log?.id) save();
   if (ui.inspect) paintPriceOverlay();
   else render();
-  quoteRolledDrop(log, drop, true);
 }
 
 function applyDropBaseMode(log, drop, mode) {
@@ -7731,7 +7739,6 @@ function applyDropBaseMode(log, drop, mode) {
   delete drop.quoting;
   if (log?.id) save();
   paintPriceOverlay();
-  quoteRolledDrop(log, drop, true);
 }
 
 function commitDropSliderMin(log, drop) {
@@ -7740,7 +7747,6 @@ function commitDropSliderMin(log, drop) {
   delete drop.quoting;
   if (log?.id) save();
   paintPriceOverlay();
-  quoteRolledDrop(log, drop, true);
 }
 
 function setDropIlvlMin(log, drop, raw, live) {
@@ -7766,7 +7772,6 @@ function setDropQualityMin(log, drop, raw, live) {
   if (live) return;
   if (log?.id) save();
   paintPriceOverlay();
-  quoteRolledDrop(log, drop, true);
 }
 
 function stepDropQuality(log, drop, delta, live) {
@@ -7816,7 +7821,6 @@ function setDropDpsType(log, drop, tag) {
   if (log?.id) save();
   if (ui.inspect) paintPriceOverlay();
   else render();
-  if (wasOn) quoteRolledDrop(log, drop, true);
 }
 
 function overlayBaseHtml(log, drop) {
@@ -7832,7 +7836,7 @@ function overlayBaseHtml(log, drop) {
   if (!canRelaxBase(drop)) return `<div class="item-tip-base">${esc(base)}</div>`;
   const on = searchExactBase(drop);
   const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
-  return `<div class="price-overlay-base-row"><div class="item-tip-base">${esc(base)}</div><span class="price-overlay-base-modes"><button type="button" class="price-overlay-base-mode${on ? " is-on" : ""}" data-pick-base="exact" ${mark}>Base</button><button type="button" class="price-overlay-base-mode${on ? "" : " is-on"}" data-pick-base="any" ${mark}>Any</button></span></div>`;
+  return `<div class="price-overlay-base-row"><div class="item-tip-base">${esc(base)}</div><span class="price-overlay-base-modes"><button type="button" class="price-overlay-base-mode${on ? " is-on" : ""}" data-pick-base="exact" aria-pressed="${on}" title="Search this exact item base" ${mark}>Base</button><button type="button" class="price-overlay-base-mode${on ? "" : " is-on"}" data-pick-base="any" aria-pressed="${!on}" title="Search any compatible item base" ${mark}>Any</button></span></div>`;
 }
 
 function overlayPropSliderHtml(log, drop, opt) {
@@ -7865,6 +7869,14 @@ function sanitizeOverlayMinInput(el) {
     next = raw.replace(/\D/g, "");
   }
   if (next !== raw) el.value = next;
+  if (el.dataset.spanRid === "runes") {
+    const preview = el.closest(".is-sockets")?.querySelector(".price-overlay-socket-preview");
+    const count = Math.max(0, Math.min(6, Math.round(Number(el.value) || 0)));
+    if (preview) {
+      [...preview.children].forEach((socket, i) => { socket.hidden = i >= count; });
+      preview.title = count + " sockets";
+    }
+  }
 }
 
 function overlayMinFilterHtml(log, drop, row, compact = false) {
@@ -7914,18 +7926,23 @@ function overlayPropsHtml(log, drop) {
       if (row.numInput) {
         const n = row.numInput;
         const on = row.on ? " is-on" : "";
+        const defence = ["item.armour", "item.evasion_rating", "item.energy_shield"].includes(row.id) ? " is-defence" : "";
         const tags = (row.dpsTags || [])
           .map((tag) => `<button type="button" class="price-overlay-dps-tag is-${esc(tag)}${tag === row.dpsType ? " is-on" : ""}" data-pick-dps-type="${esc(tag)}" ${mark}>${esc(dpsTypeLabel(tag))}</button>`)
           .join("");
         const dec = row.kind === "aps" || row.kind === "crit" ? ` data-span-dec="1" step="0.1"` : "";
         const typed = row.kind === "aps" || row.kind === "crit" ? Number(n.value).toFixed(2) : n.value;
-        return `<div class="price-overlay-prop price-overlay-prop-num${on}"><button type="button" class="price-overlay-q-toggle" data-pick-prop="${esc(row.id)}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(row.label)}: </span><b${live}>${esc(row.shown)}</b>${row.q20 ? `<em class="price-overlay-q20">${esc(row.q20Label || "Q 20%")}</em>` : ""}</button><span class="price-overlay-q-edit"><input type="text" inputmode="decimal" pattern="[0-9.]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${n.lo}" max="${n.hi}" value="${typed}" data-span-rid="${esc(row.id)}"${dec} ${mark} /></span></div>${tags ? `<div class="price-overlay-dps-tags">${tags}</div>` : ""}`;
+        if (defence) {
+          return `<div class="price-overlay-prop price-overlay-prop-num is-defence${on}"><button type="button" class="price-overlay-q-toggle" data-pick-prop="${esc(row.id)}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(row.label)}:</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${n.lo}" max="${n.hi}" value="${typed}" data-span-rid="${esc(row.id)}" ${mark} aria-label="${esc(row.label)} minimum" /></span></div>`;
+        }
+        return `<div class="price-overlay-prop price-overlay-prop-num${defence}${on}"><button type="button" class="price-overlay-q-toggle" data-pick-prop="${esc(row.id)}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(row.label)}: </span><b${live}>${esc(row.shown)}</b>${row.q20 ? `<em class="price-overlay-q20">${esc(row.q20Label || "Q 20%")}</em>` : ""}</button><span class="price-overlay-q-edit"><input type="text" inputmode="decimal" pattern="[0-9.]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${n.lo}" max="${n.hi}" value="${typed}" data-span-rid="${esc(row.id)}"${dec} ${mark} /></span></div>${tags ? `<div class="price-overlay-dps-tags">${tags}</div>` : ""}`;
       }
       const shown = `<span>${esc(row.label)}</span><b${live}>${esc(row.shown)}</b>`;
       if (row.pick) return `<button type="button" class="price-overlay-prop${row.on ? " is-on" : ""}" data-pick-search="${esc(row.pick)}" ${mark}>${shown}</button>`;
       if (!row.id) return `<div class="price-overlay-prop is-static">${shown}</div>`;
       const on = drop.pickProps?.[row.id] ? " is-on" : "";
-      return `<button type="button" class="price-overlay-prop${on}" data-pick-prop="${esc(row.id)}" ${mark}>${shown}</button>`;
+      const defence = ["item.armour", "item.evasion_rating", "item.energy_shield"].includes(row.id) ? " is-defence" : "";
+      return `<button type="button" class="price-overlay-prop${defence}${on}" data-pick-prop="${esc(row.id)}" ${mark}>${shown}</button>`;
     })
     .join("")}</div>`;
 }
@@ -7997,7 +8014,6 @@ function setExchangeHave(log, drop, tag) {
   delete drop.quoting;
   if (log?.id) save();
   paintPriceOverlay();
-  quoteRolledDrop(log, drop, true);
 }
 
 function overlayExchangeHaveHtml(log, drop) {
@@ -8041,7 +8057,7 @@ function tradeSiteQuery(drop, filters) {
     });
   }
   const query = {
-    status: { option: "available" },
+    status: { option: "securable" },
     stats,
     filters: {},
   };
@@ -8124,7 +8140,6 @@ function overlayTradeSiteHtml(log, drop) {
 function overlayQuoteHtml(drop, logId) {
   if (drop?.quoting) return `<span class="price-overlay-status">Checking trade…</span>`;
   const quote = drop?.quote;
-  const n = pickedRolls(drop).length;
   if (quote && !quote.error) {
     const listed = quote.listings ? quote.listings.toLocaleString() + " listings" : "trade";
     if (pricedHit(quote) && Number(quote.amount) > 0) {
@@ -8132,10 +8147,10 @@ function overlayQuoteHtml(drop, logId) {
       const currency = quoteCurrencyName(quote);
       return `<span class="btn gold" title="${esc(listed)}">${itemIconHtml(currency)}${esc(label)} · ${esc(listed)}</span>`;
     }
-    return `<span class="price-overlay-status">${n ? "No listing with these mods" : "No listings"}</span>`;
+    return `<span class="price-overlay-status">${pickedRolls(drop).length ? "No listing with these mods" : "No listings"}</span>`;
   }
   const err = quote?.error ? ` · ${quote.error}` : "";
-  const label = n ? "Check this roll" : "Check trade";
+  const label = "Check trade";
   return `<button type="button" class="btn gold" data-quote-drop="${esc(drop.id || "")}" data-quote-log="${esc(logId || "")}">${esc(label)}${esc(err)}</button>`;
 }
 
@@ -8159,41 +8174,37 @@ function overlayOffersHtml(drop) {
   return `<div class="price-overlay-offers">${rows}</div>`;
 }
 
-function spanTickPercents(lo, hi, tiers, steps, equal) {
-  const span = Number(hi) - Number(lo);
-  if (!(span > 0)) return [];
-  const seen = new Set();
-  const out = [];
-  function add(v) {
-    const at = ((Number(v) - Number(lo)) / span) * 100;
-    if (!(at > 0.4 && at < 99.6)) return;
-    const key = at.toFixed(2);
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(key);
+function overlayAffixDisplayOrder(groups) {
+  const isExplicit = (group) => group.rolls.every((roll) => canonicalRollKind(roll.kind) === "explicit");
+  const isDesecrated = (group) => isExplicit(group) && group.rolls.some((roll) => roll.desecrated);
+  // Advanced clipboard order differs from the tooltip: Desecrated affixes are last.
+  const regular = groups.filter((group) => !isDesecrated(group));
+  const desecrated = groups.filter(isDesecrated);
+  function orderResistances(list) {
+    const slots = [];
+    const resistances = [];
+    const ranks = { fire: 0, cold: 1, lightning: 2, chaos: 3 };
+    list.forEach((group, index) => {
+      if (!isExplicit(group) || group.rolls.length !== 1) return;
+      const match = String(group.rolls[0].text || "").match(/^[+]?\d+(?:\.\d+)?%\s+to\s+(Fire|Cold|Lightning|Chaos) Resistance$/i);
+      if (!match) return;
+      slots.push(index);
+      resistances.push({ group, rank: ranks[match[1].toLowerCase()] });
+    });
+    resistances.sort((a, b) => a.rank - b.rank);
+    const ordered = list.slice();
+    slots.forEach((index, i) => { ordered[index] = resistances[i].group; });
+    return ordered;
   }
-  if (equal && Number(steps) > 1) {
-    for (let i = 1; i < Number(steps); i++) out.push(((100 * i) / Number(steps)).toFixed(2));
-    return out;
-  }
-  const list = parseSpanTiers(tiers);
-  if (list.length > 1) {
-    for (const t of list) add(t.lo);
-  } else if (Number(steps) > 2) {
-    for (let i = 1; i < Number(steps); i++) add(Number(lo) + (span * i) / Number(steps));
-  }
-  return out;
-}
-
-function spanTicksHtml(lo, hi, tiers, steps, equal) {
-  const ticks = spanTickPercents(lo, hi, tiers, steps, equal);
-  if (!ticks.length) return "";
-  return `<div class="price-overlay-span-ticks">${ticks.map((at) => `<i style="--at:${at}"></i>`).join("")}</div>`;
+  return orderResistances(regular).concat(orderResistances(desecrated));
 }
 
 function priceOverlayHtml(log, drop) {
   if (isClipboardCurrency(drop)) return currencyOverlayHtml(drop);
-  const rolls = inspectRolls(drop);
+  const fracturedSearchOn = searchFractured(drop) !== false;
+  const rolls = inspectRolls(drop).map((roll) =>
+    roll?.fractured && !fracturedSearchOn ? { ...roll, fractured: false } : roll
+  );
   const order = ["enchant", "corrupt", "rune", "skill", "implicit", "explicit"];
   function affixGroups(list) {
     const out = [];
@@ -8206,7 +8217,7 @@ function priceOverlayHtml(log, drop) {
       }
       g.rolls.push(roll);
     }
-    return out;
+    return overlayAffixDisplayOrder(out);
   }
   function pickAttrs(roll) {
     const affix = Number.isInteger(roll.affix) && roll.affix > 0 ? ` data-pick-affix="${roll.affix}"` : "";
@@ -8215,8 +8226,18 @@ function priceOverlayHtml(log, drop) {
   }
   function pillHtml(tag, kind, roll) {
     if (!tag) return "";
+    const rollKind = canonicalRollKind(roll?.kind);
+    const categoryInHeading = ["enchant", "corrupt", "rune", "skill", "implicit"].includes(rollKind) && !roll?.fractured && !roll?.ghost;
+    let pillBase = String(tag || "").replace(/\s*·\s*hyb/i, "").replace(/\s+T\d+\s*$/i, "").trim();
+    if (categoryInHeading) {
+      const tier = String(tag).match(/\bT\d+\b/i)?.[0] || "";
+      const hybrid = /\bhyb\b/i.test(tag) ? "· hyb" : "";
+      if (!tier && !hybrid) return "";
+      tag = [tier, hybrid].filter(Boolean).join(" ");
+      pillBase = "";
+    }
     const live = rollHasAffixTiers(roll) && Number(roll?.tier) > 0
-      ? ` data-roll-tier data-pill-base="${esc(String(tag || "").replace(/\s*·\s*hyb/i, "").replace(/\s+T\d+\s*$/i, "").trim())}"`
+      ? ` data-roll-tier data-pill-base="${esc(pillBase)}"`
       : "";
     return `<span class="price-overlay-pill${kind}"${live}>${esc(tag)}</span>`;
   }
@@ -8250,25 +8271,25 @@ function priceOverlayHtml(log, drop) {
     const inVal = Number.isFinite(clamped) ? clamped : divs ? 0 : lo;
     const step = flat ? "1" : divs ? "0.01" : String(lo).includes(".") || String(hi).includes(".") || String(inVal).includes(".") ? "0.1" : "1";
     const w = Number(hi) - Number(lo) > 0 ? Number(hi) - Number(lo) : 1;
-    const steps = divs ? inMax - inMin : Number(roll.spanSteps) > 1 ? Number(roll.spanSteps) : 0;
-    const ticks = spanTicksHtml(inMin, inMax, divs ? [] : tiers, steps, divs);
     const t0 = rollHasAffixTiers(roll) && Number(roll.tier) > 0 ? Number(roll.tier) : "";
     const v0 = Number.isFinite(inVal) ? inVal : Number.isFinite(roll.value) ? Number(roll.value) : lo;
     const pct = inMax > inMin ? (((inVal - inMin) / (inMax - inMin)) * 100).toFixed(2) : "0";
     const tierAttr = tiers.length ? ` data-span-tiers="${esc(encodeSpanTiers(tiers))}"` : "";
     const divAttr = divs ? ` data-span-divs="${n}"` : "";
     const flatAttr = flat ? ` data-span-flat="1"` : "";
-    return `<div class="price-overlay-span"><span>${esc(String(lo))}</span><div class="price-overlay-span-bar">${ticks}<input type="range" min="${inMin}" max="${inMax}" step="${step}" value="${inVal}" style="--fill:${pct}" data-span-rid="${roll.rid}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" data-tier0="${t0}" data-value0="${v0}" data-tier-w="${w}"${tierAttr}${divAttr}${flatAttr} /></div><span>${esc(String(hi))}</span></div>`;
+    return `<div class="price-overlay-span"><span>${esc(String(lo))}</span><div class="price-overlay-span-bar"><input type="range" min="${inMin}" max="${inMax}" step="${step}" value="${inVal}" style="--fill:${pct}" data-span-rid="${roll.rid}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" data-tier0="${t0}" data-value0="${v0}" data-tier-w="${w}"${tierAttr}${divAttr}${flatAttr} /></div><span>${esc(String(hi))}</span></div>`;
   }
   function oneModButton(roll, tag) {
     const on = roll.pick ? " is-on" : "";
     const kind = rollKindClass(roll);
     const ghost = roll.ghost ? " is-ghost" : "";
-    const hint = roll.ghost ? "Typical implicit · F8 this item to capture the real roll · " : tag ? tag + " · " : "";
+    const hint = roll.ghost
+      ? "Typical implicit · F8 this item to capture the real roll · "
+      : "Select this mod to set its minimum · " + (tag ? tag + " · " : "");
     const live = rollHasAffixTiers(roll) && Number(roll.tier) > 0
       ? rollKindLabel(roll, rollTierAtValue(roll, overlaySliderValue(roll)))
       : tag;
-    return `<div class="price-overlay-mod-wrap${on}${ghost}"><div class="price-overlay-mod-line"><button type="button" class="price-overlay-q-toggle" ${pickAttrs(roll)} title="${esc(hint + roll.text)}"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod${kind}"><span class="price-overlay-mod-main"><span class="price-overlay-mod-text"${weaponDpsLineAttrs(roll)}>${overlayModTextHtml(roll)}</span></span><span class="price-overlay-mod-trail">${rollFlatAvgInputHtml(roll)}${pillHtml(live, kind, roll)}</span></div></div>${rollSpanHtml(roll)}</div>`;
+    return `<div class="price-overlay-mod-wrap${on}${ghost}"><div class="price-overlay-mod-line"><button type="button" class="price-overlay-q-toggle" ${pickAttrs(roll)} title="${esc(hint + roll.text)}"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod${kind}"><span class="price-overlay-mod-main"><span class="price-overlay-mod-text" ${pickAttrs(roll)}${weaponDpsLineAttrs(roll)}>${overlayModTextHtml(roll)}</span></span><span class="price-overlay-mod-trail">${rollFlatAvgInputHtml(roll)}${pillHtml(live, kind, roll)}</span></div></div>${rollSpanHtml(roll)}</div>`;
   }
   function modButtons(list) {
     return affixGroups(list)
@@ -8279,14 +8300,14 @@ function priceOverlayHtml(log, drop) {
         if (!together) return group.rolls.map((roll) => oneModButton(roll, tag)).join("");
         const on = group.rolls.some((roll) => roll.pick) ? " is-on" : "";
         const kind = rollKindClass(sample);
-        const hint = (tag ? tag + " · " : "") + group.rolls.map((roll) => roll.text).join(" / ");
+        const hint = "Select this mod to set its minimums · " + (tag ? tag + " · " : "") + group.rolls.map((roll) => roll.text).join(" / ");
         const liveTag = rollHasAffixTiers(sample) && Number(sample.tier) > 0
           ? rollKindLabel({ ...sample, hybrid: true }, rollTierAtValue(sample, overlaySliderValue(sample)))
           : tag;
         const rows = group.rolls
           .map((roll) => {
             const span = rollSpanHtml(roll);
-            return `<div class="price-overlay-hybrid-row" data-hybrid-rid="${esc(String(roll.rid || ""))}"><span class="price-overlay-hybrid-line"${weaponDpsLineAttrs(roll)}>${overlayModTextHtml(roll)}</span>${span}</div>`;
+            return `<div class="price-overlay-hybrid-row" data-hybrid-rid="${esc(String(roll.rid || ""))}"><span class="price-overlay-hybrid-line" ${pickAttrs(roll)}${weaponDpsLineAttrs(roll)}>${overlayModTextHtml(roll)}</span>${span}</div>`;
           })
           .join("");
         return `<div class="price-overlay-mod-wrap${on}"><div class="price-overlay-mod-line"><button type="button" class="price-overlay-q-toggle" ${pickAttrs(sample)} title="${esc(hint)}"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod is-hybrid${kind}"><span class="price-overlay-mod-main"><div class="price-overlay-hybrid-rows">${rows}</div></span><span class="price-overlay-mod-trail">${pillHtml(liveTag, kind, sample)}</span></div></div></div>`;
@@ -8306,11 +8327,18 @@ function priceOverlayHtml(log, drop) {
       rolls: rolls.filter((roll) => canonicalRollKind(roll.kind) === kind && !isCharmSlotRoll(roll) && !isWeaponEleFlatRoll(roll, drop)),
     }))
     .filter((group) => group.rolls.length);
+  const modGroupLabels = {
+    enchant: "Enchantments",
+    corrupt: "Corrupted modifiers",
+    rune: "Runes",
+    skill: "Granted Skills",
+    implicit: "Implicit modifiers",
+    explicit: "Affixes",
+  };
   const modsBody = listedByKind
     .map(({ kind, rolls: list }) => {
       const body = modButtons(list);
-      if (kind === "implicit") return `<div class="price-overlay-mod-group is-implicit">${body}</div>`;
-      return body;
+      return `<div class="price-overlay-mod-group is-${kind}"><div class="price-overlay-mod-group-label is-${kind}" role="heading" aria-level="3">${modGroupLabels[kind] || "Modifiers"}</div>${body}</div>`;
     })
     .join("");
   const mods = pickHtml || (modsBody ? `<div class="price-overlay-mods">${modsBody}</div>` : "");
@@ -8319,9 +8347,9 @@ function priceOverlayHtml(log, drop) {
   const hasOffers = !!offers;
   const tradeBtns = pickHtml
     ? ""
-    : `<span class="price-overlay-trade-btns">${overlayTradeRateHtml()}${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span>`;
+    : `<span class="price-overlay-trade-btns">${overlayQuoteHtml(drop, log.id)}${overlayTradeSiteHtml(log, drop)}</span>`;
   const exchange = overlayExchangeHaveHtml(log, drop);
-  const footBits = [charmExtra, exchange].filter(Boolean).join("");
+  const footBits = [charmExtra, exchange, tradeBtns].filter(Boolean).join("");
   const foot = pickHtml || !footBits ? "" : `<div class="price-overlay-foot">${footBits}</div>`;
   const side = hasOffers
     ? `<aside class="price-overlay-side"><div class="price-overlay-side-head"><span class="price-overlay-side-label">PoE 2 trade</span></div>${offers}</aside>`
@@ -8330,7 +8358,7 @@ function priceOverlayHtml(log, drop) {
     <article class="price-overlay-card item-tip-card ${esc(kindClass)}${hasOffers ? " has-offers" : ""}"${weaponDpsCardAttrs(drop)}>
       <div class="price-overlay-shell">
         <div class="price-overlay-main">
-          ${overlayBarHtml(tradeBtns)}
+          ${overlayBarHtml(!!tradeBtns)}
           <div class="price-overlay-body">
           <div class="item-tip-head">
             ${dropIconHtml(drop, "lg")}
@@ -8608,6 +8636,7 @@ function paintLiveDps(card) {
 
 function paintOverlaySpanLive(input) {
   if (!input) return;
+  if (input.dataset.spanRid === "runes") sanitizeOverlayMinInput(input);
   const value = Number(input.value);
   if (!Number.isFinite(value)) return;
   const rid = String(input.dataset.spanRid || "");
@@ -8691,10 +8720,10 @@ function paintOverlaySpanLive(input) {
   const t0 = Number(input.dataset.tier0);
   const v0 = Number(input.dataset.value0);
   const base = String(pill?.dataset.pillBase || "").trim();
-  if (pill && t0 > 0 && base) {
+  if (pill && t0 > 0) {
     const tier = rollTierAtValue({ spanTiers: input.dataset.spanTiers, tier: t0, value: v0, lo: Number(input.min), hi: Number(input.max) }, value);
     const hyb = /hyb/i.test(pill.textContent) ? " · hyb" : "";
-    pill.textContent = base + " T" + tier + hyb;
+    pill.textContent = (base ? base + " " : "") + "T" + tier + hyb;
   }
 }
 
@@ -8744,7 +8773,6 @@ function setRollWantMin(log, drop, rid, raw, live) {
   delete drop.quoting;
   if (log?.id) save();
   paintPriceOverlay();
-  if (row.pick) quoteRolledDrop(log, drop, true);
 }
 
 function rollChipsHtml(drop, logId) {
@@ -8759,8 +8787,8 @@ function rollChipsHtml(drop, logId) {
   const fracturedOn = searchFractured(drop) !== false;
   const fracturedFlag = isFracturedDrop(drop)
     ? canPick
-      ? `<button type="button" class="roll-chip is-flag is-fractured${fracturedOn ? " is-on" : ""}" data-pick-fractured="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${fracturedOn ? "Searching fractured mods" : "Searching as regular mods"}">${fracturedOn ? "Fractured" : "Not fractured"}</button>`
-      : `<span class="roll-chip is-flag is-fractured is-on">Fractured</span>`
+      ? `<button type="button" class="roll-chip is-flag is-fractured${fracturedOn ? " is-on" : ""}" data-pick-fractured="${esc(dropId)}" data-pick-log="${esc(logId)}" aria-pressed="${fracturedOn}" title="${fracturedOn ? "Searching fractured mods" : "Searching as regular mods"}"><span class="flag-check${fracturedOn ? " is-checked" : ""}" aria-hidden="true"></span><span>Fractured</span></button>`
+      : `<span class="roll-chip is-flag is-fractured is-on"><span class="flag-check is-checked" aria-hidden="true"></span><span>Fractured</span></span>`
     : "";
   const unidFlag = drop && !Array.isArray(drop) && drop.unidentified
     ? canPick
@@ -8774,11 +8802,10 @@ function rollChipsHtml(drop, logId) {
     !/currency|gem|divination/i.test(drop.rarity || "") &&
     !/currency|gem|divination/i.test(drop.className || "");
   const corruptOn = showCorrupt && searchCorrupted(drop) === true;
-  const corruptLabel = corruptOn ? "Corrupted" : "Not corrupted";
   const flag = showCorrupt
     ? canPick
-      ? `<button type="button" class="roll-chip is-flag${corruptOn ? " is-on" : ""}" data-pick-corrupt="${esc(dropId)}" data-pick-log="${esc(logId)}" title="${corruptOn ? "Searching corrupted" : "Searching not corrupted"}">${corruptLabel}</button>`
-      : `<span class="roll-chip is-flag${corruptOn ? " is-on" : ""}">${corruptLabel}</span>`
+      ? `<button type="button" class="roll-chip is-flag is-corrupted${corruptOn ? " is-on" : ""}" data-pick-corrupt="${esc(dropId)}" data-pick-log="${esc(logId)}" aria-pressed="${corruptOn}" title="${corruptOn ? "Searching corrupted" : "Searching not corrupted"}"><span class="flag-check${corruptOn ? " is-checked" : ""}" aria-hidden="true"></span><span>Corrupted</span></button>`
+      : `<span class="roll-chip is-flag is-corrupted${corruptOn ? " is-on" : ""}"><span class="flag-check${corruptOn ? " is-checked" : ""}" aria-hidden="true"></span><span>Corrupted</span></span>`
     : "";
   if (!rolls.length && !flag && !ravenFlag && !fracturedFlag && !unidFlag) return "";
   return `<div class="roll-chips">${ravenFlag}${fracturedFlag}${unidFlag}${flag}${rolls
@@ -9013,6 +9040,12 @@ function ingestClipboardItem(text, mode) {
 }
 
 function handleAppHotkey(msg) {
+  if (msg?.action === "open-settings" || msg?.action === "open-dashboard") {
+    closeInspect();
+    ui.view = msg.action === "open-settings" ? "settings" : "dash";
+    render();
+    return;
+  }
   if (msg?.action === "next-kill") {
     finishFarmKill(true);
     return;
@@ -9498,7 +9531,6 @@ function applyBackupInfo(res) {
   if (!res || typeof res !== "object") return;
   backupInfo.folder = res.folder || backupInfo.folder || "";
   backupInfo.downloads = res.downloads || backupInfo.downloads || "";
-  syncBackupUi();
 }
 
 function backupFolderLabel() {
@@ -9508,14 +9540,6 @@ function backupFolderLabel() {
     return parts.at(-1) || backupInfo.folder;
   }
   return "Downloads";
-}
-
-function syncBackupUi() {
-  const label = backupFolderLabel();
-  const exportNote = document.querySelector("#export-btn .menu-link-note");
-  if (exportNote) exportNote.textContent = "Saves to " + label;
-  const importNote = document.querySelector("#import-btn .menu-link-note");
-  if (importNote) importNote.textContent = "Opens " + label;
 }
 
 async function refreshBackupInfo() {
@@ -9854,14 +9878,6 @@ function renderLogView() {
   `;
 }
 
-function colorField(key, label, value) {
-  const hex = /^#[0-9a-fA-F]{6}$/.test(value || "") ? value : themeDefaults()[key] || "#000000";
-  return `<label class="theme-color">
-    <span>${esc(label)}</span>
-    <input type="color" data-theme="${esc(key)}" value="${esc(hex)}" />
-  </label>`;
-}
-
 function renderGuides() {
 
   const sections = Array.isArray(window.GUIDE_SECTIONS) ? window.GUIDE_SECTIONS : [];
@@ -9903,7 +9919,6 @@ function renderGuides() {
 }
 
 function renderSettings() {
-  const t = currentTheme();
   return `
     <section class="settings">
       <div>
@@ -9952,6 +9967,7 @@ function renderSettings() {
         </label>
       </article>`
       }
+      <div class="settings-side">
       <article class="panel">
         <h3>Default save folder</h3>
         ${
@@ -9967,17 +9983,13 @@ function renderSettings() {
         </div>
       </article>
       <article class="panel">
-        <h3>Colors</h3>
-        <div class="settings-grid" style="margin-top:12px">
-          ${colorField("gold", "Accent", t.gold)}
-          ${colorField("bg", "Background", t.bg)}
-          ${colorField("panel", "Panels", t.panel)}
-          ${colorField("ink", "Text", t.ink)}
+        <h3>App</h3>
+        <p class="muted" id="update-status" style="margin-top:8px">v${esc(APP_VERSION)}</p>
+        <div class="row-actions">
+          <button class="btn ghost" id="settings-check-btn" type="button"${window.chrome?.webview ? "" : " hidden"}>Check</button>
+          <button class="btn gold" id="settings-update-btn" type="button" hidden>Update</button>
         </div>
-
       </article>
-      <div class="row-actions">
-        <button class="btn ghost" data-theme-reset type="button">Reset look</button>
       </div>
       <article class="panel" id="feedback">
         <h3>Feedback</h3>
@@ -10003,14 +10015,6 @@ function renderSettings() {
             <button class="btn gold" type="submit">Send</button>
           </div>
         </form>
-      </article>
-      <article class="panel">
-        <h3>App</h3>
-        <p class="muted" id="update-status" style="margin-top:8px">v${esc(APP_VERSION)}</p>
-        <div class="row-actions">
-          <button class="btn ghost" id="settings-check-btn" type="button"${window.chrome?.webview ? "" : " hidden"}>Check</button>
-          <button class="btn gold" id="settings-update-btn" type="button" hidden>Update</button>
-        </div>
       </article>
     </section>
   `;
@@ -10165,7 +10169,6 @@ function dropPriceChip(drop, logId) {
   if (drop?.quoting) return `<span class="price-chip is-empty">this roll…</span>`;
   const quote = drop?.quote;
   const league = quote?.league || leagueId();
-  const n = pickedRolls(drop).length;
   const listed = quote?.listings ? quote.listings.toLocaleString() + " with these rolls" : "these rolls";
   const title = `PoE 2 trade · ${league} · ${listed}`;
   const mapped = Number(quote?.mapped) || 0;
@@ -10179,8 +10182,7 @@ function dropPriceChip(drop, logId) {
   }
   if (drop?.rolls?.length) {
     const err = quote?.error ? ` · ${quote.error}` : "";
-    const label = n ? "this roll" : "pick mods";
-    return `<button type="button" class="price-chip is-empty is-lookup" data-quote-drop="${esc(drop.id || "")}" data-quote-log="${esc(logId || "")}" title="${esc((n ? "Search PoE 2 trade for the mods you tapped" : "Tap the mods you want to check") + err)}">${label}</button>`;
+    return `<button type="button" class="price-chip is-empty is-lookup" data-quote-drop="${esc(drop.id || "")}" data-quote-log="${esc(logId || "")}" title="${esc("Click to search PoE 2 trade for the selected mods" + err)}">Check trade</button>`;
   }
   return priceChip(drop?.name);
 }
@@ -10494,7 +10496,6 @@ function render() {
     if (tab.dataset.view === ui.view) tab.setAttribute("aria-current", "page");
     else tab.removeAttribute("aria-current");
   });
-  syncBackupUi();
   document.getElementById("boss-toolbar").style.display = ui.view === "bosses" ? "flex" : "none";
   document.getElementById("stats").style.display =
     ui.view === "dash" || ui.view === "log" ? "grid" : "none";
@@ -10545,16 +10546,9 @@ function render() {
 }
 
 function onClick(event) {
-  if (event.target.closest("[data-win-min]")) {
-    chrome.webview?.postMessage({ type: "window-min" });
-    return;
-  }
-  if (event.target.closest("[data-win-max]")) {
-    chrome.webview?.postMessage({ type: "window-max" });
-    return;
-  }
   if (event.target.closest("[data-title-quit]")) {
-    quitApp();
+    if (window.chrome?.webview) chrome.webview.postMessage({ type: "window-hide" });
+    else quitApp();
     return;
   }
   const feedbackSend = event.target.closest("[data-feedback-send]");
@@ -10607,7 +10601,7 @@ function onClick(event) {
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickCorrupt.dataset.pickLog, pickCorrupt.dataset.pickCorrupt);
     if (!drop) return;
-    drop.pickCorrupt = searchCorrupted(drop) === false;
+    drop.pickCorrupt = pickCorrupt.getAttribute("aria-pressed") === "true" ? false : true;
     drop.quoteTried = false;
     delete drop.quote;
     if (log?.id) save();
@@ -10649,7 +10643,7 @@ function onClick(event) {
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickFractured.dataset.pickLog, pickFractured.dataset.pickFractured);
     if (!drop) return;
-    drop.pickFractured = searchFractured(drop) === false;
+    drop.pickFractured = pickFractured.getAttribute("aria-pressed") === "true" ? false : true;
     drop.quoteTried = false;
     delete drop.quote;
     if (log?.id) save();
@@ -10730,6 +10724,7 @@ function onClick(event) {
   }
   const pickText = event.target.closest("[data-pick-text]");
   if (pickText) {
+    if (event.target.closest("input, .price-overlay-span, .price-overlay-q-edit")) return;
     event.preventDefault();
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickText.dataset.pickLog, pickText.dataset.pickDrop);
@@ -10966,13 +10961,6 @@ function onClick(event) {
     render();
     return;
   }
-  if (event.target.closest("[data-theme-reset]")) {
-    state.theme = themeDefaults();
-    save();
-    applyTheme();
-    render();
-    return;
-  }
   const backupWhere = event.target.closest("[data-backup-where]");
   if (backupWhere) {
     setBackupFolder(backupWhere.dataset.backupWhere);
@@ -10986,11 +10974,11 @@ function onClick(event) {
     startAppUpdate();
     return;
   }
-  if (event.target.closest("#export-btn, #settings-export-btn")) {
+  if (event.target.closest("#settings-export-btn")) {
     exportData();
     return;
   }
-  if (event.target.closest("#import-btn, #settings-import-btn")) {
+  if (event.target.closest("#settings-import-btn")) {
     importBackup();
   }
 }
@@ -11102,11 +11090,6 @@ document.addEventListener("input", (event) => {
     paintOverlaySpanLive(span);
     const { log, drop } = overlayLogDrop(span.dataset.pickLog, span.dataset.pickDrop);
     setRollWantMin(log, drop, span.dataset.spanRid, span.value, true);
-    return;
-  }
-  const theme = event.target.closest("[data-theme]");
-  if (theme) {
-    setTheme({ [theme.dataset.theme]: theme.value });
     return;
   }
   if (event.target.id === "search" || event.target.id === "econ-search") {
@@ -11247,13 +11230,7 @@ function isCurrencyTipNoise(text) {
   if (!t) return true;
   if (/you've found .+ pin!?$/i.test(t)) return true;
   if (/^pin:?\s/i.test(t) || /^you've found an?\b/i.test(t)) return true;
-  if (/while this item is active/i.test(t)) return true;
   if (/^shift click to unstack\.?$/i.test(t)) return true;
-  if (/requires completing/i.test(t)) return true;
-  if (/eastern enigma chamber|\bchamber\b/i.test(t)) return true;
-  if (/^applies to level\b/i.test(t)) return true;
-  if (/^genesis:/i.test(t)) return true;
-  if (/^mastery:/i.test(t)) return true;
   return false;
 }
 
@@ -11265,6 +11242,15 @@ function tipBaseLabel(lore, name) {
   return base;
 }
 
+function withoutItemUseInstructions(text) {
+  return String(text || "")
+    .replace(/(?:^|\s+)(?:right|left|middle|shift|ctrl|control)(?:\s+|-|\s*\+\s*)click\b[^.!?]*(?:[.!?]|$)/gi, "")
+    .replace(/(?:^|\s+)(?:can(?:\s+only)?\s+be\s+equipped|(?:place|socket)(?:\s+this\s+item)?\s+into)\b[^.!?]*(?:[.!?]|$)/gi, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function itemTipHtml(name, lore, loading) {
   const note = catalogNoteFor(name);
   const currency = isCurrencyTipKind(lore);
@@ -11274,7 +11260,7 @@ function itemTipHtml(name, lore, loading) {
   if (name) seen.add(modFamily(name));
   function renderLines(list, cls) {
     return (list || [])
-      .map((text) => cleanMod(text))
+      .map((text) => cleanMod(withoutItemUseInstructions(text)))
       .filter((text) => {
         if (!text) return false;
         if (currency && isCurrencyTipNoise(text)) return false;
@@ -11286,17 +11272,16 @@ function itemTipHtml(name, lore, loading) {
       .map((text) => `<div class="${cls}">${esc(text)}</div>`)
       .join("");
   }
-  const props = renderLines((lore?.properties || []).slice(0, currency ? 6 : 4), "item-tip-prop");
+  const props = renderLines(lore?.properties, "item-tip-prop");
   const implicits = renderLines(lore?.implicits, "item-tip-mod implicit");
-  const explicits = renderLines(currency ? (lore?.explicits || []).slice(0, 3) : lore?.explicits, "item-tip-mod");
+  const explicits = renderLines(lore?.explicits, "item-tip-mod");
+  const variantNote = renderLines(lore?.variantNote ? [lore.variantNote] : [], "item-tip-mod");
   const kind = (lore?.rarity || "Unique").toLowerCase();
   const flavour = currency ? "" : lore?.flavour || "";
   let descr = lore?.descr && flavour && lore.descr.toLowerCase() === flavour.toLowerCase() ? "" : lore?.descr || "";
+  descr = withoutItemUseInstructions(descr);
   if (currency && isCurrencyTipNoise(descr)) descr = "";
-  if (currency && descr && /right click this item then left click/i.test(descr)) {
-    descr = descr.replace(/\s*Shift click to unstack\.?/i, "").trim();
-  }
-  const empty = !implicits && !explicits && !descr && !flavour && !props;
+  const empty = !implicits && !explicits && !variantNote && !descr && !flavour && !props;
   return `<div class="item-tip-card ${esc(kind)}${currency ? " currency" : ""}">
     <div class="item-tip-head">
       ${itemIconHtml(name, "lg")}
@@ -11308,6 +11293,7 @@ function itemTipHtml(name, lore, loading) {
     ${props}
     ${implicits}
     ${explicits}
+    ${variantNote}
     ${flavour ? `<div class="item-tip-flavour">${esc(flavour)}</div>` : ""}
     ${descr ? `<div class="item-tip-descr">${esc(descr)}</div>` : ""}
     ${empty && loading ? `<div class="item-tip-descr">Looking up what this does…</div>` : ""}
@@ -11346,8 +11332,7 @@ function showItemTip(anchor, name) {
   tip.dataset.for = name;
   tip.innerHTML = itemTipHtml(name, lore, !loreIsRich(lore));
   placeItemTip(anchor, tip);
-  const needDb = !lore?.flavour && !lore?.descr;
-  if (loreIsRich(lore) && !needDb) return;
+  if (lore?.complete) return;
   fetchDbIcon(name).then(() => {
     if (tip.dataset.for !== name || tip.hidden) return;
     tip.innerHTML = itemTipHtml(name, lookupLore(name), false);

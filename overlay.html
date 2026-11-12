@@ -13,7 +13,7 @@
         display: block;
         background: #120e0a;
         overflow: hidden;
-        font-size: 17px;
+        font-size: 18px;
         -webkit-user-select: none;
         user-select: none;
       }
@@ -25,19 +25,19 @@
         overflow: hidden;
       }
       .price-overlay-card {
-        width: 420px;
+        width: 466px;
         max-width: 100%;
         height: 100%;
         max-height: 100%;
         margin: 0;
         overflow: hidden;
-        box-shadow: none;
+        box-shadow: inset 0 0 0 1px rgba(212, 178, 74, 0.24);
         cursor: grab;
         display: flex;
         flex-direction: column;
       }
       .price-overlay-card.has-offers {
-        width: 720px;
+        width: 766px;
         max-width: 100%;
       }
       .price-overlay-shell {
@@ -49,9 +49,9 @@
         overflow: hidden;
       }
       .price-overlay-main {
-        flex: 0 0 420px;
-        width: 420px;
-        max-width: 420px;
+        flex: 0 0 466px;
+        width: 466px;
+        max-width: 466px;
         height: 100%;
         min-height: 0;
         position: relative;
@@ -92,7 +92,29 @@
         min-width: 0;
         min-height: 0;
         overflow-x: hidden;
-        overflow-y: auto;
+        overflow-y: hidden;
+        scrollbar-gutter: auto;
+        padding: 8px 12px 10px;
+      }
+      .price-overlay-body:has(> .price-overlay-mods) {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        scrollbar-gutter: auto;
+      }
+      .price-overlay-body:has(> .price-overlay-mods) > :not(.price-overlay-mods) {
+        flex: 0 0 auto;
+      }
+      .price-overlay-body > .price-overlay-mods {
+        flex: 0 0 auto;
+        overflow: visible;
+        align-content: start;
+      }
+      .price-overlay-mod-wrap { padding-top: 3px; padding-bottom: 4px; }
+      .price-overlay-mod-group + .price-overlay-mod-group { margin-top: 7px; }
+      .price-overlay-card.item-tip-card .item-tip-head {
+        margin-top: 0;
+        padding: 6px 8px;
       }
       .price-overlay-foot {
         flex: none;
@@ -105,7 +127,7 @@
         flex-direction: row;
         flex-wrap: wrap;
         align-items: center;
-        gap: 8px 14px;
+        gap: 8px 16px;
       }
       .price-overlay-corrupt,
       .price-overlay-raven,
@@ -130,20 +152,28 @@
         z-index: 4;
         pointer-events: auto;
       }
+      .price-overlay-corrupt,
+      .price-overlay-fractured {
+        gap: 4px;
+      }
+      .price-overlay-fractured {
+        flex: 0 0 120px;
+        width: 120px;
+      }
       .price-overlay-corrupt.is-on {
         color: #f05a4a;
-        font-weight: 700;
-        text-transform: uppercase;
+        font-weight: 600;
+        text-transform: none;
       }
       .price-overlay-fractured.is-on {
-        color: #e85a4a;
-        font-weight: 700;
-        text-transform: uppercase;
+        color: #f05a4a;
+        font-weight: 600;
+        text-transform: none;
       }
       .price-overlay-raven.is-on {
         color: #7aa2ff;
-        font-weight: 700;
-        text-transform: uppercase;
+        font-weight: 600;
+        text-transform: none;
       }
       .price-overlay-unid.is-on {
         color: color-mix(in srgb, var(--citadel) 35%, var(--ink) 65%);
@@ -184,6 +214,10 @@
       const root = document.getElementById("root");
       let drag = null;
       let skipClick = false;
+      let sizedItem = "";
+      let itemHeight = 0;
+      let itemContentScale = 1;
+      let availableHeight = window.screen.availHeight * 0.9;
 
       function camel(name) {
         return String(name || "")
@@ -196,18 +230,29 @@
         if (!card || !window.chrome?.webview) return;
         const prevH = card.style.height;
         const prevMax = card.style.maxHeight;
+        const main = card.querySelector(".price-overlay-main");
+        const prevMainH = main?.style.height || "";
+        const bodyEl = card.querySelector(".price-overlay-body");
+        const scrollTop = bodyEl?.scrollTop || 0;
+        const modsEl = card.querySelector(".price-overlay-mods");
+        const modsScrollTop = modsEl?.scrollTop || 0;
+        if (bodyEl) bodyEl.style.zoom = "1";
         card.style.height = "auto";
         card.style.maxHeight = "none";
+        if (main) main.style.height = "auto";
+        // Reserve every slider up front so selecting mods never grows the frame.
+        const hiddenSliders = [...card.querySelectorAll(".price-overlay-mod-wrap .price-overlay-span")]
+          .map((el) => ({ el, display: el.style.display }));
+        for (const { el } of hiddenSliders) el.style.display = "grid";
         const bar = card.querySelector(".price-overlay-bar");
-        const bodyEl = card.querySelector(".price-overlay-body");
         const foot = card.querySelector(".price-overlay-foot");
         const barH = bar ? bar.offsetHeight : 0;
         const bodyH = bodyEl ? bodyEl.scrollHeight : 0;
         const footH = foot ? foot.offsetHeight : 0;
-        let h = Math.max(card.scrollHeight, barH + bodyH + footH);
+        let h = Math.max(card.scrollHeight, barH + bodyH + footH) + 20;
         const cs = getComputedStyle(card);
         h += (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
-        let w = card.classList.contains("has-offers") ? 720 : 420;
+        let w = card.classList.contains("has-offers") ? 766 : 466;
         const extra = card.querySelector(".price-overlay-rate-card");
         if (extra && getComputedStyle(extra).display !== "none") {
           const r = card.getBoundingClientRect();
@@ -215,10 +260,25 @@
           w = Math.max(w, er.right - r.left);
           h = Math.max(h, Math.ceil(er.bottom - r.top));
         }
+        for (const { el, display } of hiddenSliders) el.style.display = display;
+        if (main) main.style.height = prevMainH;
         card.style.height = prevH;
         card.style.maxHeight = prevMax;
+        if (bodyEl) bodyEl.scrollTop = scrollTop;
+        if (modsEl) modsEl.scrollTop = modsScrollTop;
         const nextW = Math.max(280, Math.ceil(w) + 4);
-        const nextH = Math.max(90, Math.ceil(h) + 4);
+        const itemKey = card.querySelector("[data-pick-drop]")?.dataset.pickDrop
+          || card.querySelector(".item-tip-name")?.textContent || "";
+        if (!itemKey || itemKey !== sizedItem || !itemHeight) {
+          sizedItem = itemKey;
+          // Keep toolbar controls at full size. Scale only item content on tall items.
+          const fixedH = barH + footH + 24;
+          itemContentScale = Math.min(1, Math.max(1, availableHeight - fixedH) / Math.max(1, h - barH - footH));
+          itemHeight = Math.min(availableHeight, Math.max(90, Math.ceil(fixedH + (h - barH - footH) * itemContentScale)));
+        }
+        if (bodyEl) bodyEl.style.zoom = String(itemContentScale);
+        // Freeze size and scale for the item, including Fractured/Raven toggles.
+        const nextH = itemHeight;
         if (nextW === lastFitW && nextH === lastFitH) return;
         lastFitW = nextW;
         lastFitH = nextH;
@@ -306,14 +366,22 @@
           }
         }
         if (msg?.type === "paint") {
+          if (Number(msg.maxHeight) > 0 && Number(msg.maxHeight) !== availableHeight) {
+            availableHeight = Number(msg.maxHeight);
+            itemHeight = 0;
+          }
           document.body.classList.toggle("click-away", !!msg.clickAway);
           if (msg.vars) document.documentElement.style.cssText = msg.vars;
           const html = msg.html || "";
           const cur = root.querySelector(".price-overlay-card");
+          const previousScroll = cur?.querySelector(".price-overlay-body")?.scrollTop || 0;
+          const previousModsScroll = cur?.querySelector(".price-overlay-mods")?.scrollTop || 0;
+          let retainScroll = false;
           if (cur && html) {
             const tmp = document.createElement("div");
             tmp.innerHTML = html;
             const next = tmp.querySelector(".price-overlay-card");
+            retainScroll = cur.querySelector("[data-pick-drop]")?.dataset.pickDrop === next?.querySelector("[data-pick-drop]")?.dataset.pickDrop;
             if (next && sameOverlayItem(cur, next) && patchOverlayQuote(cur, next)) {
               lastFitW = 0;
               lastFitH = 0;
@@ -323,12 +391,24 @@
             }
           }
           root.innerHTML = html;
+          if (retainScroll) {
+            const body = root.querySelector(".price-overlay-body");
+            if (body) body.scrollTop = previousScroll;
+          }
           lastFitW = 0;
           lastFitH = 0;
           fit();
-          requestAnimationFrame(fit);
+          const restoreModsScroll = () => {
+            if (!retainScroll) return;
+            const mods = root.querySelector(".price-overlay-mods");
+            if (mods) mods.scrollTop = previousModsScroll;
+          };
+          restoreModsScroll();
+          requestAnimationFrame(() => { fit(); restoreModsScroll(); });
         }
         if (msg?.type === "notice") {
+          sizedItem = "";
+          itemHeight = 0;
           document.body.classList.toggle("click-away", !!msg.clickAway);
           if (msg.vars) document.documentElement.style.cssText = msg.vars;
           const text = String(msg.text || "")
@@ -362,7 +442,7 @@
       });
 
       const overlayControlSel =
-        "button, a, input, textarea, select, .price-overlay-flags, .price-overlay-base-modes, .price-overlay-dps-tags, .price-overlay-offers, .price-overlay-mods, .price-overlay-span, .price-overlay-prop-quality, .price-overlay-prop-num, .price-overlay-q-edit, .price-overlay-rate-wrap";
+        "button, a, input, textarea, select, [data-pick-text], .price-overlay-mods, .price-overlay-flags, .price-overlay-base-modes, .price-overlay-dps-tags, .price-overlay-offers, .price-overlay-prop-quality, .price-overlay-prop-num, .price-overlay-q-edit, .price-overlay-rate-wrap";
 
       document.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
@@ -374,22 +454,25 @@
         }
         const card = event.target.closest(".price-overlay-card");
         if (!card || !window.chrome?.webview) return;
-        drag = { x: event.screenX, y: event.screenY, moved: false, id: event.pointerId };
-        card.classList.add("is-drag");
-        try {
-          document.body.setPointerCapture(event.pointerId);
-        } catch {
-          /* keep going */
-        }
+        drag = { startX: event.screenX, startY: event.screenY, x: event.screenX, y: event.screenY, moved: false, id: event.pointerId };
       });
 
       document.addEventListener("pointermove", (event) => {
         if (!drag || event.pointerId !== drag.id || !window.chrome?.webview) return;
+        if (!drag.moved && Math.hypot(event.screenX - drag.startX, event.screenY - drag.startY) < 8) return;
         const dx = event.screenX - drag.x;
         const dy = event.screenY - drag.y;
         if (!dx && !dy) return;
         drag.x = event.screenX;
         drag.y = event.screenY;
+        if (!drag.moved) {
+          root.querySelector(".price-overlay-card")?.classList.add("is-drag");
+          try {
+            document.body.setPointerCapture(event.pointerId);
+          } catch {
+            /* keep going */
+          }
+        }
         drag.moved = true;
         chrome.webview.postMessage({ type: "overlay-drag", dx, dy });
       });
@@ -409,9 +492,9 @@
         (event) => {
           if (!skipClick) return;
           skipClick = false;
-          if (event.target.closest(overlayControlSel)) return;
           event.preventDefault();
           event.stopPropagation();
+          event.stopImmediatePropagation();
         },
         true
       );
@@ -550,6 +633,14 @@
           next = raw.replace(/\D/g, "");
         }
         if (next !== raw) t.value = next;
+        if (t.dataset.spanRid === "runes") {
+          const preview = t.closest(".is-sockets")?.querySelector(".price-overlay-socket-preview");
+          const count = Math.max(0, Math.min(6, Math.round(Number(t.value) || 0)));
+          if (preview) {
+            [...preview.children].forEach((socket, i) => { socket.hidden = i >= count; });
+            preview.title = count + " sockets";
+          }
+        }
       }
 
       function paintSpan(t) {

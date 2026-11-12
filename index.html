@@ -7,19 +7,17 @@
     <link rel="icon" href="still-sane-sigil.png" />
     <link rel="stylesheet" href="styles.css" />
   </head>
-  <body>
+  <body class="top-navigation">
     <div class="win-chrome">
       <div class="win-drag" data-win-drag title="Still Sane, Exile?">
         <img class="sigil tiny" src="still-sane-sigil.png" alt="" />
         <strong>Still Sane, Exile?</strong>
       </div>
       <div class="win-btns">
-        <button type="button" class="win-btn" data-win-min aria-label="Minimize"><img src="art/window-minimize.png" alt="" draggable="false" /></button>
-        <button type="button" class="win-btn" data-win-max aria-label="Maximize"><img src="art/window-maximize.png" alt="" draggable="false" /></button>
-        <button type="button" class="win-btn win-close" data-title-quit aria-label="Close"><img src="art/window-close.png" alt="" draggable="false" /></button>
+        <button type="button" class="win-btn win-close" data-title-quit aria-label="Hide SSE" title="Hide SSE to tray"><img src="art/window-close.png" alt="" draggable="false" /></button>
       </div>
     </div>
-    <aside class="app-menu" id="app-menu">
+    <header class="app-menu" id="app-menu">
       <nav class="menu-nav" aria-label="Menu">
         <button class="menu-link is-active" data-view="dash" type="button">
           <span class="nav-symbol" aria-hidden="true">◈</span>
@@ -38,21 +36,7 @@
           <span class="menu-link-title">Settings</span>
         </button>
       </nav>
-      <div class="menu-tools">
-        <p class="menu-label">Data</p>
-        <button class="menu-link quiet" id="export-btn" type="button">
-          <span class="menu-link-title">Export</span>
-          <span class="menu-link-note"></span>
-        </button>
-        <button class="menu-link quiet" id="import-btn" type="button">
-          <span class="menu-link-title">Import</span>
-          <span class="menu-link-note"></span>
-        </button>
-        <button class="menu-link quiet" data-title-quit type="button">
-          <span class="menu-link-title">Exit</span>
-        </button>
-      </div>
-    </aside>
+    </header>
 
     <div class="shell">
     <div class="bg-glow"></div>

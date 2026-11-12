@@ -19,10 +19,18 @@ static class Program
     [STAThread]
     static void Main()
     {
-        SingleInstance = new Mutex(true, @"Local\StillSaneExile.SingleInstance", out _);
-        ApplicationConfiguration.Initialize();
-        Application.Run(new TrackerWindow());
-        SingleInstance.Dispose();
+        SingleInstance = new Mutex(true, @"Local\StillSaneExile.SingleInstance", out var created);
+        if (!created) { SingleInstance.Dispose(); return; }
+        try
+        {
+            ApplicationConfiguration.Initialize();
+            Application.Run(new TrackerWindow());
+        }
+        finally
+        {
+            SingleInstance.ReleaseMutex();
+            SingleInstance.Dispose();
+        }
     }
 }
 
@@ -49,6 +57,18 @@ sealed class TrackerWindow : Form
     const int HotNextId = 2;
     const int HotPriceId = 3;
     const int HotHideoutId = 4;
+    const int HotSettingsId = 5;
+    static readonly Size CompanionMinimum = new(900, 640);
+    bool _launcherHotkeyRegistered;
+    bool _hotkeysPaused;
+    bool _companionAboveGame;
+    bool _companionPlaced;
+    bool _openingCompanion;
+    int _companionOpenGeneration;
+    bool _appReady;
+    string _companionViewAction = "open-dashboard";
+    long _companionOpeningUntil;
+    GameLauncherForm? _launcher;
     string _hotHideout = "F6";
     bool _sendingHideout;
     const uint ModNoRepeat = 0x4000;
@@ -57,11 +77,21 @@ sealed class TrackerWindow : Form
     string _hotNext = "F9";
     string _hotPrice = "F7";
     bool _capturingItem;
+    readonly MovementShortcutState _movementShortcuts = new();
+    readonly GameMenuVisibility _gameMenus = new();
+    readonly HashSet<(uint Modifiers, uint Key)> _registeredGameHotkeys = new();
+    string? _gameMenuConfigPath;
+    DateTime _gameMenuConfigStamp;
+    long _nextGameMenuConfigCheck;
+    readonly List<(int id, uint modifiers, uint key)> _movementBindings = new();
+    IntPtr _keyboardHook;
+    KeyboardHookProc? _keyboardHookProc;
+    IntPtr _hookForeground;
+    bool _hookPoe2Focused;
     CoreWebView2Environment? _env;
     PriceOverlayForm? _overlay;
     GuideBrowserHost? _guideBrowser;
     NotifyIcon? _tray;
-    FormWindowState _restoreState = FormWindowState.Normal;
 
     public TrackerWindow()
     {
@@ -76,36 +106,40 @@ sealed class TrackerWindow : Form
             /* keep the default window icon */
         }
         FormBorderStyle = FormBorderStyle.None;
-        Width = 1320;
-        Height = 860;
-        MinimumSize = new Size(900, 640);
-        StartPosition = FormStartPosition.CenterScreen;
+        Width = 1008;
+        Height = 677;
+        MinimumSize = CompanionMinimum;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ShowInTaskbar = false;
+        Opacity = 0;
+        WindowState = FormWindowState.Minimized;
+        StartPosition = FormStartPosition.Manual;
         BackColor = Color.FromArgb(12, 10, 8);
         Controls.Add(_web);
         var trayMenu = new ContextMenuStrip();
-        trayMenu.Items.Add("Open Still Sane", null, (_, _) => RestoreFromTray());
+        trayMenu.Items.Add(new ToolStripMenuItem("Open PoE 2 to use the SSE menu") { Enabled = false });
         trayMenu.Items.Add("Exit", null, (_, _) => Close());
         _tray = new NotifyIcon
         {
             Icon = Icon ?? SystemIcons.Application,
-            Text = "Still Sane, Exile?",
+            Text = "Still Sane, Exile? · Open from the PoE 2 menu",
             ContextMenuStrip = trayMenu,
-            Visible = false,
+            Visible = true,
         };
-        _tray.DoubleClick += (_, _) => RestoreFromTray();
         Resize += (_, _) =>
         {
-            if (WindowState == FormWindowState.Minimized)
+            if (WindowState == FormWindowState.Minimized && !_openingCompanion)
             {
-                _tray.Visible = true;
-                Hide();
+                HideCompanionWindow();
             }
-            else _restoreState = WindowState;
         };
         Load += OnLoad;
+        Shown += (_, _) => { if (!_companionAboveGame && !_openingCompanion) HideCompanionWindow(); };
         FormClosed += (_, _) =>
         {
             ClearHotkeys();
+            _launcher?.Dispose();
             _overlay?.Dispose();
             _guideBrowser?.Dispose();
             _tray?.Dispose();
@@ -115,10 +149,178 @@ sealed class TrackerWindow : Form
 
     void RestoreFromTray()
     {
-        WindowState = _restoreState;
+        var recenter = !Visible;
+        WindowState = FormWindowState.Normal;
+        PlaceCompanionWindow(recenter);
+        var placedSize = Size;
+        Opacity = 1;
         Show();
+        if (IsIconic(Handle)) ShowWindow(Handle, 9); // Restore the native HWND as well as WinForms state.
+        // Showing/restoring a hidden window can reapply Windows' saved bounds
+        // or change DPI. Correct its position before giving it keyboard focus.
+        Size = placedSize;
+        PlaceCompanionWindow(recenter);
+        _companionPlaced = true;
+        FocusCompanionWindow();
+        if (_tray != null) _tray.Visible = true;
+    }
+
+    void FocusCompanionWindow()
+    {
+        if (!_companionAboveGame || !Visible) return;
+        ShowWindow(Handle, 5);
+        SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0043); // Show above PoE without changing bounds.
         Activate();
-        if (_tray != null) _tray.Visible = false;
+        SetForegroundWindow(Handle);
+        if (_web.CoreWebView2 is not null)
+        {
+            _web.Select();
+            _web.Focus();
+        }
+    }
+
+    void FinishCompanionNavigation(bool success)
+    {
+        _appReady = success;
+        if (!_appReady || !_companionAboveGame) return;
+        PushHotkey(_companionViewAction);
+        if (SettingsShortcutContext(Poe2HasFocus())) FocusCompanionWindow();
+    }
+
+    bool SseHasForeground()
+    {
+        var foreground = GetForegroundWindow();
+        if (IsHandleCreated && (foreground == Handle || IsChild(Handle, foreground))) return true;
+        GetWindowThreadProcessId(foreground, out var pid);
+        return pid == Environment.ProcessId;
+    }
+
+    bool SettingsShortcutContext(bool gameFocused) => gameFocused ||
+        (_launcher?.GameRunning == true && SseHasForeground());
+
+    bool SettingsShortcutAvailable() => !_hotkeysPaused &&
+        !new[] { _hotLog, _hotNext, _hotPrice, _hotHideout }
+            .Any(spec => TryParseHotkey(spec, out var mod, out var key) && (mod & 15) == 4 && key == 0x20);
+
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == (Keys.Shift | Keys.Space) && SettingsShortcutAvailable() &&
+            SettingsShortcutContext(Poe2HasFocus()))
+        {
+            OpenCompanionView("settings");
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    void PlaceCompanionWindow(bool recenter)
+    {
+        var area = CompanionArea();
+        if (area.IsEmpty) return;
+        var minimum = new Size(Math.Min(CompanionMinimum.Width, area.Width), Math.Min(CompanionMinimum.Height, area.Height));
+        if (MinimumSize != minimum) MinimumSize = minimum;
+        var size = new Size(
+            Math.Max(minimum.Width, Math.Min(_companionPlaced ? Width : (int)(area.Width * 0.5328), area.Width - 24)),
+            Math.Max(minimum.Height, Math.Min(_companionPlaced ? Height : (int)(area.Height * 0.6048), area.Height - 24)));
+        var point = recenter
+            ? new Point(area.Left + Math.Max(0, (area.Width - size.Width) / 2), area.Top + Math.Max(0, (area.Height - size.Height) / 2))
+            : Location;
+        var bounds = FitCompanionBounds(new Rectangle(point, size), area);
+        if (Bounds != bounds) Bounds = bounds;
+    }
+
+    Rectangle CompanionArea()
+    {
+        if (_launcher?.GameRunning != true) return Rectangle.Empty;
+        var game = _launcher.GameClientBounds;
+        if (game.Width <= 0 || game.Height <= 0) return Rectangle.Empty;
+        var visible = Rectangle.Intersect(game, Screen.FromRectangle(game).WorkingArea);
+        return visible.IsEmpty ? game : visible;
+    }
+
+    static Rectangle FitCompanionBounds(Rectangle bounds, Rectangle area)
+    {
+        var width = Math.Clamp(bounds.Width, Math.Min(CompanionMinimum.Width, area.Width), area.Width);
+        var height = Math.Clamp(bounds.Height, Math.Min(CompanionMinimum.Height, area.Height), area.Height);
+        return new Rectangle(Math.Clamp(bounds.X, area.Left, area.Right - width),
+            Math.Clamp(bounds.Y, area.Top, area.Bottom - height), width, height);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct CompanionWindowPosition
+    {
+        public IntPtr Window, InsertAfter;
+        public int X, Y, Width, Height;
+        public uint Flags;
+    }
+
+    protected override bool ShowWithoutActivation => !_companionAboveGame;
+
+    void HideCompanionWindow()
+    {
+        _companionOpenGeneration++;
+        _companionAboveGame = false;
+        TopMost = false;
+        Hide();
+        Opacity = 0;
+    }
+
+    void OpenCompanionView(string view)
+    {
+        // A game may minimize during the popup-to-app focus handoff. That must
+        // not cancel a menu action the user already invoked over the game.
+        if (_launcher?.GameRunning != true) return;
+        var generation = ++_companionOpenGeneration;
+        _companionViewAction = view == "settings" ? "open-settings" : "open-dashboard";
+        _openingCompanion = true;
+        _companionOpeningUntil = Environment.TickCount64 + 600;
+        try
+        {
+            _overlay?.HideOverlay();
+            _companionAboveGame = true;
+            TopMost = true;
+            RestoreFromTray();
+            if (_appReady) PushHotkey(_companionViewAction);
+            UpdateLauncherShortcut(Poe2HasFocus());
+            // The popup/WebView can finish their own focus cleanup after Show().
+            // Finish this user-requested handoff once, without reviving a closed view.
+            BeginInvoke(() =>
+            {
+                if (generation == _companionOpenGeneration && _companionAboveGame &&
+                    SettingsShortcutContext(Poe2HasFocus())) FocusCompanionWindow();
+            });
+        }
+        finally { _openingCompanion = false; }
+    }
+
+    void UpdateLauncherShortcut(bool gameFocused)
+    {
+        if (gameFocused && Environment.TickCount64 >= _nextGameMenuConfigCheck)
+        {
+            _nextGameMenuConfigCheck = Environment.TickCount64 + 5000;
+            RefreshGameMenuBindings();
+        }
+        if (!gameFocused) _gameMenus.ClearHeldKeys();
+        _overlay?.ConstrainToGame();
+        if (_companionAboveGame && !_openingCompanion) PlaceCompanionWindow(recenter: false);
+        // Keep the launcher-opened app above PoE, but never above unrelated apps.
+        var foreground = GetForegroundWindow();
+        GetWindowThreadProcessId(foreground, out var foregroundPid);
+        if (_companionAboveGame && !_openingCompanion &&
+            (_launcher?.GameRunning != true ||
+            (Environment.TickCount64 >= _companionOpeningUntil && !gameFocused &&
+             foregroundPid != Environment.ProcessId && !ContainsFocus)))
+        {
+            HideCompanionWindow();
+        }
+        var enabled = SettingsShortcutContext(gameFocused) && SettingsShortcutAvailable();
+        if (enabled && !_launcherHotkeyRegistered)
+            _launcherHotkeyRegistered = RegisterHotKey(Handle, HotSettingsId, ModNoRepeat | 4, 0x20);
+        else if (!enabled && _launcherHotkeyRegistered)
+        {
+            UnregisterHotKey(Handle, HotSettingsId);
+            _launcherHotkeyRegistered = false;
+        }
     }
 
     protected override CreateParams CreateParams
@@ -127,8 +329,9 @@ sealed class TrackerWindow : Form
         {
             var cp = base.CreateParams;
             cp.Style &= ~0x00C00000; // WS_CAPTION (title bar)
-            cp.Style &= ~0x00080000; // WS_SYSMENU
+            cp.Style &= ~0x000B0000; // WS_SYSMENU, WS_MINIMIZEBOX, WS_MAXIMIZEBOX
             cp.Style |= 0x00040000; // WS_THICKFRAME — keep resize when borderless
+            cp.ExStyle |= 0x00000080; // WS_EX_TOOLWINDOW — companion has no standalone taskbar/Alt-Tab entry.
             return cp;
         }
     }
@@ -177,6 +380,41 @@ sealed class TrackerWindow : Form
 
     protected override void WndProc(ref Message m)
     {
+        if (_companionAboveGame && !_openingCompanion)
+        {
+            // Keep native drags, edge resizes and Windows placement shortcuts in PoE.
+            if (m.Msg == 0xA3 || (m.Msg == 0x112 && ((m.WParam.ToInt64() & 0xFFF0) is 0xF020 or 0xF030)))
+            {
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            var area = m.Msg is 0x214 or 0x216 or 0x46 ? CompanionArea() : Rectangle.Empty;
+            if (!area.IsEmpty && m.LParam != IntPtr.Zero)
+            {
+                if (m.Msg is 0x214 or 0x216) // WM_SIZING / WM_MOVING: proposed screen rectangle.
+                {
+                    var rect = Rectangle.FromLTRB(Marshal.ReadInt32(m.LParam), Marshal.ReadInt32(m.LParam, 4),
+                        Marshal.ReadInt32(m.LParam, 8), Marshal.ReadInt32(m.LParam, 12));
+                    var fit = FitCompanionBounds(rect, area);
+                    Marshal.WriteInt32(m.LParam, fit.Left);
+                    Marshal.WriteInt32(m.LParam, 4, fit.Top);
+                    Marshal.WriteInt32(m.LParam, 8, fit.Right);
+                    Marshal.WriteInt32(m.LParam, 12, fit.Bottom);
+                    m.Result = new IntPtr(1);
+                    return;
+                }
+                if (m.Msg == 0x46) // WM_WINDOWPOSCHANGING also catches keyboard/system moves.
+                {
+                    var pos = Marshal.PtrToStructure<CompanionWindowPosition>(m.LParam);
+                    var rect = new Rectangle((pos.Flags & 2) == 0 ? pos.X : Left, (pos.Flags & 2) == 0 ? pos.Y : Top,
+                        (pos.Flags & 1) == 0 ? pos.Width : Width, (pos.Flags & 1) == 0 ? pos.Height : Height);
+                    var fit = FitCompanionBounds(rect, area);
+                    if (rect.Location != fit.Location) { pos.X = fit.X; pos.Y = fit.Y; pos.Flags &= ~2u; }
+                    if (rect.Size != fit.Size) { pos.Width = fit.Width; pos.Height = fit.Height; pos.Flags &= ~1u; }
+                    Marshal.StructureToPtr(pos, m.LParam, false);
+                }
+            }
+        }
         // Our client area includes the title bar; Windows must not paint an inactive caption over it.
         if (m.Msg == 0x86) // WM_NCACTIVATE
         {
@@ -189,19 +427,27 @@ sealed class TrackerWindow : Form
             m.Result = IntPtr.Zero;
             return;
         }
-        // Set maximized bounds separately: WindowState can still be Maximized while restoring.
+        // Keep native resize limits inside the game client area.
         if (m.Msg == 0x24) // WM_GETMINMAXINFO
         {
             base.WndProc(ref m);
             var screen = Screen.FromHandle(Handle);
-            var area = screen.WorkingArea;
+            var gameArea = _companionAboveGame ? CompanionArea() : Rectangle.Empty;
+            var area = gameArea.IsEmpty ? screen.WorkingArea : gameArea;
             Marshal.WriteInt32(m.LParam, 8, area.Width);
             Marshal.WriteInt32(m.LParam, 12, area.Height);
             Marshal.WriteInt32(m.LParam, 16, area.Left - screen.Bounds.Left);
             Marshal.WriteInt32(m.LParam, 20, area.Top - screen.Bounds.Top);
+            if (!gameArea.IsEmpty)
+            {
+                Marshal.WriteInt32(m.LParam, 24, Math.Min(CompanionMinimum.Width, area.Width));
+                Marshal.WriteInt32(m.LParam, 28, Math.Min(CompanionMinimum.Height, area.Height));
+                Marshal.WriteInt32(m.LParam, 32, area.Width);
+                Marshal.WriteInt32(m.LParam, 36, area.Height);
+            }
             return;
         }
-        // Keep Windows' proposed rectangle intact for both maximize and restore.
+        // The borderless client area includes our custom title bar.
         if (m.Msg == 0x83 && m.WParam != IntPtr.Zero) // WM_NCCALCSIZE
         {
             m.Result = IntPtr.Zero;
@@ -220,6 +466,14 @@ sealed class TrackerWindow : Form
         if (m.Msg == WmHotkey)
         {
             var id = m.WParam.ToInt32();
+            if (id == HotSettingsId)
+            {
+                if (SettingsShortcutAvailable() && SettingsShortcutContext(Poe2HasFocus()))
+                    BeginInvoke(() => OpenCompanionView("settings"));
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            if (!Poe2HasFocus()) { base.WndProc(ref m); return; }
             if (id == HotLogId) BeginInvoke(() => CaptureClipboardItem("log-item"));
             else if (id == HotPriceId) BeginInvoke(() => CaptureClipboardItem("price-item"));
             else if (id == HotNextId) BeginInvoke(() => PushHotkey("next-kill"));
@@ -250,7 +504,7 @@ sealed class TrackerWindow : Form
         base.WndProc(ref m);
     }
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", SetLastError = true)]
     static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
     [DllImport("user32.dll")]
@@ -259,8 +513,99 @@ sealed class TrackerWindow : Form
     [DllImport("user32.dll")]
     static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, nuint dwExtraInfo);
 
+    delegate IntPtr KeyboardHookProc(int code, IntPtr message, IntPtr data);
+    [StructLayout(LayoutKind.Sequential)]
+    struct HookKeyboardData
+    {
+        public uint Key, Scan, Flags, Time;
+        public nuint Extra;
+    }
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern IntPtr SetWindowsHookEx(int hook, KeyboardHookProc callback, IntPtr module, uint thread);
+    [DllImport("user32.dll")]
+    static extern bool UnhookWindowsHookEx(IntPtr hook);
+    [DllImport("user32.dll")]
+    static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr message, IntPtr data);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr GetModuleHandle(string? name);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern int GetWindowText(IntPtr window, System.Text.StringBuilder text, int count);
+
+    bool Poe2HasFocus()
+    {
+        var window = GetForegroundWindow();
+        if (window == _hookForeground) return _hookPoe2Focused;
+        _hookForeground = window;
+        _hookPoe2Focused = false;
+        try
+        {
+            GetWindowThreadProcessId(window, out var pid);
+            using var process = Process.GetProcessById((int)pid);
+            var title = new System.Text.StringBuilder(256);
+            GetWindowText(window, title, title.Capacity);
+            _hookPoe2Focused = process.ProcessName.StartsWith("PathOfExile2", StringComparison.OrdinalIgnoreCase) ||
+                (process.ProcessName.StartsWith("PathOfExile", StringComparison.OrdinalIgnoreCase) &&
+                 title.ToString().Equals("Path of Exile 2", StringComparison.OrdinalIgnoreCase));
+        }
+        catch { /* Foreground process may have closed. */ }
+        return _hookPoe2Focused;
+    }
+
+    void DispatchMovementShortcut(int id, uint key, uint scan, bool releaseMovement)
+    {
+        if (releaseMovement && Poe2HasFocus()) keybd_event((byte)key, (byte)scan, 0x0002, 0);
+        if (!Poe2HasFocus()) return;
+        if (id == HotLogId) CaptureClipboardItem("log-item");
+        else if (id == HotPriceId) CaptureClipboardItem("price-item");
+        else if (id == HotNextId) PushHotkey("next-kill");
+        else if (id == HotHideoutId) SendHideout();
+    }
+
+    IntPtr InterceptMovementShortcut(int code, IntPtr message, IntPtr data)
+    {
+        if (code < 0) return CallNextHookEx(_keyboardHook, code, message, data);
+        var key = Marshal.PtrToStructure<HookKeyboardData>(data);
+        // Ignore synthetic Ctrl+C and key-up events sent by SSE or other software.
+        if ((key.Flags & 0x10) != 0)
+            return CallNextHookEx(_keyboardHook, code, message, data);
+        var msg = message.ToInt32();
+        if (msg is not (0x100 or 0x101 or 0x104 or 0x105))
+            return CallNextHookEx(_keyboardHook, code, message, data);
+        uint modifiers = 0;
+        if ((GetAsyncKeyState(0x12) & 0x8000) != 0) modifiers |= 1;
+        if ((GetAsyncKeyState(0x11) & 0x8000) != 0) modifiers |= 2;
+        if ((GetAsyncKeyState(0x10) & 0x8000) != 0) modifiers |= 4;
+        if (((GetAsyncKeyState(0x5B) | GetAsyncKeyState(0x5C)) & 0x8000) != 0) modifiers |= 8;
+        var down = msg is 0x100 or 0x104;
+        var gameFocused = Poe2HasFocus();
+        var decision = key.Key is 0x57 or 0x41 or 0x53 or 0x44
+            ? _movementShortcuts.Handle(key.Key, down, gameFocused, modifiers, _movementBindings)
+            : default;
+        if (!down || (!decision.Block && !_registeredGameHotkeys.Contains((modifiers, key.Key)) &&
+            !(_launcherHotkeyRegistered && modifiers == 4 && key.Key == 0x20)))
+        {
+            var wasHidden = _gameMenus.Hidden;
+            _gameMenus.Observe(key.Key, down, modifiers, gameFocused);
+            if (wasHidden != _gameMenus.Hidden) BeginInvoke(() => _launcher?.SetGameMenuHidden(_gameMenus.Hidden));
+        }
+        if (decision.Action != 0)
+            BeginInvoke(() => DispatchMovementShortcut(decision.Action, key.Key, key.Scan, decision.ReleaseMovement));
+        return decision.Block ? new IntPtr(1) : CallNextHookEx(_keyboardHook, code, message, data);
+    }
+
     void ClearHotkeys()
     {
+        _hotkeysPaused = true;
+        if (_launcherHotkeyRegistered) UnregisterHotKey(Handle, HotSettingsId);
+        _launcherHotkeyRegistered = false;
+        if (_keyboardHook != IntPtr.Zero) UnhookWindowsHookEx(_keyboardHook);
+        _keyboardHook = IntPtr.Zero;
+        _movementBindings.Clear();
+        _registeredGameHotkeys.Clear();
+        _movementShortcuts.Clear();
+        _gameMenus.ClearHeldKeys();
+        _hookForeground = IntPtr.Zero;
+        _hookPoe2Focused = false;
         try { UnregisterHotKey(Handle, HotLogId); } catch { /* ignore */ }
         try { UnregisterHotKey(Handle, HotNextId); } catch { /* ignore */ }
         try { UnregisterHotKey(Handle, HotPriceId); } catch { /* ignore */ }
@@ -270,6 +615,7 @@ sealed class TrackerWindow : Form
     void ApplyHotkeys(string logSpec, string nextSpec, string priceSpec, string hideoutSpec = "F6")
     {
         ClearHotkeys();
+        _hotkeysPaused = false;
         _hotLog = string.IsNullOrWhiteSpace(logSpec) ? "F8" : logSpec.Trim();
         _hotNext = string.IsNullOrWhiteSpace(nextSpec) ? "F9" : nextSpec.Trim();
         _hotPrice = string.IsNullOrWhiteSpace(priceSpec) ? "F7" : priceSpec.Trim();
@@ -280,12 +626,17 @@ sealed class TrackerWindow : Form
             shown = spec;
             if (!TryParseHotkey(spec, out var mod, out var vk)) return false;
             if (!used.Add((mod, vk))) return false;
-            return RegisterHotKey(Handle, id, mod, vk);
+            var registered = RegisterHotKey(Handle, id, mod, vk);
+            if (registered) _registeredGameHotkeys.Add((mod & 15, vk));
+            if (registered && vk is 0x57 or 0x41 or 0x53 or 0x44)
+                _movementBindings.Add((id, mod, vk));
+            return registered;
         }
         var logOk = Bind(HotLogId, _hotLog, out _);
         var nextOk = Bind(HotNextId, _hotNext, out _);
         var priceOk = Bind(HotPriceId, _hotPrice, out _);
         var hideoutOk = Bind(HotHideoutId, _hotHideout, out _);
+        EnsureGameKeyboardHook();
         if (!logOk || !nextOk || !priceOk || !hideoutOk)
         {
             var bad = !logOk ? _hotLog : !nextOk ? _hotNext : !priceOk ? _hotPrice : _hotHideout;
@@ -296,6 +647,29 @@ sealed class TrackerWindow : Form
                 error = bad + " is already in use",
             });
         }
+    }
+
+    void EnsureGameKeyboardHook()
+    {
+        if (_keyboardHook != IntPtr.Zero) return;
+        _keyboardHookProc = InterceptMovementShortcut;
+        _keyboardHook = SetWindowsHookEx(13, _keyboardHookProc, GetModuleHandle(null), 0);
+        if (_keyboardHook == IntPtr.Zero)
+            PushJson(new { type = "hotkey-status", ok = false,
+                error = "Game-key monitoring could not start (Windows error " + Marshal.GetLastWin32Error() + ")." });
+    }
+
+    void RefreshGameMenuBindings()
+    {
+        if (_gameMenuConfigPath is null) return;
+        try
+        {
+            var stamp = File.GetLastWriteTimeUtc(_gameMenuConfigPath);
+            if (stamp == _gameMenuConfigStamp || !File.Exists(_gameMenuConfigPath)) return;
+            _gameMenus.Configure(File.ReadLines(_gameMenuConfigPath));
+            _gameMenuConfigStamp = stamp;
+        }
+        catch { /* Retain the last menu bindings while PoE rewrites its config. */ }
     }
 
     static bool TryParseHotkey(string spec, out uint modifiers, out uint vk)
@@ -360,6 +734,16 @@ sealed class TrackerWindow : Form
     [DllImport("user32.dll")]
     static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")]
+    static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr window, int command);
+    [DllImport("user32.dll")]
+    static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")]
+    static extern bool IsChild(IntPtr parent, IntPtr window);
+    [DllImport("user32.dll")]
+    static extern bool SetWindowPos(IntPtr window, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")]
     static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll")]
     static extern short GetAsyncKeyState(int key);
@@ -370,9 +754,7 @@ sealed class TrackerWindow : Form
         var game = GetForegroundWindow();
         try
         {
-            GetWindowThreadProcessId(game, out var pid);
-            using var process = System.Diagnostics.Process.GetProcessById((int)pid);
-            if (!process.ProcessName.StartsWith("PathOfExile2", StringComparison.OrdinalIgnoreCase)) return;
+            if (!Poe2HasFocus()) return;
             _sendingHideout = true;
             TryParseHotkey(_hotHideout, out _, out var trigger);
             var keys = new[] { (int)trigger, 0x10, 0x11, 0x12, 0x5B, 0x5C };
@@ -442,7 +824,8 @@ sealed class TrackerWindow : Form
     {
         try
         {
-            _overlay ??= new PriceOverlayForm(ForwardOverlayJson);
+            _overlay ??= new PriceOverlayForm(ForwardOverlayJson,
+                () => _launcher?.GameRunning == true ? _launcher.GameClientBounds : Rectangle.Empty);
             var page = Path.Combine(AppDataDir(), "www", "overlay.html");
             await _overlay.EnsureAsync(_env, page);
             if (!string.IsNullOrWhiteSpace(notice)) _overlay.ShowNotice(notice, vars, clickAway);
@@ -1800,6 +2183,15 @@ sealed class TrackerWindow : Form
             Close();
             return;
         }
+        // The menu must be usable even when a hidden WebView is still starting.
+        _launcher = new GameLauncherForm(Poe2HasFocus, UpdateLauncherShortcut,
+            Path.Combine(AppDataDir(), "launcher-position.json"),
+            Path.Combine(AppDataDir(), "www", "still-sane-sigil.png"),
+            () => OpenCompanionView("dash"), () => OpenCompanionView("settings"));
+        _gameMenuConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            "My Games", "Path of Exile 2", "poe2_production_Config.ini");
+        RefreshGameMenuBindings();
+        EnsureGameKeyboardHook();
         var userData = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ExileLedger");
@@ -1826,6 +2218,7 @@ sealed class TrackerWindow : Form
         _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _web.CoreWebView2.Settings.IsWebMessageEnabled = true;
         _web.CoreWebView2.WebMessageReceived += OnWebMessage;
+        _web.CoreWebView2.NavigationCompleted += (_, e) => FinishCompanionNavigation(e.IsSuccess);
         _web.CoreWebView2.NewWindowRequested += (_, ev) =>
         {
             ev.Handled = true;
@@ -1854,19 +2247,9 @@ sealed class TrackerWindow : Form
                 BeginInvoke(DragWindow);
                 return;
             }
-            if (type == "window-min")
+            if (type == "window-hide")
             {
-                BeginInvoke(() => WindowState = FormWindowState.Minimized);
-                return;
-            }
-            if (type == "window-max")
-            {
-                BeginInvoke(() =>
-                {
-                    WindowState = WindowState == FormWindowState.Maximized
-                        ? FormWindowState.Normal
-                        : FormWindowState.Maximized;
-                });
+                BeginInvoke(HideCompanionWindow);
                 return;
             }
             if (type == "hotkeys-pause")
@@ -2774,9 +3157,6 @@ sealed class TrackerWindow : Form
     static readonly Regex AnyCdnIcon = new(
         @"https://web\.poecdn\.com/gen/image/[A-Za-z0-9_\-/=]+",
         RegexOptions.Compiled);
-    static readonly Regex HtmlProperty = new(
-        @"<div class=""property"">(.*?)</div>",
-        RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     static readonly Regex HtmlExplicit = new(
         @"<div class=""explicitMod"">(.*?)</div>",
         RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
@@ -2869,7 +3249,7 @@ sealed class TrackerWindow : Form
             Reply(id ?? "", false, 400, "{\"icon\":\"\"}");
             return;
         }
-        var cacheKey = "poe2db-item-v4:" + ItemSlug(name).ToLowerInvariant();
+        var cacheKey = "poe2db-item-v5:" + ItemSlug(name).ToLowerInvariant();
         if (Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < TimeSpan.FromHours(12))
         {
             Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
@@ -2917,7 +3297,8 @@ sealed class TrackerWindow : Form
         string descr,
         string[] properties,
         string[] variants,
-        string variantNote);
+        string variantNote,
+        bool complete = false);
 
     static Poe2DbItem ParsePoe2DbItem(string html, string name)
     {
@@ -2938,10 +3319,7 @@ sealed class TrackerWindow : Form
             if (string.IsNullOrWhiteSpace(resolvedIcon) || resolvedIcon.Contains("CurrencyModValues", StringComparison.OrdinalIgnoreCase))
                 resolvedIcon = PickCdnIcon(html);
             var props = ReadProperties(card);
-            var fixedMods = ReadStringArray(card, "explicitMods")
-                .Where(mod => !Regex.IsMatch(mod, @"per Socket", RegexOptions.IgnoreCase))
-                .Where(mod => !Regex.IsMatch(mod, @"\[\d+\s+Random", RegexOptions.IgnoreCase))
-                .ToArray();
+            var fixedMods = ReadStringArray(card, "explicitMods");
             return new Poe2DbItem(
                 resolvedIcon,
                 card.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? name : name,
@@ -2953,15 +3331,50 @@ sealed class TrackerWindow : Form
                 descr,
                 props,
                 variants,
-                variantNote);
+                variantNote,
+                true);
         }
 
-        var htmlIcon = PickCdnIcon(html);
-        var properties = HtmlProperty.Matches(html).Select(m => StripTags(m.Groups[1].Value)).Where(v => v.Length > 0).Distinct().Take(6).ToArray();
-        var explicits = HtmlExplicit.Matches(html).Select(m => StripTags(m.Groups[1].Value)).Where(v => v.Length > 0).Distinct().Take(8).ToArray();
-        var help = HtmlHelp.IsMatch(html) ? StripTags(HtmlHelp.Match(html).Groups[1].Value) : "";
-        var flavourText = ReadHtmlFlavour(html);
-        return new Poe2DbItem(htmlIcon, name, properties.FirstOrDefault() ?? "Vault Key", "Currency", [], explicits, flavourText, help, properties, [], "");
+        // Pages can include alternate forms and other item popups. Read only the
+        // first matching item card, preserving all of its properties and modifiers.
+        foreach (var popup in HtmlDivs(html, "newItemPopup"))
+        {
+            var names = HtmlDivs(popup.body, "itemName").Select(p => StripTags(p.body)).ToArray();
+            if (names.Length == 0 || !FoldEquals(names[0], name)) continue;
+            var rarity = new[] { "Unique", "Currency", "Rare", "Magic", "Normal", "Gem" }
+                .FirstOrDefault(kind => popup.classes.Contains(kind + "Popup", StringComparer.OrdinalIgnoreCase)) ?? "Item";
+            string[] Lines(string cls) => HtmlDivs(popup.body, cls).Select(p => StripTags(p.body))
+                .Where(v => v.Length > 0).Distinct().ToArray();
+            var help = HtmlDivs(popup.body, "default").Where(p => p.classes.Contains("fst-italic"))
+                .Select(p => StripTags(p.body));
+            return new Poe2DbItem(PickCdnIcon(popup.body) is { Length: > 0 } icon ? icon : PickCdnIcon(html),
+                names[0], names.Last(), rarity, Lines("implicitMod"), Lines("explicitMod"),
+                string.Join("\n", Lines("FlavourText")), string.Join("\n", help), Lines("property"),
+                variants, ReadVariantNote(popup.body), true);
+        }
+        return new Poe2DbItem(PickCdnIcon(html), name, "", "", [], [], "", "", [], [], "");
+    }
+
+    static IEnumerable<(string body, string[] classes)> HtmlDivs(string html, string className)
+    {
+        var tags = Regex.Matches(html, @"</?div\b[^>]*>", RegexOptions.IgnoreCase);
+        for (var i = 0; i < tags.Count; i++)
+        {
+            var tag = tags[i];
+            if (tag.Value.StartsWith("</", StringComparison.Ordinal)) continue;
+            var attr = Regex.Match(tag.Value, @"\bclass\s*=\s*['""]([^'""]*)['""]", RegexOptions.IgnoreCase);
+            var classes = Regex.Split(attr.Groups[1].Value.Trim(), @"\s+");
+            if (!classes.Contains(className, StringComparer.OrdinalIgnoreCase)) continue;
+            var depth = 1;
+            for (var j = i + 1; j < tags.Count; j++)
+            {
+                depth += tags[j].Value.StartsWith("</", StringComparison.Ordinal) ? -1 : 1;
+                if (depth != 0) continue;
+                yield return (html[(tag.Index + tag.Length)..tags[j].Index], classes);
+                i = j;
+                break;
+            }
+        }
     }
 
     static string[] ReadVariantMods(string html)
@@ -3031,7 +3444,6 @@ sealed class TrackerWindow : Form
                 }
             }
             list.Add(label);
-            if (list.Count >= 4) break;
         }
         return [.. list];
     }
@@ -3143,6 +3555,9 @@ sealed class PriceOverlayForm : Form
         TabStop = true,
     };
     readonly Action<string> _forward;
+    readonly Func<Rectangle> _gameBounds;
+    Rectangle _placementArea;
+    double _contentZoom = 1;
     bool _ready;
     bool _allowActivate;
     bool _clickAway;
@@ -3150,7 +3565,7 @@ sealed class PriceOverlayForm : Form
     long _clickAwayReadyAt;
     bool _clickAwayBtnUp;
     System.Windows.Forms.Timer? _clickAwayWatch;
-    int _cssW = 428;
+    int _cssW = 474;
     int _cssH = 220;
     int _appliedW;
     int _appliedH;
@@ -3159,17 +3574,18 @@ sealed class PriceOverlayForm : Form
     string? _pendingVars;
     string? _pendingNotice;
 
-    const int OverlayNarrowCssW = 424;
-    const int OverlayWideCssW = 724; // main 420 + side 300 + chrome
+    const int OverlayNarrowCssW = 470;
+    const int OverlayWideCssW = 770; // main 466 + side 300 + chrome
 
-    public PriceOverlayForm(Action<string> forward)
+    public PriceOverlayForm(Action<string> forward, Func<Rectangle>? gameBounds = null)
     {
         _forward = forward;
+        _gameBounds = gameBounds ?? (() => Rectangle.Empty);
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
         TopMost = true;
-        Width = 428;
+        Width = 474;
         Height = 220;
         BackColor = Color.FromArgb(18, 14, 10);
         Controls.Add(_web);
@@ -3301,6 +3717,7 @@ sealed class PriceOverlayForm : Form
         _web.CoreWebView2.NavigationCompleted += (_, _) =>
         {
             _ready = true;
+            ApplySize();
             FlushPending();
         };
         if (File.Exists(page)) _web.CoreWebView2.Navigate(new Uri(page).AbsoluteUri);
@@ -3318,12 +3735,8 @@ sealed class PriceOverlayForm : Form
         _pendingVars = vars;
         _pendingNotice = null;
         SnapWidthForHtml(html);
-        if (opening)
-        {
-            ApplySize();
-            PlaceNearCursor();
-        }
-        else ApplySize();
+        ApplySize();
+        if (opening) PlaceNearCursor();
         // Keep game focus — click-away watches mouse downs outside this window.
         Peek(activate: false);
         FlushPending();
@@ -3340,11 +3753,8 @@ sealed class PriceOverlayForm : Form
         _pendingVars = vars;
         _pendingHtml = null;
         _cssW = OverlayNarrowCssW;
-        if (opening)
-        {
-            ApplySize();
-            PlaceNearCursor();
-        }
+        ApplySize();
+        if (opening) PlaceNearCursor();
         Peek(activate: false);
         FlushPending();
     }
@@ -3443,9 +3853,10 @@ sealed class PriceOverlayForm : Form
     void FlushPending()
     {
         if (!_ready || _web.CoreWebView2 is null || _pendingKind is null) return;
+        var maxHeight = (int)Math.Floor(PlacementArea().Height * 0.92 / (DeviceDpi / 96.0 * _contentZoom));
         var payload = _pendingKind == "notice"
             ? JsonSerializer.Serialize(new { type = "notice", text = _pendingNotice ?? "", vars = _pendingVars ?? "", clickAway = _clickAway })
-            : JsonSerializer.Serialize(new { type = "paint", html = _pendingHtml ?? "", vars = _pendingVars ?? "", clickAway = _clickAway });
+            : JsonSerializer.Serialize(new { type = "paint", html = _pendingHtml ?? "", vars = _pendingVars ?? "", clickAway = _clickAway, maxHeight });
         _web.CoreWebView2.PostWebMessageAsJson(payload);
     }
 
@@ -3457,6 +3868,7 @@ sealed class PriceOverlayForm : Form
         var flags = SwpShowWindow | SwpNoMove | SwpNoSize;
         if (!activate) flags |= SwpNoActivate;
         SetWindowPos(Handle, HwndTopmost, 0, 0, 0, 0, flags);
+        ApplySize();
         TopMost = true;
         if (activate) ForceForeground();
         _allowActivate = prevAllow;
@@ -3471,41 +3883,70 @@ sealed class PriceOverlayForm : Form
     void ApplySize(int dpi = 0)
     {
         if (!IsHandleCreated) return;
-        var scale = (dpi > 0 ? dpi : DeviceDpi) / 96.0;
-        var screen = Screen.FromControl(this).WorkingArea;
-        var minW = (int)Math.Ceiling(280 * scale);
-        var minH = (int)Math.Ceiling(90 * scale);
-        var w = Math.Clamp((int)Math.Ceiling(_cssW * scale), minW, Math.Max(minW, screen.Width / 2));
-        var h = Math.Clamp((int)Math.Ceiling(_cssH * scale), minH, Math.Max(minH, (int)(screen.Height * 0.92)));
-        var prevW = _appliedW > 0 ? _appliedW : Width;
-        var x = Location.X;
-        var y = Location.Y;
-        // Keep the left edge fixed when Check trade widens the window (grow right only).
-        if (x < screen.Left) x = screen.Left;
-        else if (w < prevW && x + w > screen.Right)
-            x = Math.Max(screen.Left, screen.Right - w);
-        if (y < screen.Top) y = screen.Top;
-        else if (y + h > screen.Bottom) y = Math.Max(screen.Top, screen.Bottom - h);
+        var screen = PlacementArea();
+        _placementArea = screen;
+        var dpiScale = (dpi > 0 ? dpi : DeviceDpi) / 96.0;
+        var inGame = !_gameBounds().IsEmpty;
+        var maxW = Math.Max(1, inGame ? screen.Width : screen.Width / 2);
+        var maxH = Math.Max(1, (int)(screen.Height * 0.92));
+        _contentZoom = inGame ? Math.Min(1, maxW / (Math.Max(280, _cssW) * dpiScale)) : 1;
+        if (_web.CoreWebView2 is not null && Math.Abs(_web.ZoomFactor - _contentZoom) > 0.001)
+            _web.ZoomFactor = _contentZoom;
+        var scale = dpiScale * _contentZoom;
+        var minW = Math.Min(maxW, (int)Math.Ceiling(280 * scale));
+        var minH = Math.Min(maxH, (int)Math.Ceiling(90 * scale));
+        var w = Math.Clamp((int)Math.Ceiling(_cssW * scale), minW, maxW);
+        var h = Math.Clamp((int)Math.Ceiling(_cssH * scale), minH, maxH);
+        // Preserve the left edge until growth would leave the game window.
+        var x = Math.Clamp(Left, screen.Left, Math.Max(screen.Left, screen.Right - w));
+        var y = Math.Clamp(Top, screen.Top, Math.Max(screen.Top, screen.Bottom - h));
         if (w == _appliedW && h == _appliedH && x == Location.X && y == Location.Y) return;
         _appliedW = w;
         _appliedH = h;
-        // One native snap (DWM transitions disabled on this HWND).
         SetWindowPos(Handle, HwndTopmost, x, y, w, h, SwpNoActivate);
     }
 
     void PlaceNearCursor()
     {
         GetCursorPos(out var pt);
-        var screen = Screen.FromPoint(new Point(pt.X, pt.Y)).WorkingArea;
+        var screen = PlacementArea();
         var w = _appliedW > 0 ? _appliedW : Width;
         var h = _appliedH > 0 ? _appliedH : Height;
         var x = pt.X + 28;
         var y = pt.Y - 36;
         if (x + w > screen.Right) x = pt.X - w - 20;
         if (y + h > screen.Bottom) y = screen.Bottom - h;
-        if (x < screen.Left) x = screen.Left;
-        if (y < screen.Top) y = screen.Top;
+        x = Math.Clamp(x, screen.Left, Math.Max(screen.Left, screen.Right - w));
+        y = Math.Clamp(y, screen.Top, Math.Max(screen.Top, screen.Bottom - h));
         if (x == Location.X && y == Location.Y) return;
+        SetWindowPos(Handle, HwndTopmost, x, y, 0, 0, SwpNoActivate | SwpNoSize);
+    }
+
+    Rectangle PlacementArea()
+    {
+        var game = _gameBounds();
+        if (game.Width > 0 && game.Height > 0)
+        {
+            var area = Rectangle.Intersect(game, Screen.FromRectangle(game).WorkingArea);
+            if (area.Width > 0 && area.Height > 0) return area;
+        }
+        return Visible ? Screen.FromControl(this).WorkingArea : Screen.FromPoint(Cursor.Position).WorkingArea;
+    }
+
+    public void ConstrainToGame()
+    {
+        if (!Visible || _gameBounds().IsEmpty || PlacementArea() == _placementArea) return;
+        ApplySize();
+        FlushPending();
+    }
+
+    void MoveBy(int dx, int dy)
+    {
+        var screen = PlacementArea();
+        var w = _appliedW > 0 ? _appliedW : Width;
+        var h = _appliedH > 0 ? _appliedH : Height;
+        var x = Math.Clamp(Left + dx, screen.Left, Math.Max(screen.Left, screen.Right - w));
+        var y = Math.Clamp(Top + dy, screen.Top, Math.Max(screen.Top, screen.Bottom - h));
         SetWindowPos(Handle, HwndTopmost, x, y, 0, 0, SwpNoActivate | SwpNoSize);
     }
 
@@ -3528,15 +3969,7 @@ sealed class PriceOverlayForm : Form
                 var dx = doc.RootElement.TryGetProperty("dx", out var dxEl) && dxEl.ValueKind == JsonValueKind.Number ? (int)Math.Round(dxEl.GetDouble()) : 0;
                 var dy = doc.RootElement.TryGetProperty("dy", out var dyEl) && dyEl.ValueKind == JsonValueKind.Number ? (int)Math.Round(dyEl.GetDouble()) : 0;
                 if (dx == 0 && dy == 0) return;
-                void Move()
-                {
-                    var screen = Screen.FromControl(this).WorkingArea;
-                    var w = _appliedW > 0 ? _appliedW : Width;
-                    var h = _appliedH > 0 ? _appliedH : Height;
-                    var x = Math.Clamp(Location.X + dx, screen.Left, Math.Max(screen.Left, screen.Right - w));
-                    var y = Math.Clamp(Location.Y + dy, screen.Top, Math.Max(screen.Top, screen.Bottom - h));
-                    SetWindowPos(Handle, HwndTopmost, x, y, 0, 0, SwpNoActivate | SwpNoSize);
-                }
+                void Move() => MoveBy(dx, dy);
                 if (InvokeRequired) BeginInvoke(Move);
                 else Move();
                 return;
