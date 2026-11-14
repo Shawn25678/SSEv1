@@ -472,11 +472,23 @@
         if (preview.classList.contains("is-board")) {
           const socketInput = column.querySelector('[data-span-rid="runes"]');
           const linkInput = column.querySelector('[data-span-rid="links"]');
-          const count = Math.max(0, Math.min(6, Math.round(Number(socketInput?.value ?? input.value) || 0)));
-          const links = Math.max(0, Math.min(count, Math.round(Number(linkInput?.value) || 0)));
-          if (linkInput && Number(linkInput.value) > count) linkInput.value = String(links);
+          const socketText = (socketInput || input).value.trim();
+          const linkText = linkInput ? linkInput.value.trim() : "";
+          const socketN = socketText === "" ? 0 : Math.max(0, Math.min(6, Math.round(Number(socketText) || 0)));
+          const linkN = linkText === "" ? 0 : Math.max(0, Math.min(6, Math.round(Number(linkText) || 0)));
+          const count = socketN || linkN;
+          let links = socketN ? Math.min(count, linkN) : linkN;
+          if (socketN && linkInput && linkN > socketN) {
+            links = socketN;
+            linkInput.value = String(links);
+          }
+          preview.hidden = count <= 0;
+          preview.style.setProperty("--cols", String(count <= 1 ? 1 : 2));
+          preview.style.setProperty("--rows", String(count <= 2 ? 1 : count <= 4 ? 2 : 3));
           preview.querySelectorAll(".price-overlay-socket").forEach((el) => {
-            el.hidden = Number(el.dataset.i) >= count;
+            const i = Number(el.dataset.i);
+            el.hidden = i >= count;
+            el.classList.toggle("is-lit", i < links);
           });
           preview.querySelectorAll(".socket-link[data-link]").forEach((el) => {
             const pair = String(el.dataset.link).split("-").map(Number);
@@ -493,6 +505,7 @@
         sockets.forEach((socket, i) => { socket.hidden = i >= count; });
         const none = preview.querySelector(".price-overlay-no-sockets");
         if (none) none.hidden = count > 0;
+        preview.hidden = count <= 0;
         preview.setAttribute("aria-label", `${count} sockets`);
       }
 
@@ -747,6 +760,7 @@
         const t = event.target.closest('.price-overlay-q-input[data-span-rid]');
         if (!t) return;
         if (t.dataset.spanRid !== "runes" && t.dataset.spanRid !== "links" && t.value.trim() !== "") return;
+        if ((t.dataset.spanRid === "runes" || t.dataset.spanRid === "links") && t.value.trim() === "") return;
         if (t.value.trim() !== "") {
           t.value = String(Math.max(0, Math.min(6, Math.round(Number(t.value) || 0))));
           paintSpan(t);
@@ -804,7 +818,7 @@
           return;
         }
         const t = event.target.closest(
-          "[data-res-action],[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-dps-type],[data-pick-search],[data-pick-base],[data-pick-rarity],[data-pick-have],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-fractured],[data-pick-runes],[data-pick-runes-toggle],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
+          "[data-res-action],[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-dps-type],[data-pick-search],[data-pick-base],[data-pick-rarity],[data-pick-have],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-fractured],[data-pick-runes],[data-pick-runes-toggle],[data-pick-links-toggle],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
         );
         if (!t || !window.chrome?.webview) return;
         event.preventDefault();

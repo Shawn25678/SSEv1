@@ -420,7 +420,7 @@ sealed class TrackerWindow : Form
             _nextGameMenuConfigCheck = Environment.TickCount64 + 5000;
             RefreshGameMenuBindings();
         }
-        if (!gameFocused) _gameMenus.ClearHeldKeys();
+        if (!gameFocused) _gameMenus.ReleaseUpKeys(key => (GetAsyncKeyState((int)key) & 0x8000) != 0);
         else if (!_companionAboveGame && !_webWarm) ParkCompanion();
         else if (!_companionAboveGame && _webWarm && !CompanionArea().IsEmpty && CompanionArea() != _lastCompanionArea)
             PlaceCompanionWindow(recenter: true);
@@ -1332,6 +1332,33 @@ sealed class TrackerWindow : Form
         ["item.spirit"] = "spirit",
     };
 
+    static bool Poe1EquipGroup(string id, out string group, out string key)
+    {
+        group = "";
+        key = "";
+        if (!EquipTradeIds.TryGetValue(id, out var mapped) || string.IsNullOrEmpty(mapped)) return false;
+        if (mapped is "dps" or "pdps" or "edps" or "aps" or "crit")
+        {
+            group = "weapon";
+            key = mapped;
+            return true;
+        }
+        if (mapped is "ar" or "ev" or "es" or "ward" or "block")
+        {
+            group = "armour";
+            key = mapped;
+            return true;
+        }
+        return false;
+    }
+
+    static JsonNode Poe1FilterMin(string key, double n)
+    {
+        if (key is "dps" or "pdps" or "edps" or "aps" or "crit")
+            return JsonNode.Parse(Math.Round(n, 2, MidpointRounding.AwayFromZero).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))!;
+        return JsonNode.Parse(Math.Round(n, 0, MidpointRounding.AwayFromZero).ToString("0", System.Globalization.CultureInfo.InvariantCulture))!;
+    }
+
     static bool JsonInt(JsonElement el, out int n)
     {
         n = 0;
@@ -1989,10 +2016,22 @@ sealed class TrackerWindow : Form
             if (bulk.Json is not null || bulk.RateLimited || bulk.Forbidden) return bulk;
         }
         var statRows = new JsonArray();
+        var weaponBag = new JsonObject();
+        var armourBag = new JsonObject();
         var mappedCount = 0;
         foreach (var filter in mods ?? Array.Empty<RollFilter>())
         {
-            if (string.IsNullOrWhiteSpace(filter.Id) || filter.Id.StartsWith("item.", StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.IsNullOrWhiteSpace(filter.Id)) continue;
+            if (Poe1EquipGroup(filter.Id, out var group, out var equipKey))
+            {
+                if (filter.Min is not double equipMin || !(equipMin > 0)) continue;
+                var range = new JsonObject { ["min"] = Poe1FilterMin(equipKey, equipMin) };
+                if (group == "weapon") weaponBag[equipKey] = range;
+                else armourBag[equipKey] = range;
+                mappedCount++;
+                continue;
+            }
+            if (filter.Id.StartsWith("item.", StringComparison.OrdinalIgnoreCase)) continue;
             var obj = new JsonObject { ["id"] = filter.Id, ["disabled"] = false };
             JsonObject? value = null;
             if (filter.Min is double min) value = new JsonObject { ["min"] = min };
@@ -2040,6 +2079,10 @@ sealed class TrackerWindow : Form
             socketBag["links"] = new JsonObject { ["min"] = linkN };
         if (socketBag.Count > 0)
             filters["socket_filters"] = new JsonObject { ["filters"] = socketBag };
+        if (weaponBag.Count > 0)
+            filters["weapon_filters"] = new JsonObject { ["filters"] = weaponBag };
+        if (armourBag.Count > 0)
+            filters["armour_filters"] = new JsonObject { ["filters"] = armourBag };
         if (filters.Count > 0) query["filters"] = filters;
         var body = new JsonObject { ["query"] = query, ["sort"] = new JsonObject { ["price"] = "asc" } }.ToJsonString();
         var (json, status) = await PostTradeSearch("https://www.pathofexile.com/api/trade/search/" + Uri.EscapeDataString(league), body);

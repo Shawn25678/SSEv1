@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.44";
+const APP_VERSION = "1.0.45";
 
 // Cultivated/Vaal unique identities, including copies without a Vaal property line.
 // Source: https://poe2db.tw/us/Unique_item#CultivatedUniques (2026-11-12).
@@ -2051,11 +2051,46 @@ function poe1TradeCategory(className) {
     [/wombgifts?/i, "wombgift"],
     [/enshrouded/i, "enshrouded"],
     [/charts?/i, "chart"],
+    [/^upper\s*limbs?$/i, "viscera.arm"],
+    [/^lower\s*limbs?$/i, "viscera.leg"],
+    [/^heads?$/i, "viscera.head"],
+    [/^(?:torsos?|bod(?:y|ies))$/i, "viscera.body"],
     [/viscera/i, "viscera"],
     [/currency|omen|resonator|fossil|tattoo/i, "currency"],
   ];
   for (const [re, id] of rows) if (re.test(t)) return id;
   return "";
+}
+
+function poe1VisceraCategory(slot) {
+  const t = String(slot || "").trim();
+  if (/^heads?$/i.test(t)) return "viscera.head";
+  if (/^upper\s*limbs?$/i.test(t)) return "viscera.arm";
+  if (/^lower\s*limbs?$/i.test(t)) return "viscera.leg";
+  if (/^(?:torsos?|bod(?:y|ies))$/i.test(t)) return "viscera.body";
+  return "";
+}
+
+function poe1SearchCategory(drop) {
+  return poe1VisceraCategory(drop?.visceraSlot) || poe1TradeCategory(drop?.className);
+}
+
+function poe1VisceraItem(ctx) {
+  if (poe1VisceraCategory(ctx?.visceraSlot)) return true;
+  const cls = String(ctx?.className || "");
+  return /^viscera$/i.test(cls) || !!poe1VisceraCategory(cls);
+}
+
+function clipboardHasViscera(blocks, className) {
+  if (poe1VisceraItem({ className })) return true;
+  for (const block of blocks || []) {
+    for (const line of String(block || "").split("\n")) {
+      const raw = line.trim();
+      if (!raw) continue;
+      if (poe1VisceraCategory(raw) || /wickerman/i.test(raw)) return true;
+    }
+  }
+  return false;
 }
 
 function magicItemBase(name, className) {
@@ -2095,21 +2130,21 @@ function tradeBaseType(drop) {
   const name = isUnidentifiedLine(drop?.name) ? "" : stripItemQualityPrefix(drop?.name);
   const base = isUnidentifiedLine(drop?.baseType) ? "" : stripItemQualityPrefix(drop?.baseType);
   const className = drop?.className || "";
+  let type = "";
   if (activeGame() === "poe1") {
     const talisman = poe1TalismanBase(base) || poe1TalismanBase(name);
-    if (talisman) return talisman;
+    if (talisman) type = talisman;
   }
-  if (/currency|gem|divination/i.test(rarity) || /currency|gem|divination/i.test(className)) return name || base;
-  if (rarity === "magic") {
-    if (base && base.toLowerCase() !== String(drop?.name || "").toLowerCase()) return base;
-    return magicItemBase(name, className);
-  }
-  if (rarity === "unique" || rarity === "rare") {
-    if (base && base.toLowerCase() !== String(drop?.name || "").toLowerCase()) return base;
-    if (drop?.unidentified && (base || name)) return base || name;
-    return "";
-  }
-  return base || name;
+  if (!type && (/currency|gem|divination/i.test(rarity) || /currency|gem|divination/i.test(className))) type = name || base;
+  else if (!type && rarity === "magic") {
+    if (base && base.toLowerCase() !== String(drop?.name || "").toLowerCase()) type = base;
+    else type = magicItemBase(name, className);
+  } else if (!type && (rarity === "unique" || rarity === "rare")) {
+    if (base && base.toLowerCase() !== String(drop?.name || "").toLowerCase()) type = base;
+    else if (drop?.unidentified && (base || name)) type = base || name;
+  } else if (!type) type = base || name;
+  if (activeGame() === "poe1" && poe1VisceraItem(drop)) type = String(type || "").replace(/^(?:greater|lesser)\s+/i, "");
+  return type;
 }
 
 // Matcher fold follows Exiled Exchange 2 (MIT): unwrap tags, # placeholders, map to trade ids.
@@ -2145,8 +2180,10 @@ function distinctiveTradePhrase(fold) {
   return "";
 }
 
-function pickTradeStat(list, kind) {
+function pickTradeStat(list, kind, statOnly) {
   if (!list?.length) return null;
+  const only = statOnly === true || statOnly === "implicit" ? "implicit" : statOnly === "explicit" ? "explicit" : "";
+  if (only) return list.find((row) => row.type === only || String(row.id).startsWith(only + ".")) || null;
   // Fractured rolls → fractured.stat_* (same as EE2 ModifierType.Fractured trade ids).
   const order =
     kind === "crafted"
@@ -2326,9 +2363,18 @@ function parseLocalProps(raw) {
   };
 }
 
+function weaponLocalMod(fold, extra) {
+  const f = String(fold || "");
+  if (/\b(global|spells?|to attacks|to spells|with attacks|with spells)\b/.test(f)) return false;
+  const cat = tradeCategory(extra?.className || "");
+  if (!/^weapon\./.test(cat) && !isWeaponItem(extra)) return false;
+  return /adds # to # (?:physical|fire|cold|lightning|chaos) damage|increased physical damage|increased attack speed|to accuracy rating|attack damage leeched|critical strike chance|critical strike multiplier/.test(f);
+}
+
 function localModApplies(fold, extra) {
   const f = String(fold || "");
   if (!f || /recharge|from equipped|recovery|break|global|spell/.test(f)) return false;
+  if (weaponLocalMod(f, extra)) return true;
   const props = extra?.props;
   if (props && (props.armour || props.evasion || props.energyShield || props.block || props.physicalDamage || props.crit || props.aps || props.accuracy)) {
     if (/armour and energy shield|armour, evasion and energy shield|armour and evasion|evasion and energy shield/.test(f)) {
@@ -2343,6 +2389,7 @@ function localModApplies(fold, extra) {
     if (/culling strike/.test(f)) return !!(props.physicalDamage || props.aps);
     if (/physical damage/.test(f)) return !!props.physicalDamage;
     if (/critical/.test(f)) return !!props.crit;
+    if (/adds # to # (?:fire|cold|lightning|chaos) damage|attack damage leeched/.test(f)) return weaponLocalMod(f, extra);
     return false;
   }
   const cat = tradeCategory(extra?.className);
@@ -2364,15 +2411,16 @@ function localTradeFold(key) {
 function findTradeStat(index, text, kind, extra) {
   if (!index?.size) return null;
   const preferLocal = extra?.preferLocal === true;
+  const statOnly = extra?.statOnly || (extra?.implicitOnly === true ? "implicit" : "");
   const keys = foldKeyVariants(foldTradeMatcher(text));
   if (preferLocal) {
     for (const key of keys) {
-      const hit = pickTradeStat(index.get(localTradeFold(key)), kind);
+      const hit = pickTradeStat(index.get(localTradeFold(key)), kind, statOnly);
       if (hit) return hit;
     }
   }
   for (const key of keys) {
-    const hit = pickTradeStat(index.get(key), kind);
+    const hit = pickTradeStat(index.get(key), kind, statOnly);
     if (hit) return hit;
   }
   const needle = distinctiveTradePhrase(keys[0]);
@@ -2382,7 +2430,7 @@ function findTradeStat(index, text, kind, extra) {
   for (const [fold, list] of index) {
     const local = /\(local\)\s*$/i.test(fold);
     if (keys.some((key) => fold === key || (key.length >= 12 && (fold.startsWith(key + " ") || key.startsWith(fold + " "))))) {
-      const hit = pickTradeStat(list, kind);
+      const hit = pickTradeStat(list, kind, statOnly);
       if (hit && (fold.length > bestLen || (fold.length === bestLen && preferLocal && local && !bestLocal))) {
         best = hit;
         bestLen = fold.length;
@@ -2390,7 +2438,7 @@ function findTradeStat(index, text, kind, extra) {
       }
     }
     if (needle && fold.includes(needle)) {
-      const hit = pickTradeStat(list, kind);
+      const hit = pickTradeStat(list, kind, statOnly);
       if (hit && (fold.length > bestLen || (fold.length === bestLen && preferLocal && local && !bestLocal))) {
         best = hit;
         bestLen = fold.length;
@@ -2430,7 +2478,7 @@ function buildTradeStatIndex(data) {
       const key = foldTradeMatcher(entry?.text || "");
       if (!id || !key) continue;
       const list = map.get(key) || [];
-      list.push({ id, type: entry.type || kind });
+      list.push({ id, type: entry.type || kind, text: entry.text || "" });
       map.set(key, list);
     }
   }
@@ -3072,6 +3120,18 @@ function applyRollSpan(row, raw) {
   return row;
 }
 
+function tradeStatVariable(raw, statText) {
+  const stat = String(statText || "");
+  if (!/#/.test(stat)) return null;
+  const literals = new Set([...stat.matchAll(/\d+(?:\.\d+)?/g)].map((m) => m[0]));
+  if (!literals.size) return null;
+  const nums = [...stripAdvancedRanges(parseAffixStrings(String(raw || ""))).matchAll(/([+-]?\d+(?:\.\d+)?)/g)].map((m) => m[1].replace(/^\+/, ""));
+  const variable = nums.filter((n) => !literals.has(n));
+  if (variable.length !== 1) return null;
+  const n = Number(variable[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
 function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
   const grouped = new Map();
   for (const roll of rolls || []) {
@@ -3082,20 +3142,34 @@ function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
     const raw = rollLineText(roll);
     const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
     const text = stripAdvancedRanges(parseAffixStrings(raw));
-    if (!isTradeableRoll(text, kind, roll)) continue;
-    const tradeKind = activeGame() === "poe1" && roll?.crafted
-      ? "crafted"
-      : roll?.fractured && extra.fractured !== false
-        ? "fractured"
-        : kind;
-    const hit = findTradeStat(index, text, tradeKind, { preferLocal: localModApplies(foldTradeMatcher(text), extra) });
-    if (!hit?.id) continue;
+    const viscera = poe1VisceraItem(extra);
+    if (!isTradeableRoll(text, kind, viscera ? { ...roll, viscera: true } : roll)) continue;
+    const tradeKind = viscera
+      ? "implicit"
+      : activeGame() === "poe1" && roll?.crafted
+        ? "crafted"
+        : roll?.fractured && extra.fractured !== false
+          ? "fractured"
+          : kind;
+    const preferLocal = localModApplies(foldTradeMatcher(text), extra);
+    let hit = findTradeStat(index, text, tradeKind, { preferLocal, statOnly: viscera ? "implicit" : "" });
+    if (viscera && !String(hit?.id || "").startsWith("implicit.")) {
+      hit = findTradeStat(index, text, "explicit", { preferLocal, statOnly: "explicit" });
+    }
+    if (!hit?.id || (viscera && !/^(?:implicit|explicit)\./.test(String(hit.id)))) continue;
     const inverted = invertedTradeRoll(raw);
     const row = grouped.get(hit.id) || { id: hit.id, text, n: 0, option: String(hit.id).includes("|") };
     row.n += 1;
-    const amount = Number.isFinite(roll?.wantMin)
-      ? overlayLiveValue(roll)
-      : firstClipboardRoll(raw, inverted);
+    const variable = tradeStatVariable(raw, hit.text);
+    let amount = variable != null
+      ? (inverted && variable > 0 ? -variable : variable)
+      : Number.isFinite(roll?.wantMin)
+        ? overlayLiveValue(roll)
+        : firstClipboardRoll(raw, inverted);
+    if (!Number.isFinite(amount) && Number.isFinite(roll?.wantMin)) amount = Number(roll.wantMin);
+    if (!Number.isFinite(amount)) amount = firstClipboardRoll(raw, inverted);
+    if (inverted && Number.isFinite(amount) && amount > 0) amount = -amount;
+    if (Number.isFinite(amount)) amount = snapRollNum(amount, roll);
     if (Number.isFinite(amount)) {
       if (inverted) {
         if (!Number.isFinite(row.max) || amount > row.max) row.max = amount;
@@ -3210,7 +3284,11 @@ if (window.chrome?.webview) {
       try { save(); } catch { /* the switch still applies */ }
       publishWealthLive();
       render();
-      if (msg.game === "poe1") loadPoe1Leagues();
+      if (msg.game === "poe1") {
+        loadPoe1Leagues();
+        askPoe1Session();
+        scheduleWealthRefresh();
+      }
       return;
     }
     if (msg?.type === "overlay-click") {
@@ -6013,7 +6091,7 @@ function isItemJunkLine(line) {
   return false;
 }
 
-function isFlavourLine(raw) {
+function isFlavourLine(raw, extra) {
   const t = stripAdvancedRanges(parseAffixStrings(String(raw || ""))).trim();
   if (!t) return false;
   if (/[.!?]/.test(t) && !/[\d%]/.test(t)) return true;
@@ -6024,6 +6102,7 @@ function isFlavourLine(raw) {
   if (/\b(damage|resistance|attack|spell|life|mana|energy shield|armour|armor|evasion|projectile|chance|critical|speed|socket|gem|flask|charge|curse|aura|minion|totem|trap|mine|brand|skill|level|radius|duration|cooldown|leech|regeneration|block|accuracy|strength|dexterity|intelligence|fire|cold|lightning|chaos|physical|elemental)\b/i.test(t)) {
     return false;
   }
+  if (extra?.viscera) return false;
   return t.split(/\s+/).length >= 5;
 }
 
@@ -6180,7 +6259,7 @@ async function ensureUniqueVariants(log, drop) {
   }
 }
 
-function isFlavourBlock(block) {
+function isFlavourBlock(block, extra) {
   const lines = String(block || "")
     .split("\n")
     .map((line) => line.trim())
@@ -6199,7 +6278,7 @@ function isFlavourBlock(block) {
   );
   if (!body.length) return false;
   if (body.some((line) => /[\d%+]/.test(line) || /^allocates /i.test(line))) return false;
-  return body.some((line) => isFlavourLine(line));
+  return body.some((line) => isFlavourLine(line, extra));
 }
 
 function identityFromBlocks(blocks, rarity) {
@@ -6299,7 +6378,14 @@ function parsePoeItem(text) {
   const charmSlots = charmHit ? Math.max(0, Number(charmHit[1]) || 0) : 0;
   const isCorrupted = corrupted || mods.some((mod) => canonicalRollKind(mod.kind) === "corrupt");
   const desecrated = mods.some((mod) => mod.desecrated) || /^\s*(?:Unrevealed )?Desecrated (?:Modifier|Item)\s*$/im.test(raw);
-  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, mirrored, sanctified, foil, vaalUnique, desecrated, unidentified, unidentifiedTier, ravenTouched, fractured, mods, usesRemaining, runeSockets, links: sockets.links, socketColors: sockets.colors, charmSlots, props };
+  let visceraSlot = poe1VisceraCategory(className) ? className : "";
+  if (!visceraSlot && clipboardHasViscera(blocks, className)) {
+    for (const block of blocks.slice(1)) {
+      const lines = String(block || "").split("\n").map((line) => line.trim()).filter(Boolean);
+      if (lines.length === 1 && poe1VisceraCategory(lines[0])) { visceraSlot = lines[0]; break; }
+    }
+  }
+  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, mirrored, sanctified, foil, vaalUnique, desecrated, unidentified, unidentifiedTier, ravenTouched, fractured, mods, usesRemaining, runeSockets, links: sockets.links, socketColors: sockets.colors, charmSlots, props, visceraSlot };
 }
 
 function readSocketLine(raw) {
@@ -6383,6 +6469,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
   if (/^(currency|gem|divination card)$/i.test(rarity)) return { mods: [], ravenTouched: false, fractured: false };
   const charm = /charm/i.test(className);
   const uniqueItem = /unique/i.test(String(rarity || ""));
+  const viscera = clipboardHasViscera(blocks, className);
   const groups = [];
   let affix = 0;
   let afterFooter = false;
@@ -6390,7 +6477,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
   let itemFractured = false;
   for (const block of blocks || []) {
     if (afterFooter) break;
-    if (isFlavourBlock(block)) continue;
+    if (isFlavourBlock(block, { viscera })) continue;
     let sectionKind = "explicit";
     let sectionSlot = "";
     let sectionTier = 0;
@@ -6459,7 +6546,8 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         if (isCorruptedLine(rawLine) || isMirroredLine(rawLine)) afterFooter = true;
         continue;
       }
-      if (isFlavourLine(rawLine)) continue;
+      if (isFlavourLine(rawLine, { viscera })) continue;
+      if (poe1VisceraCategory(rawLine)) continue;
       const tagged = kindFromLineTag(rawLine);
       if (!tagged && /:\s/.test(rawLine) && !/^[+\-\d({]/.test(rawLine) && !isGrantedSkillRoll(rawLine)) continue;
       if (rawLine.length > 160) continue;
@@ -6531,6 +6619,13 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
   }
   const flat = groups.flat();
   for (const mod of flat) {
+    if (viscera) {
+      mod.kind = "implicit";
+      mod.unique = false;
+      mod.slot = "";
+      mod.tier = 0;
+      continue;
+    }
     if (isGrantedSkillRoll(mod.text)) mod.kind = "skill";
     if (isAllocatesRoll(mod.text) && !rollSlot(mod)) mod.kind = "enchant";
     if (uniqueItem && canonicalRollKind(mod.kind) === "explicit" && !rollSlot(mod)) {
@@ -6538,7 +6633,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       mod.tier = 0;
     }
   }
-  return { mods: cleanClipboardRolls(flat, { className, props, name: itemName, rarity, baseType: itemBase }), ravenTouched, fractured: itemFractured || flat.some((mod) => !!mod.fractured) };
+  return { mods: cleanClipboardRolls(flat, { className, props, name: itemName, rarity, baseType: itemBase, viscera }), ravenTouched, fractured: itemFractured || flat.some((mod) => !!mod.fractured) };
 }
 
 function parseAffixStrings(text) {
@@ -6558,7 +6653,7 @@ function stripAdvancedRanges(text) {
 function isUsefulRoll(text, kind, extra) {
   const t = stripAdvancedRanges(parseAffixStrings(String(text || ""))).trim();
   if (!t || t.length > 160) return false;
-  if (isFlavourLine(t)) return false;
+  if (isFlavourLine(t, extra)) return false;
   if (isRavenTouchedLine(t)) return false;
   if (/^you cannot use this item/i.test(t)) return false;
   if (/stats will be ignored/i.test(t)) return false;
@@ -6596,6 +6691,7 @@ function keepRollMeta(roll, text, kind, slot, pick) {
   if (roll?.desecrated) row.desecrated = true;
   if (roll?.crafted) row.crafted = true;
   if (roll?.charm) row.charm = true;
+  if (roll?.pickedOff) row.pickedOff = true;
   if (Number.isInteger(roll?.rid) && roll.rid > 0) row.rid = roll.rid;
   if (Number.isFinite(roll?.lo) && Number.isFinite(roll?.hi)) {
     row.lo = Number(roll.lo);
@@ -6661,8 +6757,8 @@ function cleanClipboardRolls(mods, ctx) {
         .replace(/\s+/g, " ")
         .trim()
     );
-    if (!isUsefulRoll(text, kind, mod)) continue;
-    const row = keepRollMeta(mod, text, kind, slot, false);
+    if (!isUsefulRoll(text, kind, { charm: mod?.charm, unique: mod?.unique, viscera: !!ctx?.viscera })) continue;
+    const row = keepRollMeta(mod, text, kind, slot, (ctx?.viscera || poe1VisceraItem(ctx)) && kind === "implicit" && !mod?.pickedOff);
     if (isWeaponEleFlatRoll(row, ctx)) row.pick = false;
     row.rid = ++rid;
     applyRollSpan(row, raw);
@@ -6719,8 +6815,9 @@ function normalizeRolls(rolls, ctx) {
     const slot = rollSlot(roll);
     const raw = rollLineText(roll);
     const text = stripAdvancedRanges(parseAffixStrings(raw));
-    if (!isUsefulRoll(text, kind, roll)) continue;
-    const row = keepRollMeta(roll, text, kind, slot, !!(roll && typeof roll === "object" && roll.pick));
+    if (!isUsefulRoll(text, kind, ctx?.viscera || poe1VisceraItem(ctx) ? { ...roll, viscera: true } : roll)) continue;
+    const visceraOn = (ctx?.viscera || poe1VisceraItem(ctx)) && kind === "implicit" && !roll?.pickedOff;
+    const row = keepRollMeta(roll, text, kind, slot, visceraOn || !!(roll && typeof roll === "object" && roll.pick));
     if (isWeaponEleFlatRoll(row, ctx)) row.pick = false;
     if (!Number.isInteger(row.rid) || row.rid < 1) row.rid = ++rid;
     else if (row.rid > rid) rid = row.rid;
@@ -6942,17 +7039,17 @@ function handleOverlayClick(msg) {
   }
   if (msg.pickRunesToggle != null) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
-    toggleDropRunePick(log, drop);
+    toggleDropRunePick(log, drop, msg.current);
     return;
   }
   if (msg.pickLinksToggle != null) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
-    toggleDropLinkPick(log, drop);
+    toggleDropLinkPick(log, drop, msg.current);
     return;
   }
   if (msg.pickProp) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
-    togglePickProp(log, drop, msg.pickProp);
+    togglePickProp(log, drop, msg.pickProp, msg.current);
     return;
   }
   if (msg.pickDpsType) {
@@ -6962,7 +7059,7 @@ function handleOverlayClick(msg) {
   }
   if (msg.pickSearch) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
-    applyDropSearchToggle(log, drop, msg.pickSearch);
+    applyDropSearchToggle(log, drop, msg.pickSearch, msg.current);
     return;
   }
   if (msg.qStep != null) {
@@ -6985,17 +7082,17 @@ function handleOverlayClick(msg) {
   if (msg.pickRid || msg.pickText || msg.pickAffix) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
     if (msg.pickRid) {
-      toggleInspectRoll(log, drop, msg.pickText, msg.pickKind, msg.pickRid);
+      toggleInspectRoll(log, drop, msg.pickText, msg.pickKind, msg.pickRid, msg.current);
       return;
     }
     if (msg.pickText) {
-      toggleInspectRoll(log, drop, msg.pickText, msg.pickKind);
+      toggleInspectRoll(log, drop, msg.pickText, msg.pickKind, "", msg.current);
       return;
     }
     if (!drop) return;
     drop.rolls = normalizeRolls(drop.rolls, drop);
     const row = drop.rolls.find((roll) => String(roll.affix) === String(msg.pickAffix));
-    if (row) toggleInspectRoll(log, drop, row.text, row.kind, row.rid);
+    if (row) toggleInspectRoll(log, drop, row.text, row.kind, row.rid, msg.current);
     return;
   }
   if (msg.quoteDrop) {
@@ -7424,6 +7521,10 @@ function canHaveRunes(drop) {
   return true;
 }
 
+function isQuiverItem(drop) {
+  return /quiver/i.test(String(drop?.className || ""));
+}
+
 function isCharmItem(drop) {
   return /charm/i.test(drop?.className || "");
 }
@@ -7453,7 +7554,10 @@ function itemSocketCount(drop) {
 }
 
 function socketSearchCount(drop) {
-  return Number.isInteger(drop?.pickRunes) ? Math.max(0, Math.min(6, drop.pickRunes)) : null;
+  if (!Number.isInteger(drop?.pickRunes)) return null;
+  const n = Math.max(0, Math.min(6, drop.pickRunes));
+  if (activeGame() === "poe1" && n < 6) return null;
+  return n;
 }
 
 function itemLinkCount(drop) {
@@ -7466,17 +7570,26 @@ function linkSearchCount(drop) {
   if (!Number.isInteger(drop?.pickLinks)) return null;
   const sockets = socketSearchCount(drop);
   const cap = sockets == null ? itemSocketCount(drop) || 6 : sockets;
-  return Math.max(0, Math.min(cap, drop.pickLinks));
+  const n = Math.max(0, Math.min(cap, drop.pickLinks));
+  if (n < 6) return null;
+  return n;
 }
 
 function setDropRunePick(log, drop, value, live) {
   if (!drop) return;
+  const prevRunes = drop.pickRunes;
+  const prevLinks = drop.pickLinks;
   if (value == null || value === "" || value === "any" || value === "off") drop.pickRunes = null;
   else {
-    drop.pickRunes = Math.max(0, Math.min(6, Math.round(Number(value) || 0)));
-    drop.wantRunes = drop.pickRunes;
-    if (Number.isInteger(drop.pickLinks) && drop.pickLinks > drop.pickRunes) drop.pickLinks = drop.pickRunes;
+    const n = Math.max(0, Math.min(6, Math.round(Number(value) || 0)));
+    if (n <= 0) drop.pickRunes = null;
+    else {
+      drop.pickRunes = n;
+      drop.wantRunes = drop.pickRunes;
+      if (Number.isInteger(drop.pickLinks) && drop.pickLinks > drop.pickRunes) drop.pickLinks = drop.pickRunes;
+    }
   }
+  if (drop.pickRunes === prevRunes && drop.pickLinks === prevLinks) return;
   if (live) return;
   drop.quoteTried = false;
   delete drop.quote;
@@ -7485,9 +7598,16 @@ function setDropRunePick(log, drop, value, live) {
   else render();
 }
 
-function toggleDropRunePick(log, drop) {
+function toggleNext(current, onNow) {
+  if (current === "true" || current === true) return false;
+  if (current === "false" || current === false) return true;
+  return !onNow;
+}
+
+function toggleDropRunePick(log, drop, current) {
   if (!drop) return;
-  if (Number.isInteger(drop.pickRunes)) {
+  const onNow = Number.isInteger(drop.pickRunes) && drop.pickRunes > 0;
+  if (!toggleNext(current, onNow)) {
     setDropRunePick(log, drop, null);
     return;
   }
@@ -7497,9 +7617,14 @@ function toggleDropRunePick(log, drop) {
 
 function setDropLinkPick(log, drop, value, live) {
   if (!drop) return;
+  const prev = drop.pickLinks;
   const cap = Number.isInteger(drop.pickRunes) ? drop.pickRunes : itemSocketCount(drop) || 6;
   if (value == null || value === "" || value === "any" || value === "off") drop.pickLinks = null;
-  else drop.pickLinks = Math.max(0, Math.min(cap, Math.round(Number(value) || 0)));
+  else {
+    const n = Math.max(0, Math.min(cap, Math.round(Number(value) || 0)));
+    drop.pickLinks = n > 0 ? n : null;
+  }
+  if (drop.pickLinks === prev) return;
   if (live) return;
   drop.quoteTried = false;
   delete drop.quote;
@@ -7508,9 +7633,10 @@ function setDropLinkPick(log, drop, value, live) {
   else render();
 }
 
-function toggleDropLinkPick(log, drop) {
+function toggleDropLinkPick(log, drop, current) {
   if (!drop) return;
-  if (Number.isInteger(drop.pickLinks)) {
+  const onNow = Number.isInteger(drop.pickLinks) && drop.pickLinks > 0;
+  if (!toggleNext(current, onNow)) {
     setDropLinkPick(log, drop, null);
     return;
   }
@@ -7537,7 +7663,7 @@ function socketEdgeOn(step, count, linked) {
   return linked >= step + 2 && count > step + 1;
 }
 
-function socketBoardHtml(count, linkCount, colors, showLinks = true) {
+function socketBoardHtml(count, linkCount, colors, showLinks = true, hidden = false) {
   const linked = showLinks ? Math.max(0, Math.min(count, linkCount)) : 0;
   const used = SOCKET_PATH.slice(0, Math.max(0, count));
   const shiftC = used.length ? Math.min(...used.map((slot) => slot.c)) : 0;
@@ -7552,28 +7678,38 @@ function socketBoardHtml(count, linkCount, colors, showLinks = true) {
   };
   const bars = showLinks ? SOCKET_EDGES.map((edge) => `<i class="socket-link ${edge.dir}${socketEdgeOn(edge.a, count, linked) ? "" : " is-off"}" data-link="${edge.a}-${edge.b}" style="--c:${edge.c - shiftC};--r:${edge.r - shiftR}"></i>`).join("") : "";
   const label = showLinks ? `${count} sockets, ${linked} linked` : `${count} sockets`;
-  return `<span class="price-overlay-socket-preview is-board" role="img" aria-label="${label}" style="--cols:${cols};--rows:${rows}">${bars}${[0, 1, 2, 3, 4, 5].map(sock).join("")}<span class="price-overlay-no-sockets"${count ? " hidden" : ""}>None</span></span>`;
+  return `<span class="price-overlay-socket-preview is-board" role="img" aria-label="${label}" style="--cols:${cols};--rows:${rows}"${hidden ? " hidden" : ""}>${bars}${[0, 1, 2, 3, 4, 5].map(sock).join("")}<span class="price-overlay-no-sockets"${count ? " hidden" : ""}>None</span></span>`;
 }
 
 function overlayRuneHtml(log, drop) {
   if (!canHaveRunes(drop)) return "";
-  const on = Number.isInteger(drop.pickRunes);
-  const itemN = itemSocketCount(drop);
-  const count = on ? socketSearchCount(drop) : itemN;
-  const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
+  if (isQuiverItem(drop) && itemSocketCount(drop) <= 0 && !Number.isInteger(drop?.pickRunes)) return "";
   const poe1 = activeGame() === "poe1";
-  const linkShown = poe1 ? (Number.isInteger(drop.pickLinks) ? linkSearchCount(drop) : itemLinkCount(drop)) : 0;
-  const sockets = socketBoardHtml(count, linkShown, poe1 ? drop.socketColors : null, poe1);
-  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-sockets${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-runes-toggle ${mark} title="${on ? "Clear socket filter" : `Search exactly ${itemN} sockets`}"><span>Sockets</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${count}" data-span-rid="runes" ${mark} aria-label="Socket count" /></span>${sockets}</div>`;
+  const searched = socketSearchCount(drop);
+  const on = poe1 ? Number.isInteger(drop.pickRunes) && drop.pickRunes > 0 : Number.isInteger(drop.pickRunes);
+  const inputValue = poe1
+    ? (Number.isInteger(drop?.pickRunes) && drop.pickRunes > 0 ? String(Math.min(6, drop.pickRunes)) : "")
+    : String(on ? searched : itemN);
+  const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
+  const linkValue = poe1 && Number.isInteger(drop?.pickLinks) && drop.pickLinks > 0 ? Math.min(6, drop.pickLinks) : 0;
+  const socketN = inputValue === "" ? 0 : Math.max(0, Math.min(6, Number(inputValue) || 0));
+  const showArt = socketN > 0 || linkValue > 0;
+  const sockets = socketBoardHtml(socketN || linkValue, linkValue && socketN ? Math.min(socketN, linkValue) : linkValue, poe1 ? drop.socketColors : null, poe1, !showArt);
+  const title = searched === 6 ? "Clear socket filter" : "Only a 6-link is added to the search";
+  const field = `<span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${inputValue}" data-span-rid="runes" ${mark} aria-label="Socket count" /></span>`;
+  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-sockets${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-runes-toggle data-current="${on ? "true" : "false"}" ${mark} title="${title}"><i class="price-overlay-dps-box" aria-hidden="true"></i><span>Sockets</span></button>${field}${sockets}</div>`;
 }
 
 function overlayLinksHtml(log, drop) {
   if (activeGame() !== "poe1" || !canHaveRunes(drop)) return "";
-  const on = Number.isInteger(drop.pickLinks);
-  const itemN = itemLinkCount(drop);
-  const count = on ? linkSearchCount(drop) : itemN;
+  if (isQuiverItem(drop) && itemLinkCount(drop) <= 0 && !Number.isInteger(drop?.pickLinks)) return "";
+  const on = Number.isInteger(drop.pickLinks) && drop.pickLinks > 0;
+  const filtering = linkSearchCount(drop) === 6;
   const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
-  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-links${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-links-toggle ${mark} title="${on ? "Clear link filter" : `Search at least ${itemN} links`}"><span>Links</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${count}" data-span-rid="links" ${mark} aria-label="Link count" /></span></div>`;
+  const title = filtering ? "Clear link filter" : "Only a 6-link is added to the search";
+  const linkShown = Number.isInteger(drop?.pickLinks) && drop.pickLinks > 0 ? String(Math.min(6, drop.pickLinks)) : "";
+  const field = `<span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${linkShown}" data-span-rid="links" ${mark} aria-label="Link count" /></span>`;
+  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-links${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-links-toggle data-current="${on ? "true" : "false"}" ${mark} title="${title}"><i class="price-overlay-dps-box" aria-hidden="true"></i><span>Links</span></button>${field}</div>`;
 }
 
 function overlayCharmHtml(log, drop) {
@@ -8480,35 +8616,57 @@ function pickedPropFilters(drop) {
     .map((row) => {
       const next = { id: row.id };
       const min = row.numInput ? row.numInput.value : row.slider ? row.slider.min : row.value;
-      if (Number.isFinite(min)) next.min = min;
+      if (Number.isFinite(min)) next.min = snapTypedProp(row.id, min);
       return next;
     });
 }
 
-function togglePickProp(log, drop, id) {
+function poe1EquipFilterGroups(drop) {
+  const weapon = {};
+  const armour = {};
+  for (const row of pickedPropFilters(drop)) {
+    const key = equipTradeKey(row.id);
+    const min = Number(row.min);
+    if (!key || key === "spirit" || !Number.isFinite(min) || !(min > 0)) continue;
+    const weaponKey = key === "dps" || key === "pdps" || key === "edps" || key === "aps" || key === "crit";
+    if (weaponKey) weapon[key] = { min };
+    else if (key === "ar" || key === "ev" || key === "es" || key === "ward" || key === "block") armour[key] = { min };
+  }
+  return { weapon, armour };
+}
+
+function togglePickProp(log, drop, id, current) {
   if (!drop || !id || !equipTradeKey(id)) return;
   drop.pickProps = drop.pickProps && typeof drop.pickProps === "object" ? drop.pickProps : {};
   const row = dropPropRows(drop).find((item) => item.id === id);
   const on = propPicked(drop, id, row?.dpsDefaultOn);
-  drop.pickProps[id] = !on;
+  const next = toggleNext(current, on);
+  if (Object.prototype.hasOwnProperty.call(drop.pickProps, id) && !!drop.pickProps[id] === next) return;
+  drop.pickProps[id] = next;
   drop.quoteTried = false;
   delete drop.quote;
   if (log?.id) save();
   paintPriceOverlay();
 }
 
-function applyDropSearchToggle(log, drop, what) {
+function applyDropSearchToggle(log, drop, what, current) {
   if (!drop) return;
-  if (what === "exact") drop.pickExactBase = !searchExactBase(drop);
+  if (what === "exact") {
+    const next = toggleNext(current, searchExactBase(drop));
+    if (drop.pickExactBase === next || (drop.pickExactBase == null && next === searchExactBase(drop))) return;
+    drop.pickExactBase = next;
+  }
   else if (what === "ilvl") {
-    const next = !ilvlFilterState(drop)?.on;
+    const next = toggleNext(current, !!ilvlFilterState(drop)?.on);
+    if (drop.pickIlvl === next) return;
     drop.pickIlvl = next;
     if (next && !Number.isFinite(Number(drop.wantIlvl))) {
       const raw = Number(drop?.props?.ilvl);
       if (Number.isFinite(raw) && raw > 0) drop.wantIlvl = Math.round(raw);
     }
   } else if (what === "quality") {
-    const next = !qualityFilterState(drop)?.on;
+    const next = toggleNext(current, !!qualityFilterState(drop)?.on);
+    if (drop.pickQuality === next) return;
     drop.pickQuality = next;
     if (next && !hasWantQuality(drop)) {
       drop.wantQuality = Math.round(Number(drop.props?.quality) || 0);
@@ -8681,9 +8839,17 @@ function paintSocketPreview(input) {
   if (preview.classList.contains("is-board")) {
     const socketInput = column.querySelector('[data-span-rid="runes"]');
     const linkInput = column.querySelector('[data-span-rid="links"]');
-    const count = Math.max(0, Math.min(6, Math.round(Number(socketInput?.value ?? input.value) || 0)));
-    let links = Math.max(0, Math.min(count, Math.round(Number(linkInput?.value) || 0)));
-    if (linkInput && Number(linkInput.value) > count) linkInput.value = String(links);
+    const socketText = (socketInput || input).value.trim();
+    const linkText = linkInput ? linkInput.value.trim() : "";
+    const socketN = socketText === "" ? 0 : Math.max(0, Math.min(6, Math.round(Number(socketText) || 0)));
+    const linkN = linkText === "" ? 0 : Math.max(0, Math.min(6, Math.round(Number(linkText) || 0)));
+    const count = socketN || linkN;
+    let links = socketN ? Math.min(count, linkN) : linkN;
+    if (socketN && linkInput && linkN > socketN) {
+      links = socketN;
+      linkInput.value = String(links);
+    }
+    preview.hidden = count <= 0;
     const used = SOCKET_PATH.slice(0, count);
     const shiftC = used.length ? Math.min(...used.map((slot) => slot.c)) : 0;
     const shiftR = used.length ? Math.min(...used.map((slot) => slot.r)) : 0;
@@ -8720,6 +8886,7 @@ function paintSocketPreview(input) {
   sockets.forEach((socket, i) => { socket.hidden = i >= count; });
   const none = preview.querySelector(".price-overlay-no-sockets");
   if (none) none.hidden = count > 0;
+  preview.hidden = count <= 0;
   preview.setAttribute("aria-label", `${count} sockets`);
 }
 
@@ -8737,7 +8904,7 @@ function overlayMinFilterHtml(log, drop, row, compact = false) {
         ? "Item level"
         : row.label
     : row.label;
-  return `<div class="price-overlay-prop price-overlay-prop-num${compact ? " is-meta" : ""}${row.pick === "quality" ? " is-quality" : ""}${row.pick === "ilvl" ? " is-ilvl" : ""}${row.on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-search="${esc(row.pick)}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(label)}</span>${compact ? "" : `<b>${esc(row.shown)}</b>`}</button><span class="price-overlay-q-edit">${minus}<input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${q.lo}" max="${q.hi}" value="${q.value}" data-span-rid="${esc(rid)}" ${mark} />${plus}</span></div>`;
+  return `<div class="price-overlay-prop price-overlay-prop-num${compact ? " is-meta" : ""}${row.pick === "quality" ? " is-quality" : ""}${row.pick === "ilvl" ? " is-ilvl" : ""}${row.on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-search="${esc(row.pick)}" data-current="${row.on ? "true" : "false"}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(label)}</span>${compact ? "" : `<b>${esc(row.shown)}</b>`}</button><span class="price-overlay-q-edit">${minus}<input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${q.lo}" max="${q.hi}" value="${q.value}" data-span-rid="${esc(rid)}" ${mark} />${plus}</span></div>`;
 }
 
 function overlayPropsHtml(log, drop) {
@@ -8782,14 +8949,14 @@ function overlayPropsHtml(log, drop) {
         const automatic = !Number.isFinite(Number(drop.wantProps?.[row.id]));
         const unit = row.kind === "crit" || row.kind === "block" ? '<span class="price-overlay-prop-unit">%</span>' : "";
         const compactClass = compactWeapon ? row.id === "item.crit" ? " is-weapon-crit" : row.id === "item.aps" ? " is-weapon-aps" : "" : "";
-        return `<div class="price-overlay-prop price-overlay-prop-num is-inline-value${on}${compactClass}"><button type="button" class="price-overlay-q-toggle" data-pick-prop="${esc(row.id)}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(row.label)}:</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="${decimal ? "decimal" : "numeric"}" pattern="${decimal ? "[0-9.]*" : "[0-9]*"}" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${n.lo}" max="${n.hi}" value="${typed}" data-span-rid="${esc(row.id)}"${dec}${live} data-live-default="${automatic ? "1" : "0"}" ${mark} aria-label="${esc(row.label)} minimum" />${unit}</span>${row.q20 ? `<em class="price-overlay-q20">${esc(row.q20Label || "Q 20%")}</em>` : ""}</div>${tags ? `<div class="price-overlay-dps-tags">${tags}</div>` : ""}`;
+        return `<div class="price-overlay-prop price-overlay-prop-num is-inline-value${on}${compactClass}"><button type="button" class="price-overlay-q-toggle" data-pick-prop="${esc(row.id)}" data-current="${row.on ? "true" : "false"}" ${mark}><i class="price-overlay-dps-box" aria-hidden="true"></i><span>${esc(row.label)}:</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="${decimal ? "decimal" : "numeric"}" pattern="${decimal ? "[0-9.]*" : "[0-9]*"}" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="${n.lo}" max="${n.hi}" value="${typed}" data-span-rid="${esc(row.id)}"${dec}${live} data-live-default="${automatic ? "1" : "0"}" ${mark} aria-label="${esc(row.label)} minimum" />${unit}</span>${row.q20 ? `<em class="price-overlay-q20">${esc(row.q20Label || "Q 20%")}</em>` : ""}</div>${tags ? `<div class="price-overlay-dps-tags">${tags}</div>` : ""}`;
       }
       const shown = `<span>${esc(row.label)}</span><b${live}>${esc(row.shown)}</b>`;
       if (row.pick) return `<button type="button" class="price-overlay-prop${row.on ? " is-on" : ""}" data-pick-search="${esc(row.pick)}" ${mark}>${shown}</button>`;
       if (!row.id) return `<div class="price-overlay-prop is-static">${shown}</div>`;
       const on = drop.pickProps?.[row.id] ? " is-on" : "";
       const defence = ["item.armour", "item.evasion_rating", "item.energy_shield"].includes(row.id) ? " is-defence" : "";
-      return `<button type="button" class="price-overlay-prop${defence}${on}" data-pick-prop="${esc(row.id)}" ${mark}>${shown}</button>`;
+      return `<button type="button" class="price-overlay-prop${defence}${on}" data-pick-prop="${esc(row.id)}" data-current="${on ? "true" : "false"}" ${mark}>${shown}</button>`;
     })
     .join("")}</div>` : "";
   if (!meta && !props && !rune && !links) return "";
@@ -8979,7 +9146,7 @@ async function tradeSiteUrl(drop) {
         pickedRolls(drop).filter((roll) => !isTabletUsesRoll(roll.text)),
         index,
         true,
-        { props: drop.props, className: drop.className, fractured: searchFractured(drop) }
+        { props: drop.props, className: drop.className, visceraSlot: drop.visceraSlot, fractured: searchFractured(drop) }
       ).filter((row) => row.id && !String(row.id).startsWith("item."));
     } catch {
       statFilters = [];
@@ -8997,7 +9164,7 @@ async function tradeSiteUrl(drop) {
       }),
     }];
     const typeBag = {};
-    const category = poe1TradeCategory(drop.className) || (poe1TalismanBase(typeLine) ? "accessory.amulet" : "");
+    const category = poe1SearchCategory(drop) || (poe1TalismanBase(typeLine) ? "accessory.amulet" : "");
     if (category) typeBag.category = { option: category };
     if (/unique/i.test(drop?.rarity || "")) typeBag.rarity = { option: "unique" };
     else if (canPickRarity(drop)) typeBag.rarity = { option: searchRarityFilter(drop) };
@@ -9016,6 +9183,9 @@ async function tradeSiteUrl(drop) {
     const links = linkSearchCount(drop);
     if (links !== null && links >= 2) socketBag.links = { min: links };
     if (Object.keys(socketBag).length) query.filters.socket_filters = { filters: socketBag };
+    const equip = poe1EquipFilterGroups(drop);
+    if (Object.keys(equip.weapon).length) query.filters.weapon_filters = { filters: equip.weapon };
+    if (Object.keys(equip.armour).length) query.filters.armour_filters = { filters: equip.armour };
     return "https://www.pathofexile.com/trade/search/" + encodeURIComponent(league) + "?q=" + encodeURIComponent(JSON.stringify({ query, sort: { price: "asc" } }));
   }
   if (overlayUsesExchange(drop)) {
@@ -9152,7 +9322,7 @@ function priceOverlayHtml(log, drop) {
   function pickAttrs(roll) {
     const affix = Number.isInteger(roll.affix) && roll.affix > 0 ? ` data-pick-affix="${roll.affix}"` : "";
     const rid = Number.isInteger(roll.rid) && roll.rid > 0 ? ` data-pick-rid="${roll.rid}"` : "";
-    return `data-pick-text="${esc(roll.text)}" data-pick-kind="${esc(canonicalRollKind(roll.kind))}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"${affix}${rid}`;
+    return `data-pick-text="${esc(roll.text)}" data-pick-kind="${esc(canonicalRollKind(roll.kind))}" data-current="${roll.pick ? "true" : "false"}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"${affix}${rid}`;
   }
   function pillHtml(tag, kind, roll) {
     if (!tag) return "";
@@ -9377,7 +9547,7 @@ function paintPriceOverlay(forceInApp = false, fresh = false) {
   if (card) card.style.zoom = String(overlayScaleValue());
 }
 
-function toggleInspectRoll(log, drop, text, kind, rid) {
+function toggleInspectRoll(log, drop, text, kind, rid, current) {
   if (!drop) return;
   const want = String(text || "").trim();
   if (isTabletUsesRoll(want)) {
@@ -9401,11 +9571,17 @@ function toggleInspectRoll(log, drop, text, kind, rid) {
     if (as !== "explicit") drop.rolls.unshift(row);
     else drop.rolls.push(row);
   }
-  row.pick = !row.pick;
+  const next = toggleNext(current, !!row.pick);
+  if (row.pick === next && !!row.pickedOff === !next) return;
+  row.pick = next;
+  row.pickedOff = !row.pick;
   if (Number.isInteger(row.affix) && row.affix > 0 && drop.rolls.some((roll) => roll.affix === row.affix && roll.text !== row.text)) {
     const on = row.pick;
     drop.rolls.forEach((roll) => {
-      if (roll.affix === row.affix) roll.pick = on;
+      if (roll.affix === row.affix) {
+        roll.pick = on;
+        roll.pickedOff = !on;
+      }
     });
   }
   drop.quoteTried = false;
@@ -9850,7 +10026,7 @@ async function quoteRolledDrop(log, drop, force = false) {
   try {
     const extra = {
       typeLine: tradeBaseType(drop),
-      category: poe1 ? poe1TradeCategory(drop.className) : tradeCategory(drop.className),
+      category: poe1 ? poe1SearchCategory(drop) : tradeCategory(drop.className),
       rarity: drop.rarity || "",
       rarityFilter: searchRarityFilter(drop),
       game: poe1 ? "poe1" : "poe2",
@@ -9861,8 +10037,9 @@ async function quoteRolledDrop(log, drop, force = false) {
     } else if (poe1) {
       const index = await ensureTradeStats();
       const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
-      extra.filters = mapRollsToTradeFilters(pickedMods, index, true, { props: drop.props, className: drop.className, fractured: searchFractured(drop) })
-        .filter((row) => row.id && !String(row.id).startsWith("item."));
+      extra.filters = mapRollsToTradeFilters(pickedMods, index, true, { props: drop.props, className: drop.className, visceraSlot: drop.visceraSlot, fractured: searchFractured(drop) })
+        .filter((row) => row.id && !String(row.id).startsWith("item."))
+        .concat(pickedPropFilters(drop));
       if (!extra.category && poe1TalismanBase(extra.typeLine)) extra.category = "accessory.amulet";
       extra.exactBase = searchExactBase(drop);
       const ilvl = ilvlFilterState(drop);
@@ -10020,14 +10197,17 @@ function ingestClipboardItem(text, mode) {
     if (parsed.usesRemaining > 0) drop.usesRemaining = parsed.usesRemaining;
     if (parsed.runeSockets > 0 && canHaveRunes(parsed)) {
       drop.runeSockets = parsed.runeSockets;
-      drop.pickRunes = parsed.runeSockets;
       if (parsed.socketColors?.length) drop.socketColors = parsed.socketColors;
-      if (activeGame() === "poe1" && parsed.links > 1) {
-        drop.links = parsed.links;
-        drop.pickLinks = parsed.links;
-      }
+      if (activeGame() === "poe1") {
+        if (parsed.links > 0) drop.links = parsed.links;
+        if (parsed.links >= 6 && parsed.runeSockets >= 6) {
+          drop.pickRunes = 6;
+          drop.pickLinks = 6;
+        }
+      } else drop.pickRunes = parsed.runeSockets;
     }
     if (parsed.charmSlots > 0) drop.charmSlots = parsed.charmSlots;
+    if (parsed.visceraSlot) drop.visceraSlot = parsed.visceraSlot;
     if (!isClipboardCurrency(parsed) && parsed.mods?.length) drop.rolls = parsed.mods.slice(0, 24);
     openInspect({ id: "", drops: [drop] }, drop);
     return;
@@ -10060,14 +10240,17 @@ function ingestClipboardItem(text, mode) {
   if (parsed.usesRemaining > 0) entry.usesRemaining = parsed.usesRemaining;
   if (parsed.runeSockets > 0 && canHaveRunes(parsed)) {
     entry.runeSockets = parsed.runeSockets;
-    entry.pickRunes = parsed.runeSockets;
     if (parsed.socketColors?.length) entry.socketColors = parsed.socketColors;
-    if (activeGame() === "poe1" && parsed.links > 1) {
-      entry.links = parsed.links;
-      entry.pickLinks = parsed.links;
-    }
+    if (activeGame() === "poe1") {
+      if (parsed.links > 0) entry.links = parsed.links;
+      if (parsed.links >= 6 && parsed.runeSockets >= 6) {
+        entry.pickRunes = 6;
+        entry.pickLinks = 6;
+      }
+    } else entry.pickRunes = parsed.runeSockets;
   }
   if (parsed.charmSlots > 0) entry.charmSlots = parsed.charmSlots;
+  if (parsed.visceraSlot) entry.visceraSlot = parsed.visceraSlot;
   if (!isClipboardCurrency(parsed) && parsed.mods?.length) entry.rolls = parsed.mods.slice(0, 24);
   farmLogDrop(matched.boss?.id || farmBossId(), entry);
 }
@@ -11455,29 +11638,55 @@ function wealthPerHour(points) {
   return (last.total - first.total) / hours;
 }
 
-function wealthPlotUnit(values) {
-  const peak = Math.max(0, ...values.filter(value => Number.isFinite(value)));
-  const chaosRate = Number(poe1Currency.chaosPerDivine) || Number(poe1Prices.chaosPerDivine) || 0;
-  if (activeGame() === "poe1" && peak < 1 && chaosRate > 0) return "chaos";
+function wealthDisplayUnit(divine) {
+  const chaosRate = Number(poe1Currency.chaosPerDivine) || Number(poe1Prices.chaosPerDivine) || Number(prices.chaosPerDivine) || 0;
+  if (Number.isFinite(divine) && divine > 0 && divine < 1 && chaosRate > 0) return "chaos";
   return "divine";
+}
+
+function wealthAmountText(divine, unit) {
+  const shown = unit === "chaos" ? amountFromDivine(divine, "chaos") : divine;
+  if (!Number.isFinite(shown)) return formatAmount(divine, "divine");
+  return formatAmount(shown, unit || "divine");
+}
+
+function wealthTotalHtml(divine) {
+  const unit = wealthDisplayUnit(divine);
+  const amount = unit === "chaos" ? amountFromDivine(divine, "chaos") : divine;
+  return valueFromAmount(Number.isFinite(amount) ? amount : 0, unit);
 }
 
 function wealthPlotAmount(divine, unit) {
   if (unit !== "chaos") return divine;
-  const chaosRate = Number(poe1Currency.chaosPerDivine) || Number(poe1Prices.chaosPerDivine) || 0;
-  return chaosRate > 0 ? divine * chaosRate : divine;
+  const amount = amountFromDivine(divine, "chaos");
+  return Number.isFinite(amount) ? amount : divine;
 }
 
-function wealthRateText(total, perHour) {
-  const unit = wealthPlotUnit([total]);
-  const amount = wealthPlotAmount(perHour, unit);
-  return `${amount > 0 ? "+" : ""}${formatAmount(amount, unit)}/h`;
+function wealthAxisMax(peak) {
+  if (!(peak > 0)) return 1;
+  const padded = peak * 1.12;
+  const pow = Math.pow(10, Math.floor(Math.log10(padded)));
+  const n = padded / pow;
+  const nice = n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10;
+  return nice * pow;
 }
 
-function wealthHourLabel(at, span) {
+function wealthRateText(perHour) {
+  if (!Number.isFinite(perHour)) return "";
+  return `${perHour > 0 ? "+" : ""}${formatAmount(perHour, "divine")}/h`;
+}
+
+function wealthTickLabel(at, span, step) {
   const date = new Date(at);
-  if (span < 36 * 3600000) return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const time = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (step < 20 * 3600000 && span < 36 * 3600000) return time;
+  if (step < 20 * 3600000) return date.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + date.toLocaleTimeString(undefined, { hour: "numeric" });
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function wealthPointTitle(point, unit) {
+  const when = new Date(point.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return wealthAmountText(point.total, unit) + " · " + when;
 }
 
 function wealthLiveLabel() {
@@ -11493,8 +11702,8 @@ function wealthLiveLabel() {
   if (!rows.length) return "";
   const total = rows[rows.length - 1].total;
   const perHour = wealthPerHour(rows);
-  const rate = perHour == null ? "" : `   ${perHour > 0 ? "+" : ""}${formatAmount(perHour, "divine")}/h`;
-  return `Total wealth  ${formatAmount(total, "divine")}${rate}`;
+  const rate = perHour == null ? "" : `   ${wealthRateText(perHour)}`;
+  return `Total wealth  ${wealthAmountText(total, wealthDisplayUnit(total))}${rate}`;
 }
 
 function publishWealthLive(label) {
@@ -11514,19 +11723,18 @@ function rememberWealthPoint(draft) {
 
 function wealthChart(points) {
   const w = 720;
-  const h = 228;
-  const left = 86;
-  const right = 18;
-  const top = 18;
-  const bottom = 32;
+  const h = 236;
+  const left = 78;
+  const right = 22;
+  const top = 16;
+  const bottom = 36;
   const plotW = w - left - right;
   const plotH = h - top - bottom;
   const base = top + plotH;
-  const unit = wealthPlotUnit(points.map(point => point.total));
+  const latest = points.length ? points[points.length - 1].total : 0;
+  const unit = wealthDisplayUnit(latest);
   const amounts = points.map(point => Math.max(0, wealthPlotAmount(point.total, unit)));
-  let max = amounts.length ? Math.max(...amounts) : 1;
-  if (!(max > 0)) max = 1;
-  max *= 1.08;
+  const max = wealthAxisMax(amounts.length ? Math.max(...amounts) : 0);
   const yAt = value => top + (1 - value / max) * plotH;
   const t0 = points[0]?.at ?? Date.now();
   const t1 = points[points.length - 1]?.at ?? t0;
@@ -11535,25 +11743,40 @@ function wealthChart(points) {
   const grid = [1, 0.5, 0].map(step => {
     const value = max * step;
     const y = yAt(value);
-    return `<line x1="${left}" y1="${y.toFixed(1)}" x2="${w - right}" y2="${y.toFixed(1)}" /><text x="${left - 12}" y="${(y + 4).toFixed(1)}" text-anchor="end">${esc(formatAmount(value, unit))}</text>`;
+    return `<line x1="${left}" y1="${y.toFixed(1)}" x2="${w - right}" y2="${y.toFixed(1)}" /><text x="${left - 10}" y="${(y + 4).toFixed(1)}" text-anchor="end">${esc(formatAmount(value, unit))}</text>`;
   }).join("");
   const xy = points.map((point, index) => [xAt(point.at), yAt(amounts[index])]);
   const line = xy.length > 1 ? xy.map((point, index) => `${index ? "L" : "M"}${point[0].toFixed(1)} ${point[1].toFixed(1)}`).join(" ") : "";
   const area = line
     ? `${line} L${xy[xy.length - 1][0].toFixed(1)} ${base.toFixed(1)} L${xy[0][0].toFixed(1)} ${base.toFixed(1)} Z`
     : "";
-  const dots = [];
-  xy.forEach((point, index) => {
-    const prev = dots[dots.length - 1];
-    const last = index === xy.length - 1;
-    if (!last && prev && Math.abs(point[0] - prev[0]) < 14 && Math.abs(point[1] - prev[1]) < 8) return;
-    dots.push(point);
-  });
-  const marks = dots.map(point => `<circle class="wealth-dot" cx="${point[0].toFixed(1)}" cy="${point[1].toFixed(1)}" r="3.5" />`).join("");
-  const axis = points.length
-    ? `<text x="${points.length < 2 ? xAt(t0) : left}" y="${h - 10}" text-anchor="${points.length < 2 ? "middle" : "start"}">${esc(wealthHourLabel(t0, span))}</text>`
-      + (points.length > 1 ? `<text x="${w - right}" y="${h - 10}" text-anchor="end">${esc(wealthHourLabel(t1, span))}</text>` : "")
-    : "";
+  const marks = points.map((point, index) => {
+    const x = xy[index][0].toFixed(1);
+    const y = xy[index][1].toFixed(1);
+    return `<g class="wealth-dot"><title>${esc(wealthPointTitle(point, unit))}</title><circle class="wealth-dot-hit" cx="${x}" cy="${y}" r="8" /><circle class="wealth-dot-mark" cx="${x}" cy="${y}" r="3.4" /></g>`;
+  }).join("");
+  const minute = 60000;
+  const steps = [15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10080, 43200].map(count => count * minute);
+  let step = steps[steps.length - 1];
+  for (const candidate of steps) {
+    if (span / candidate <= 5) { step = candidate; break; }
+  }
+  const rawTicks = [t0];
+  for (let at = Math.ceil(t0 / step) * step; at < t1 - step * 0.2; at += step) rawTicks.push(at);
+  if (points.length > 1) rawTicks.push(t1);
+  const ticks = [];
+  for (const at of rawTicks) {
+    const x = xAt(at);
+    const prev = ticks[ticks.length - 1];
+    if (prev && Math.abs(x - prev.x) < 84 && at !== t1) continue;
+    if (prev && at === t1 && Math.abs(x - prev.x) < 84) ticks.pop();
+    ticks.push({ at, x });
+  }
+  const axis = ticks.map((tick, index) => {
+    const anchor = ticks.length === 1 ? "middle" : index === 0 ? "start" : index === ticks.length - 1 ? "end" : "middle";
+    const x = anchor === "start" ? Math.max(left, tick.x) : anchor === "end" ? Math.min(w - right, tick.x) : tick.x;
+    return `<text x="${x.toFixed(1)}" y="${h - 12}" text-anchor="${anchor}">${esc(wealthTickLabel(tick.at, span, step))}</text>`;
+  }).join("");
   return `<svg class="wealth-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Currency over time">
     <g class="wealth-grid">${grid}</g>
     ${area ? `<path class="wealth-area" d="${area}" />` : ""}
@@ -11566,6 +11789,7 @@ function wealthDonut(parts) {
   const priced = parts.filter(part => part.value > 0);
   const total = priced.reduce((sum, part) => sum + part.value, 0);
   if (!(total > 0)) return `<p class="muted">No priced stacks yet.</p>`;
+  const unit = wealthDisplayUnit(total);
   const colors = ["#c8a45a", "#7eb6d6", "#d07a6a", "#8fbf8f", "#b79ad6", "#d6b07a", "#8fd0c4", "#d68fb0", "#a8b0c0"];
   let cursor = 0;
   const stops = priced.map((part, index) => {
@@ -11574,8 +11798,8 @@ function wealthDonut(parts) {
     return `${colors[index % colors.length]} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`;
   }).join(", ");
   const legend = priced.map((part, index) =>
-    `<li><i style="background:${colors[index % colors.length]}"></i><b>${esc(part.name)}</b> <span>${esc(formatDivine(part.value))}</span></li>`).join("");
-  return `<div class="wealth-break"><div class="wealth-donut" style="background:conic-gradient(${stops})"><span>${esc(formatDivine(total))}</span></div><ul class="wealth-legend">${legend}</ul></div>`;
+    `<li><i style="background:${colors[index % colors.length]}"></i><b>${esc(part.name)}</b> <span>${esc(wealthAmountText(part.value, unit))}</span></li>`).join("");
+  return `<div class="wealth-break"><div class="wealth-donut" style="background:conic-gradient(${stops})"><span>${esc(wealthAmountText(total, unit))}</span></div><ul class="wealth-legend">${legend}</ul></div>`;
 }
 
 function renderWealth() {
@@ -11647,7 +11871,7 @@ function renderWealth() {
     ${draft.slots.length ? `<div class="wealth-summary">
       <article class="panel wealth-hero">
         <h3>Value over time</h3>
-        <p class="wealth-headline">${valueHtml(value.total)}${perHour == null ? "" : `<span class="wealth-rate">${esc(wealthRateText(value.total, perHour))}</span>`}</p>
+        <p class="wealth-headline">${wealthTotalHtml(value.total)}${perHour == null ? "" : `<span class="wealth-rate">${esc(wealthRateText(perHour))}</span>`}</p>
         ${wealthChart(points)}
       </article>
       <article class="panel">
@@ -11674,7 +11898,7 @@ function renderWealth() {
         const comparable = previous && !snapshot.unpriced && !previous.unpriced && names(snapshot) === names(previous);
         const change = comparable ? snapshot.total - previous.total : null;
         return `<tr><td>${esc(new Date(snapshot.at).toLocaleString())}</td>
-          <td>${esc(formatNum(snapshot.total))} div${snapshot.unpriced ? " · partial" : ""}</td>
+          <td>${esc(wealthAmountText(snapshot.total, wealthDisplayUnit(snapshot.total)))}${snapshot.unpriced ? " · partial" : ""}</td>
           <td>${change == null ? "—" : esc((change > 0 ? "+" : "") + formatNum(change)) + " div"}</td></tr>`;
       }).join("")}</tbody></table></article>` : ""}
   </section>`;
@@ -11909,6 +12133,7 @@ const WEALTH_REFRESH_MS = 15 * 60 * 1000;
 let wealthReadStarted = 0;
 let wealthRetryAt = 0;
 let wealthRefreshTimer = 0;
+let wealthLaunchPending = true;
 let poe1Currency = { league: "", byName: new Map() };
 let poe1SignedIn = false;
 let poe1SessionAsked = false;
@@ -12003,6 +12228,17 @@ function wealthRefreshDue() {
 function scheduleWealthRefresh() {
   clearTimeout(wealthRefreshTimer);
   if (!wealthAutoArmed()) return;
+  if (wealthLaunchPending && !(wealthReadStarted > 0)) {
+    wealthRefreshTimer = setTimeout(() => {
+      if (wealthReadStarted > 0) {
+        scheduleWealthRefresh();
+        return;
+      }
+      wealthLaunchPending = false;
+      Promise.resolve(readWealthTab({ auto: true, launch: true })).finally(() => scheduleWealthRefresh());
+    }, 1200);
+    return;
+  }
   const last = Math.max(wealthLastReadAt(), wealthReadStarted);
   let wait = last > 0 ? WEALTH_REFRESH_MS - (Date.now() - last) : WEALTH_REFRESH_MS;
   if (wealthRetryAt) wait = Math.min(wait, wealthRetryAt - Date.now());
@@ -12087,7 +12323,7 @@ async function readWealthTab(opts) {
   const poe1 = activeGame() === "poe1";
   if (draft.busy) return;
   if (auto && poe1 && !wealthAutoArmed()) return;
-  if (auto && !wealthRefreshDue()) return;
+  if (auto && !opts?.launch && !wealthRefreshDue()) return;
   const account = draft.account.trim();
   if (!poe1 && account.length < 2) {
     if (auto) return;
@@ -12124,6 +12360,8 @@ async function readWealthTab(opts) {
     state.wealthAccount = account;
     try { save(); } catch { /* the read can still run */ }
   }
+  wealthLaunchPending = false;
+  wealthReadStarted = Date.now();
   draft.busy = true;
   draft.message = poe1 ? "Reading stash tabs…" : "Reading public stash tabs…";
   publishWealthLive("Reading…");
@@ -12949,7 +13187,7 @@ function onClick(event) {
     event.preventDefault();
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickRunesToggle.dataset.pickLog, pickRunesToggle.dataset.pickDrop);
-    toggleDropRunePick(log, drop);
+    toggleDropRunePick(log, drop, pickRunesToggle.dataset.current);
     return;
   }
   const pickLinksToggle = event.target.closest("[data-pick-links-toggle]");
@@ -12957,7 +13195,7 @@ function onClick(event) {
     event.preventDefault();
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickLinksToggle.dataset.pickLog, pickLinksToggle.dataset.pickDrop);
-    toggleDropLinkPick(log, drop);
+    toggleDropLinkPick(log, drop, pickLinksToggle.dataset.current);
     return;
   }
   const resistanceAction = event.target.closest("[data-res-action]");
@@ -12973,7 +13211,7 @@ function onClick(event) {
     event.preventDefault();
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickProp.dataset.pickLog, pickProp.dataset.pickDrop);
-    togglePickProp(log, drop, pickProp.dataset.pickProp);
+    togglePickProp(log, drop, pickProp.dataset.pickProp, pickProp.dataset.current);
     return;
   }
   const pickDpsType = event.target.closest("[data-pick-dps-type]");
@@ -12989,7 +13227,7 @@ function onClick(event) {
     event.preventDefault();
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickSearch.dataset.pickLog, pickSearch.dataset.pickDrop);
-    applyDropSearchToggle(log, drop, pickSearch.dataset.pickSearch);
+    applyDropSearchToggle(log, drop, pickSearch.dataset.pickSearch, pickSearch.dataset.current);
     return;
   }
   const pickRarity = event.target.closest("[data-pick-rarity]");
@@ -13037,7 +13275,7 @@ function onClick(event) {
     event.preventDefault();
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickText.dataset.pickLog, pickText.dataset.pickDrop);
-    toggleInspectRoll(log, drop, pickText.dataset.pickText, pickText.dataset.pickKind, pickText.dataset.pickRid);
+    toggleInspectRoll(log, drop, pickText.dataset.pickText, pickText.dataset.pickKind, pickText.dataset.pickRid, pickText.dataset.current);
     return;
   }
   const pickRoll = event.target.closest("[data-pick-roll]");
@@ -13051,12 +13289,16 @@ function onClick(event) {
     const i = Number(pickRoll.dataset.pickRoll);
     if (!drop.rolls[i]) return;
     drop.rolls[i].pick = !drop.rolls[i].pick;
+    drop.rolls[i].pickedOff = !drop.rolls[i].pick;
     const row = drop.rolls[i];
     if (Number.isInteger(row.affix) && row.affix > 0 && drop.rolls.some((roll) => roll.affix === row.affix && roll.text !== row.text)) {
       const on = row.pick;
       const affix = row.affix;
       drop.rolls.forEach((roll) => {
-        if (roll.affix === affix) roll.pick = on;
+        if (roll.affix === affix) {
+          roll.pick = on;
+          roll.pickedOff = !on;
+        }
       });
     }
     drop.quoteTried = false;
@@ -13833,8 +14075,10 @@ afterPaint(() => {
 });
 setTimeout(() => kickFirstPriceCheck(), 2500);
 setTimeout(() => {
-  if (activeGame() === "poe1") scheduleWealthRefresh();
-  else readWealthTab({ auto: true });
+  if (activeGame() === "poe1") {
+    askPoe1Session();
+    scheduleWealthRefresh();
+  } else readWealthTab({ auto: true });
 }, 5000);
 setTimeout(() => ensureIcons(), 1600);
 setTimeout(() => checkAppUpdate(), 2800);

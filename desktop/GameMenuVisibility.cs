@@ -13,6 +13,7 @@ sealed class GameMenuVisibility
         ["open_options"] = (79, 0), ["open_skill_panel"] = (71, 0),
         ["open_market_panel"] = (191, 0), ["open_expedition_panel"] = (66, 0),
         ["generic_league_panel_key"] = (222, 0), ["open_map"] = (9, 0),
+        ["open_mtx_stash"] = (78, 0),
         ["chat"] = (13, 0), ["close_panels"] = (32, 0),
     };
     Dictionary<string, (uint Key, uint Modifiers)> _bindings = new(Defaults);
@@ -53,6 +54,13 @@ sealed class GameMenuVisibility
 
     public void ClearHeldKeys() => _held.Clear();
 
+    public void ReleaseUpKeys(Func<uint, bool> isDown)
+    {
+        if (_held.Count == 0) return;
+        foreach (var key in _held.ToArray())
+            if (!isDown(key)) _held.Remove(key);
+    }
+
     public void Reset()
     {
         _open.Clear();
@@ -86,6 +94,8 @@ sealed class GameMenuVisibility
         foreach (var (name, binding) in _bindings)
         {
             if (name is "chat" or "close_panels" || binding.Key == 0 || binding.Key != key || binding.Modifiers != modifiers) continue;
+            // The overlay map stays visible. Opening it also closes inventory and stash.
+            if (name == "open_map") { _open.Clear(); return; }
             // One full panel at a time. The same key closes it; a different panel replaces it.
             if (_open.Count == 1 && _open.Contains(name)) _open.Clear();
             else { _open.Clear(); _open.Add(name); }

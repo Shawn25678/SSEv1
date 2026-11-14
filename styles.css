@@ -4948,6 +4948,8 @@ button.roll-chip:hover {
   background: radial-gradient(circle, #100014 0 46%, #a04ad0 52%, #54186e 72%, #1c0824);
 }
 
+.price-overlay-socket-preview[hidden] { display: none !important; }
+
 .price-overlay-socket-preview.is-board {
   --socket: 28px;
   --gap: 12px;
@@ -5223,6 +5225,10 @@ button.roll-chip:hover {
   padding: 8px 4px;
 }
 
+.price-overlay-properties:not(:has(.price-overlay-sockets-column .price-overlay-q-edit)) {
+  grid-template-columns: minmax(0, 1fr) 108px;
+}
+
 .price-overlay-properties:has(.is-board) {
   align-items: start;
 }
@@ -5316,6 +5322,12 @@ button.roll-chip:hover {
   grid-area: value;
 }
 
+.price-overlay-sockets-column .is-sockets.is-blank,
+.price-overlay-sockets-column .is-links.is-blank {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "label" "board";
+}
+
 .price-overlay-sockets-column .is-sockets .price-overlay-socket-preview {
   grid-area: board;
 }
@@ -5353,6 +5365,10 @@ button.roll-chip:hover {
   grid-template-columns: minmax(0, 1fr) 64px;
   gap: 6px;
   align-items: center;
+}
+
+.price-overlay-sockets-column:has(.is-board):not(:has(.price-overlay-q-edit)) {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .price-overlay-sockets-column:has(.is-board) > .is-sockets,
@@ -5425,6 +5441,33 @@ button.roll-chip:hover {
 .is-weapon-layout .price-overlay-props > .price-overlay-prop-num { position: relative; }
 .is-weapon-layout .price-overlay-q-edit { position: relative; }
 .is-weapon-layout .price-overlay-prop-unit { position: absolute; left: calc(100% + 3px); }
+
+.price-overlay-properties.is-weapon-layout {
+  grid-template-columns: minmax(0, 1fr) max-content;
+  column-gap: 12px;
+}
+
+.is-weapon-layout .price-overlay-sockets-column:has(.is-board) {
+  grid-template-columns: max-content 3.2em;
+  width: max-content;
+}
+
+.price-overlay-properties.is-weapon-layout .price-overlay-property-column .price-overlay-prop-num,
+.price-overlay-properties.is-weapon-layout .price-overlay-property-column .price-overlay-prop-num.is-inline-value,
+.price-overlay-properties.is-weapon-layout .price-overlay-property-column .price-overlay-meta .price-overlay-prop-num.is-meta {
+  grid-template-columns: minmax(0, 1fr) 4.2em 2.8em;
+  column-gap: 8px;
+  align-items: center;
+}
+
+.price-overlay-properties.is-weapon-layout .price-overlay-property-column .price-overlay-q-toggle {
+  overflow: visible;
+}
+
+.price-overlay-properties.is-weapon-layout .price-overlay-property-column .price-overlay-q-toggle span {
+  min-width: 0;
+  white-space: nowrap;
+}
 
 .is-weapon-layout .price-overlay-props .price-overlay-q20 {
   position: static;
@@ -6547,7 +6590,10 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
 .wealth-rate { font-size: 1rem; color: var(--gold-2); font-variant-numeric: tabular-nums; }
 .wealth-chart { width: 100%; height: auto; display: block; margin-top: 8px; }
 .wealth-chart text { fill: color-mix(in srgb, var(--ink) 72%, transparent); font-size: 13px; font-family: var(--font-ui); }
-.wealth-dot { fill: var(--gold); }
+.wealth-dot { cursor: pointer; }
+.wealth-dot-hit { fill: transparent; }
+.wealth-dot-mark { fill: var(--gold); }
+.wealth-dot:hover .wealth-dot-mark { stroke: var(--gold-2); stroke-width: 2; }
 .wealth-grid line { stroke: color-mix(in srgb, var(--gold) 22%, transparent); stroke-dasharray: 2 7; }
 .wealth-area { fill: color-mix(in srgb, var(--gold) 24%, transparent); }
 .wealth-chart .wealth-line { fill: none; stroke: var(--gold); stroke-width: 2.6; stroke-linejoin: round; stroke-linecap: round; }
