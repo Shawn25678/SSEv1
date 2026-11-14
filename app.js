@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.48";
+const APP_VERSION = "1.0.49";
 
 // Cultivated/Vaal unique identities, including copies without a Vaal property line.
 // Source: https://poe2db.tw/us/Unique_item#CultivatedUniques (2026-11-12).
@@ -6299,7 +6299,6 @@ function applyUniquePick(log, drop, name) {
   drop.name = name;
   drop.uniqueId = slug(name);
   drop.uniquePicked = true;
-  drop.pickUnid = false;
   drop.quoteTried = false;
   delete drop.quote;
   if (log?.id) save();
@@ -9583,9 +9582,6 @@ function overlayUniquePickHtml(log, drop) {
       ? `<div class="price-overlay-identify"><div class="price-overlay-identify-label">Which ${esc(base)}?</div></div>`
       : "";
   }
-  if (rows.length === 1) {
-    return drop.uniquePickTried ? "" : `<div class="price-overlay-identify"><div class="price-overlay-identify-label">Which ${esc(base)}?</div></div>`;
-  }
   const btns = rows
     .map(
       (row) =>
@@ -9604,16 +9600,11 @@ function paintPriceOverlay(forceInApp = false, fresh = false) {
   const pending = inspectTarget();
   if (pending && unidentifiedUniqueNeedsPick(pending.drop)) {
     const rows = uniqueVariantsForBase(pending.drop.baseType || pending.drop.name, pending.drop.className);
-    if (rows.length === 1) {
-      pending.drop.uniqueListPending = false;
-      applyUniquePick(pending.log, pending.drop, rows[0].name);
-      return;
-    }
-    if (rows.length < 2 && !pending.drop.uniquePickTried && !pending.drop.uniqueListPending) {
+    if (!rows.length && !pending.drop.uniquePickTried && !pending.drop.uniqueListPending) {
       pending.drop.uniqueListPending = true;
       ensureUniqueVariants(pending.log, pending.drop).finally(() => {
         pending.drop.uniqueListPending = false;
-        if (uniqueVariantsForBase(pending.drop.baseType || pending.drop.name, pending.drop.className).length < 2) pending.drop.uniquePickTried = true;
+        if (!uniqueVariantsForBase(pending.drop.baseType || pending.drop.name, pending.drop.className).length) pending.drop.uniquePickTried = true;
         paintPriceOverlay(forceInApp, fresh);
       });
     }
@@ -10105,7 +10096,7 @@ async function quoteRolledDrop(log, drop, force = false) {
   if (isClipboardCurrency(drop)) { paintPriceOverlay(); return; }
   if (!window.chrome?.webview) return;
   if (drop?.uniqueListPending) return;
-  if (unidentifiedUniqueNeedsPick(drop) && uniqueVariantsForBase(drop.baseType || drop.name, drop.className).length > 1) return;
+  if (unidentifiedUniqueNeedsPick(drop) && uniqueVariantsForBase(drop.baseType || drop.name, drop.className).length) return;
   if (!drop.id) drop.id = uid();
   drop.rolls = normalizeRolls(drop.rolls, drop);
   const picked = pickedRolls(drop);
