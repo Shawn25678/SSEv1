@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.45";
+const APP_VERSION = "1.0.46";
 
 // Cultivated/Vaal unique identities, including copies without a Vaal property line.
 // Source: https://poe2db.tw/us/Unique_item#CultivatedUniques (2026-11-12).
@@ -6066,9 +6066,27 @@ function looksLikeModifierLine(line) {
   return false;
 }
 
+function isFlaskChromeLine(line) {
+  const t = String(line || "").replace(/\s+/g, " ").trim();
+  if (/^consumes\b.+\bcharges?\b/i.test(t)) return true;
+  if (/^currently has\b.+\bcharges?\b/i.test(t)) return true;
+  if (/^lasts\s+[\d.]+\s+seconds?$/i.test(t)) return true;
+  if (/^\d+(?:\.\d+)?\s+uses? remaining$/i.test(t)) return true;
+  return false;
+}
+
+function isFlaskBaseEffectLine(line) {
+  const t = String(line || "").replace(/\s+/g, " ").trim();
+  if (isFlaskChromeLine(t)) return true;
+  if (/^[\d.]+%\s+more\s+(?:armour|armor|evasion(?:\s+rating)?|energy\s+shield)$/i.test(t)) return true;
+  if (/^[\d.]+%\s+increased\s+movement\s+speed$/i.test(t)) return true;
+  return false;
+}
+
 function isItemTitleLine(line) {
   const t = cleanItemTitleLine(line);
   if (!t) return false;
+  if (isFlaskChromeLine(t)) return false;
   if (isItemJunkLine(t) || isUnidentifiedLine(t) || isCorruptedLine(t) || isRavenTouchedLine(t) || isSanctifiedLine(t)) return false;
   if (/^(mirrored|split|synthesised item|foil unique)$/i.test(t)) return false;
   if (isFracturedItemLine(t)) return false;
@@ -6214,8 +6232,19 @@ function uniqueVariantsForBase(base, className) {
     out.push({ name: n, icon: icon || lookupIcon(n) || "" });
   }
   for (const name of UNIQUE_BY_BASE[want] || []) add(name);
+  const poe1 = activeGame() === "poe1";
   const type = ninjaUniqueType(className);
-  const tables = type ? [prices.tables[type] || []] : Object.values(prices.tables || {});
+  const poe1Type = {
+    UniqueFlasks: "UniqueFlask",
+    UniqueArmours: "UniqueArmour",
+    UniqueAccessories: "UniqueAccessory",
+    UniqueWeapons: "UniqueWeapon",
+    UniqueJewels: "UniqueJewel",
+    UniqueSanctumRelics: "UniqueRelic",
+  }[type] || "";
+  const bag = poe1 ? poe1Prices : prices;
+  const tableName = poe1 ? poe1Type : type;
+  const tables = tableName ? [bag.tables?.[tableName] || []] : poe1 ? [] : Object.values(bag.tables || {});
   for (const rows of tables) {
     for (const row of rows || []) {
       if (uniqueBaseKey(row.baseType || "") === want) add(row.name, row.icon);
@@ -6663,6 +6692,7 @@ function isUsefulRoll(text, kind, extra) {
   if (/^this item can be anointed/i.test(t)) return false;
   if (/^can have up to/i.test(t)) return false;
   if (/^\d+\s+uses? remaining$/i.test(t)) return false;
+  if (/flask/i.test(String(extra?.className || "")) && isFlaskBaseEffectLine(t)) return false;
   // Charge state is not a trade filter
   if (/^consumes\b.+\bcharges?\b/i.test(t)) return false;
   if (/^currently has\b.+\bcharges?\b/i.test(t)) return false;
@@ -6757,7 +6787,7 @@ function cleanClipboardRolls(mods, ctx) {
         .replace(/\s+/g, " ")
         .trim()
     );
-    if (!isUsefulRoll(text, kind, { charm: mod?.charm, unique: mod?.unique, viscera: !!ctx?.viscera })) continue;
+    if (!isUsefulRoll(text, kind, { charm: mod?.charm, unique: mod?.unique, viscera: !!ctx?.viscera, className: ctx?.className })) continue;
     const row = keepRollMeta(mod, text, kind, slot, (ctx?.viscera || poe1VisceraItem(ctx)) && kind === "implicit" && !mod?.pickedOff);
     if (isWeaponEleFlatRoll(row, ctx)) row.pick = false;
     row.rid = ++rid;
@@ -7516,6 +7546,7 @@ function rollTierAtValue(roll, value) {
 }
 
 function canHaveRunes(drop) {
+  if (poe1VisceraItem(drop)) return false;
   if (/currency|gem|divination|charm|flask|jewel|belt|amulet|ring|waystone|tablet|relic|map/i.test(drop?.rarity || "")) return false;
   if (/currency|gem|divination|charm|flask|jewel|belt|amulet|ring|waystone|tablet|relic|map|socketable|omen/i.test(drop?.className || "")) return false;
   return true;
@@ -9491,7 +9522,8 @@ function overlayUniquePickHtml(log, drop) {
   if (!unidentifiedUniqueNeedsPick(drop)) return "";
   const base = drop.baseType || drop.name;
   const rows = uniqueVariantsForBase(base, drop.className);
-  if (rows.length <= 1) {
+  if (!rows.length) return "";
+  if (rows.length === 1) {
     return drop.uniquePickTried ? "" : `<div class="price-overlay-identify"><div class="price-overlay-identify-label">Which ${esc(base)}?</div></div>`;
   }
   const btns = rows
@@ -11777,12 +11809,12 @@ function wealthChart(points) {
     const x = anchor === "start" ? Math.max(left, tick.x) : anchor === "end" ? Math.min(w - right, tick.x) : tick.x;
     return `<text x="${x.toFixed(1)}" y="${h - 12}" text-anchor="${anchor}">${esc(wealthTickLabel(tick.at, span, step))}</text>`;
   }).join("");
-  return `<svg class="wealth-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Currency over time">
+  return `<div class="wealth-chart-wrap"><svg class="wealth-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Currency over time">
     <g class="wealth-grid">${grid}</g>
     ${area ? `<path class="wealth-area" d="${area}" />` : ""}
     ${line ? `<path class="wealth-line" d="${line}" />` : ""}
     ${marks}${axis}
-  </svg>`;
+  </svg><p class="wealth-hover" hidden></p></div>`;
 }
 
 function wealthDonut(parts) {
@@ -13999,6 +14031,15 @@ function showItemTip(anchor, name) {
 
 let tipTimer = 0;
 document.addEventListener("pointerover", (event) => {
+  const wealthDot = event.target.closest?.(".wealth-dot");
+  if (wealthDot) {
+    const hover = wealthDot.closest(".wealth-chart-wrap")?.querySelector(".wealth-hover");
+    const label = wealthDot.querySelector("title")?.textContent || "";
+    if (hover && label) {
+      hover.hidden = false;
+      hover.textContent = label;
+    }
+  }
   if (event.target.closest(".econ-row") && !event.target.closest(".econ-art")) {
     clearTimeout(tipTimer);
     hideItemTip();
@@ -14016,6 +14057,11 @@ document.addEventListener("pointerover", (event) => {
   tipTimer = setTimeout(() => showItemTip(el, name), 160);
 });
 document.addEventListener("pointerout", (event) => {
+  const wealthDot = event.target.closest?.(".wealth-dot");
+  if (wealthDot && !(event.relatedTarget && wealthDot.contains(event.relatedTarget))) {
+    const hover = wealthDot.closest(".wealth-chart-wrap")?.querySelector(".wealth-hover");
+    if (hover) hover.hidden = true;
+  }
   const el = event.target.closest("[data-tip]");
   if (!el) return;
   if (event.relatedTarget && el.contains(event.relatedTarget)) return;
