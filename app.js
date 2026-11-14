@@ -112,6 +112,17 @@ const prices = {
   gapDone: 0,
   gapTotal: 0,
 };
+const poe1Prices = {
+  status: "idle",
+  error: "",
+  league: "",
+  fetchedAt: 0,
+  primary: "divine",
+  exaltedPerDivine: 0,
+  chaosPerDivine: 0,
+  tables: {},
+  history: {},
+};
 
 const NINJA_EXCHANGE = [
   "Currency",
@@ -165,6 +176,117 @@ const NINJA_ITEMS = [
   "UniqueTablets",
   "PrecursorTablets",
 ];
+const POE1_EXCHANGE = [
+  "Currency",
+  "Fragment",
+  "Runegraft",
+  "AllflameEmber",
+  "Tattoo",
+  "Omen",
+  "DjinnCoin",
+  "Ducat",
+  "EnshroudingCrystal",
+  "DivinationCard",
+  "Artifact",
+  "Oil",
+  "DeliriumOrb",
+  "Scarab",
+  "Astrolabe",
+  "Fossil",
+  "Resonator",
+  "Essence",
+];
+const POE1_ITEMS = [
+  "Wombgift",
+  "Corpse",
+  "Incubator",
+  "UniqueWeapon",
+  "UniqueArmour",
+  "UniqueAccessory",
+  "UniqueFlask",
+  "UniqueJewel",
+  "ForbiddenJewel",
+  "ShrineBelt",
+  "UniqueTincture",
+  "UniqueRelic",
+  "SkillGem",
+  "ImbuedGem",
+  "ClusterJewel",
+  "Map",
+  "BlightedMap",
+  "BlightRavagedMap",
+  "UniqueMap",
+  "ValdoMap",
+  "Invitation",
+  "Memory",
+  "IncursionTemple",
+  "ScryingOrb",
+  "BaseType",
+  "Flask",
+  "Beast",
+  "Vial",
+];
+const POE1_LABELS = {
+  Currency: "Currency",
+  Fragment: "Fragments",
+  Runegraft: "Runegrafts",
+  AllflameEmber: "Allflame embers",
+  Tattoo: "Tattoos",
+  Omen: "Omens",
+  DjinnCoin: "Djinn coins",
+  Ducat: "Ducats",
+  EnshroudingCrystal: "Enshrouding crystals",
+  DivinationCard: "Divination cards",
+  Artifact: "Artifacts",
+  Oil: "Oils",
+  DeliriumOrb: "Delirium orbs",
+  Scarab: "Scarabs",
+  Astrolabe: "Astrolabes",
+  Fossil: "Fossils",
+  Resonator: "Resonators",
+  Essence: "Essences",
+  Wombgift: "Wombgifts",
+  Corpse: "Corpses",
+  Incubator: "Incubators",
+  UniqueWeapon: "Unique weapons",
+  UniqueArmour: "Unique armour",
+  UniqueAccessory: "Unique accessories",
+  UniqueFlask: "Unique flasks",
+  UniqueJewel: "Unique jewels",
+  ForbiddenJewel: "Forbidden jewels",
+  ShrineBelt: "Shrine belts",
+  UniqueTincture: "Unique tinctures",
+  UniqueRelic: "Unique relics",
+  SkillGem: "Skill gems",
+  ImbuedGem: "Imbued gems",
+  ClusterJewel: "Cluster jewels",
+  Map: "Maps",
+  BlightedMap: "Blighted maps",
+  BlightRavagedMap: "Blight-ravaged maps",
+  UniqueMap: "Unique maps",
+  ValdoMap: "Valdo maps",
+  Invitation: "Invitations",
+  Memory: "Memories",
+  IncursionTemple: "Temples",
+  ScryingOrb: "Scrying orbs",
+  BaseType: "Base types",
+  Flask: "Flasks",
+  Beast: "Beasts",
+  Vial: "Vials",
+};
+function poe1GuideSections() {
+  return [{
+    title: "Tools & Wikis",
+    items: [
+      { title: "PoE Wiki", note: "Game mechanics and guides.", url: "https://www.poewiki.net/wiki/Path_of_Exile_Wiki" },
+      { title: "PoEDB", note: "Items and modifiers.", url: "https://poedb.tw/us/" },
+      { title: "PoE Regex", note: "Create item search filters.", url: "https://poe.re/" },
+      { title: "Craft of Exile", note: "Plan your crafting.", url: "https://beta.craftofexile.com/?game=poe1" },
+    ],
+  }];
+}
+let poe2LeagueList = [];
+let poe1LeagueList = [];
 const UNIQUE_BY_BASE = {
   "amber amulet": ["Carnage Heart", "Revered Resin", "Xoph's Blood"],
   "amethyst ring": ["Blackflame", "Ming's Heart", "Original Sin", "Veilpiercer"],
@@ -560,7 +682,7 @@ function rankIconHtml(rankId, className = "rank-icon", alt = "", tier = null) {
     tier != null && Number.isFinite(tier) ? ` data-tier="${Math.max(0, Math.floor(tier))}"` : "";
   const elAttr = elemental ? ` data-element="${esc(elemental.element)}"` : "";
   const hideClass = elemental ? ` ${className} is-elemental-base` : className;
-  return `<img class="${esc(hideClass.trim())}" src="${esc(src)}" alt="${esc(alt)}" width="${w}" height="${h}"${rankAttr}${tierAttr}${elAttr} loading="lazy" />`;
+  return `<img class="${esc(hideClass.trim())}" src="${esc(src)}" alt="${esc(alt)}" width="${w}" height="${h}"${rankAttr}${tierAttr}${elAttr} decoding="async" />`;
 }
 
 let rankLiveRaf = 0;
@@ -612,14 +734,18 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
   const fx = document.createElement("canvas");
   const fxCtx = fx.getContext("2d", { alpha: true });
 
+  let fitW = 0;
+  let fitH = 0;
   const fit = () => {
+    const w = stage.clientWidth;
+    const h = stage.clientHeight;
+    if (w < 2 || h < 2) return false;
+    if (w === fitW && h === fitH) return true;
     const dpr = Math.min(dprCap, window.devicePixelRatio || 1);
-    const w = stage.clientWidth || 200;
-    const h = stage.clientHeight || 168;
     canvas.width = Math.max(1, Math.floor(w * dpr));
     canvas.height = Math.max(1, Math.floor(h * dpr));
-    canvas.style.width = w + "px";
-    canvas.style.height = h + "px";
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = smoothQ;
@@ -628,8 +754,10 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
     fxCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     fxCtx.imageSmoothingEnabled = true;
     fxCtx.imageSmoothingQuality = smoothQ;
+    fitW = w;
+    fitH = h;
+    return true;
   };
-  fit();
 
   const gemN = Math.max(3, Math.round((5 + (pwr - 1) * 4) * gemScale));
   const gemPieces = Array.from({ length: gemN }, (_, i) => {
@@ -719,20 +847,23 @@ function mountRankLiveIce(stage, canvas, baseImg, power = 1, rankId = "") {
   let lastDraw = 0;
   let tAccum = 0;
   rankLiveAlive = true;
+  fit();
   const rid = String(rankId || "");
 
   const tick = (now) => {
     if (!rankLiveAlive) return;
     rankLiveRaf = requestAnimationFrame(tick);
     if (document.hidden) return;
-    if (!stage.isConnected || stage.offsetParent === null) return;
+    if (!stage.isConnected) return;
+    if (!fit()) return;
+    if (!(baseImg && baseImg.complete && baseImg.naturalWidth)) return;
     if (now - lastDraw < FRAME_MS - 0.5) return;
     const prev = lastDraw || now;
     lastDraw = now;
     tAccum += Math.min(0.05, (now - prev) / 1000);
     const t = tAccum;
-    const w = stage.clientWidth || 200;
-    const h = stage.clientHeight || 168;
+    const w = fitW;
+    const h = fitH;
     const breath = 0.5 + 0.5 * Math.sin(t * 1.05);
     const pulse = 0.5 + 0.5 * Math.sin(t * 1.7);
     const prism = rid === "prismatic";
@@ -1471,13 +1602,25 @@ function mountRankFx() {
   const element = stage.dataset.element || img.dataset.element;
   if (element === "ice") {
     const conf = RANK_ELEMENTAL[stage.dataset.rank] || RANK_ELEMENTAL[img.dataset.rank] || {};
+    let started = false;
     const start = () => {
       // An older image may finish loading after a new dashboard replaces it.
+      if (started || !img.naturalWidth) return;
       if (!stage.isConnected || document.querySelector(".rank-stat .rank-icon-stage") !== stage) return;
+      started = true;
       mountRankLiveIce(stage, canvas, img, conf.power || 1, stage.dataset.rank || img.dataset.rank || "");
     };
-    if (img.complete && img.naturalWidth) start();
-    else img.addEventListener("load", start, { once: true });
+    img.addEventListener("load", start, { once: true });
+    if (typeof img.decode === "function") img.decode().then(start).catch(() => {});
+    start();
+    // A lazy image can sit at complete with no pixels and never fire load.
+    if (!started && img.complete && !img.naturalWidth) {
+      const src = img.getAttribute("src");
+      if (src) {
+        img.removeAttribute("src");
+        img.src = src;
+      }
+    }
     return;
   }
 }
@@ -1789,11 +1932,13 @@ function tradeFetch(name, league, bust = false, thorough = false, extra = {}) {
       unidentifiedTier: Number.isInteger(extra.unidentifiedTier) && extra.unidentifiedTier > 0 ? extra.unidentifiedTier : undefined,
       ravenTouched: extra.ravenTouched === true,
       runeSockets: Number.isInteger(extra.runeSockets) ? extra.runeSockets : undefined,
+      links: Number.isInteger(extra.links) ? extra.links : undefined,
       exchange: extra.exchange === true,
       have: extra.have || "",
+      game: extra.game === "poe1" ? "poe1" : "poe2",
     },
     extra.rolls?.length || filters.length ? 90000 : 45000,
-    "PoE 2 trade timed out"
+    extra.game === "poe1" ? "PoE 1 trade timed out" : "PoE 2 trade timed out"
   );
 }
 
@@ -2956,8 +3101,34 @@ if (window.chrome?.webview) {
       handleAppHotkey(msg);
       return;
     }
+    if (msg?.type === "active-game" && (msg.game === "poe1" || msg.game === "poe2") && state.activeGame !== msg.game) {
+      state.activeGame = msg.game;
+      ui.wealth = null;
+      ui.econChart = null;
+      try { save(); } catch { /* the switch still applies */ }
+      publishWealthLive();
+      render();
+      if (msg.game === "poe1") loadPoe1Leagues();
+      return;
+    }
     if (msg?.type === "overlay-click") {
       handleOverlayClick(msg);
+      return;
+    }
+    if (msg?.type === "wealth-auto-status") {
+      if (activeGame() === "poe2" && !msg.active && state.wealthAuto?.[leagueId()]?.enabled) {
+        wealthDraft().message = "Automatic capture could not start. Mark the Currency tab again.";
+        repaintWealth();
+      }
+      return;
+    }
+    if (msg?.type === "wealth-hotkey") {
+      ui.wealthHotkey = msg.available;
+      repaintWealth();
+      return;
+    }
+    if (msg?.type === "wealth-capture") {
+      acceptWealthCapture(msg);
       return;
     }
     if (msg?.type === "trade-preview-error") {
@@ -3862,8 +4033,12 @@ function allConvertUnits() {
   return ["divine", "exalted", "chaos"];
 }
 
+function activeRates() {
+  return activeGame() === "poe1" ? poe1Prices : prices;
+}
+
 function convertUnits() {
-  return allConvertUnits().filter((unit) => unit !== "chaos" || prices.chaosPerDivine);
+  return allConvertUnits().filter((unit) => unit !== "chaos" || activeRates().chaosPerDivine);
 }
 
 function nextConvertUnit(unit, step = 1) {
@@ -3892,17 +4067,19 @@ function setConvertMain(unit) {
 
 function amountInDivine(amount, unit) {
   if (!Number.isFinite(amount)) return NaN;
+  const rates = activeRates();
   if (!unit || unit === "divine" || unit === "d") return amount;
-  if (unit === "exalted" || unit === "ex") return prices.exaltedPerDivine ? amount / prices.exaltedPerDivine : NaN;
-  if (unit === "chaos" || unit === "c") return prices.chaosPerDivine ? amount / prices.chaosPerDivine : NaN;
+  if (unit === "exalted" || unit === "ex") return rates.exaltedPerDivine ? amount / rates.exaltedPerDivine : NaN;
+  if (unit === "chaos" || unit === "c") return rates.chaosPerDivine ? amount / rates.chaosPerDivine : NaN;
   return amount;
 }
 
 function amountFromDivine(divine, unit) {
   if (!Number.isFinite(divine)) return NaN;
+  const rates = activeRates();
   if (!unit || unit === "divine" || unit === "d") return divine;
-  if (unit === "exalted" || unit === "ex") return prices.exaltedPerDivine ? divine * prices.exaltedPerDivine : NaN;
-  if (unit === "chaos" || unit === "c") return prices.chaosPerDivine ? divine * prices.chaosPerDivine : NaN;
+  if (unit === "exalted" || unit === "ex") return rates.exaltedPerDivine ? divine * rates.exaltedPerDivine : NaN;
+  if (unit === "chaos" || unit === "c") return rates.chaosPerDivine ? divine * rates.chaosPerDivine : NaN;
   return divine;
 }
 
@@ -3941,10 +4118,11 @@ function priceDisplay(divine) {
     }
   }
   if (!Number.isFinite(amount)) {
-    if (unit !== "exalted" && prices.exaltedPerDivine) {
+    const rates = activeRates();
+    if (unit !== "exalted" && rates.exaltedPerDivine) {
       unit = "exalted";
       amount = amountFromDivine(divine, "exalted");
-    } else if (unit !== "chaos" && prices.chaosPerDivine) {
+    } else if (unit !== "chaos" && rates.chaosPerDivine) {
       unit = "chaos";
       amount = amountFromDivine(divine, "chaos");
     } else {
@@ -3986,7 +4164,8 @@ function itemIconHtml(name, size = "", slot = false) {
   const cls = "item-icon" + (size ? " " + size : "");
   if (!src) return size === "lg" || slot ? `<span class="${cls} missing" aria-hidden="true"></span>` : "";
   const fail = slot ? "this.classList.add('missing')" : "this.remove()";
-  return `<img class="${cls}" src="${esc(src)}" alt="" draggable="false" onerror="${fail}" />`;
+  const lazy = size === "lg" ? "" : ` loading="lazy" decoding="async"`;
+  return `<img class="${cls}" src="${esc(src)}" alt="" draggable="false"${lazy} onerror="${fail}" />`;
 }
 
 function itemNameHtml(name, size) {
@@ -4075,7 +4254,7 @@ function paintLivePrices() {
     if (el.outerHTML !== html) el.outerHTML = html;
   }
   paintPriceClock();
-  const n = Math.round(Number(prices.exaltedPerDivine) || 0);
+  const n = Math.round(Number(activeRates().exaltedPerDivine) || 0);
   if (ui.inspect && n !== overlayRateShown) paintPriceOverlay();
 }
 
@@ -4114,8 +4293,11 @@ function totalLootValue(logs = state.logs) {
 
 function leagueId() {
   if (state.league) return String(state.league).trim();
-  const fromSelect = document.getElementById("league-input")?.value?.trim();
-  if (fromSelect) return fromSelect;
+  const select = document.getElementById("league-input");
+  if (select && !String(select.dataset.leagueSig || "").startsWith("1:")) {
+    const fromSelect = select.value?.trim();
+    if (fromSelect) return fromSelect;
+  }
   return "Forbidden Rites";
 }
 
@@ -4126,13 +4308,69 @@ function leagueName() {
   return leagueId() || "Forbidden Rites";
 }
 
+function econPrices() {
+  return activeGame() === "poe1" ? poe1Prices : prices;
+}
+
+function econLeagueName() {
+  if (activeGame() === "poe1") {
+    const named = String(state.poe1League || "").trim();
+    return named || "Standard";
+  }
+  return leagueId();
+}
+
+function econItemTypes() {
+  return activeGame() === "poe1" ? POE1_ITEMS : NINJA_ITEMS;
+}
+
+function econTypeLabel(type) {
+  if (activeGame() === "poe1" && POE1_LABELS[type]) return POE1_LABELS[type];
+  return NINJA_LABELS[type] || type;
+}
+
+function divineWithRates(value, primary, exaltedPerDivine, chaosPerDivine) {
+  if (!Number.isFinite(value)) return NaN;
+  const unit = tradeUnit(primary);
+  if (!unit || unit === "divine") return value;
+  if (unit === "exalted") return exaltedPerDivine ? value / exaltedPerDivine : NaN;
+  if (unit === "chaos") return chaosPerDivine ? value / chaosPerDivine : NaN;
+  return NaN;
+}
+
+function syncLeagueChooser() {
+  const select = document.getElementById("league-input");
+  if (!select) return;
+  const poe1 = ui.view !== "dash" && activeGame() === "poe1";
+  const list = poe1 ? poe1LeagueList : poe2LeagueList;
+  const current = poe1 ? econLeagueName() : leagueId();
+  if (list.length) {
+    const sig = (poe1 ? "1:" : "2:") + list.map((league) => league.id).join("|");
+    if (select.dataset.leagueSig !== sig) {
+      select.dataset.leagueSig = sig;
+      select.innerHTML = list
+        .map((league) => `<option value="${esc(league.id)}">${esc(league.name || league.id)}</option>`)
+        .join("");
+    }
+  } else if (poe1 && select.dataset.leagueSig !== "1:Standard") {
+    select.dataset.leagueSig = "1:Standard";
+    select.innerHTML = `<option value="Standard">Standard</option>`;
+  } else if (!poe1 && String(select.dataset.leagueSig || "").startsWith("1:")) {
+    const id = leagueId();
+    select.dataset.leagueSig = "2:" + id;
+    select.innerHTML = `<option value="${esc(id)}">${esc(id)}</option>`;
+  }
+  if ([...select.options].some((opt) => opt.value === current)) select.value = current;
+}
+
 let overlayRateShown = 0;
 let overlayRateOpen = false;
 
 function overlayRateCardHtml() {
-  if (prices.status !== "ready" || !prices.exaltedPerDivine) {
+  const rates = activeRates();
+  if (!(rates.exaltedPerDivine > 0) && !(rates.chaosPerDivine > 0)) {
     return `<div class="price-overlay-rate-card"><p class="muted">${
-      prices.status === "loading" ? "Checking prices…" : "Check prices in the header to fill conversions."
+      rates.status === "loading" ? "Checking prices…" : "Check prices in the header to fill conversions."
     }</p></div>`;
   }
   const cols = allConvertUnits();
@@ -4148,7 +4386,7 @@ function overlayRateCardHtml() {
 }
 
 function overlayBarHtml(showTradeRate = false, preview = false) {
-  const n = Math.round(Number(prices.exaltedPerDivine) || 0);
+  const n = Math.round(Number(activeRates().exaltedPerDivine) || 0);
   overlayRateShown = n;
   const title = n > 0 ? "1 divine → " + n + " exalted" : "Conversions";
   const rate = `<span class="price-overlay-rate-wrap"><button type="button" class="price-overlay-rate${n > 0 ? "" : " is-empty"}" data-overlay-rate title="${esc(title)}" aria-label="${esc(title)}">${itemIconHtml("Divine Orb", "xs")}<span>1</span><svg class="price-overlay-swap" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 5h9.6L9.8 3.2 11 2l4 4-4 4-1.2-1.2L11.6 7H2V5zm12 6H4.4l1.8 1.8L5 14l-4-4 4-4 1.2 1.2L4.4 9H14v2z"/></svg><span>${n > 0 ? n : "—"}</span>${itemIconHtml("Exalted Orb", "xs")}</button>${overlayRateCardHtml()}</span>`;
@@ -4722,8 +4960,9 @@ function paintPriceClock() {
   }
   const live = document.getElementById("econ-live");
   if (live) {
-    const label = prices.status === "loading" ? "Updating prices" : prices.error ? "Price update failed. Click to retry." : "Prices update hourly. Click to refresh.";
-    live.classList.toggle("is-error", !!prices.error && prices.status !== "loading");
+    const liveBag = ui.view === "econ" && activeGame() === "poe1" ? poe1Prices : prices;
+    const label = liveBag.status === "loading" ? "Updating prices" : liveBag.error ? "Price update failed. Click to retry." : "Prices update hourly. Click to refresh.";
+    live.classList.toggle("is-error", !!liveBag.error && liveBag.status !== "loading");
     live.parentElement.title = label;
     live.parentElement.setAttribute("aria-label", label);
   }
@@ -4834,6 +5073,122 @@ async function refreshPrices(force = false) {
   }
   paintPriceClock();
   render();
+}
+
+function takePoe1Lines(data, type, items) {
+  const bag = poe1Prices;
+  const rates = data?.core?.rates || {};
+  if (type === "Currency" && data?.core?.primary) {
+    bag.primary = data.core.primary;
+    if (bag.primary === "chaos" && rates.divine > 0 && rates.divine < 1) bag.chaosPerDivine = 1 / rates.divine;
+    else if (rates.chaos > 0) bag.chaosPerDivine = rates.chaos;
+    if (rates.exalted > 0) bag.exaltedPerDivine = rates.exalted;
+  }
+  const names = new Map();
+  for (const item of [...(data?.core?.items || []), ...(data?.items || [])]) {
+    if (!item?.name) continue;
+    const meta = { name: item.name, icon: ninjaIcon(item.image || item.icon) };
+    if (item.id != null) names.set(String(item.id), meta);
+    if (item.detailsId) names.set(String(item.detailsId), meta);
+  }
+  const rows = [];
+  for (const line of data?.lines || []) {
+    const named = names.get(String(line?.id)) || names.get(String(line?.detailsId || ""));
+    const name = line?.name || line?.currencyTypeName || named?.name || "";
+    if (!name) continue;
+    let amount = Number(line.primaryValue);
+    let unit = data?.core?.primary || "";
+    let divine = NaN;
+    if (!Number.isFinite(amount)) {
+      const asDivine = Number(line.divineValue);
+      if (Number.isFinite(asDivine)) {
+        amount = asDivine;
+        unit = "divine";
+        divine = asDivine;
+      } else amount = Number(line.chaosValue ?? line.exaltedValue);
+    }
+    if (!unit) unit = items ? "chaos" : "divine";
+    if (!Number.isFinite(divine)) divine = divineWithRates(amount, unit, bag.exaltedPerDivine, bag.chaosPerDivine);
+    const icon = ninjaIcon(line.icon || line.image) || named?.icon || "";
+    rows.push({
+      name,
+      divine,
+      amount,
+      unit,
+      listings: line.listingCount || 0,
+      links: Number(line.links) > 0 ? Number(line.links) : 0,
+      icon,
+      baseType: line.baseType || "",
+      corrupted: !!line.corrupted,
+      spark: sparkFromLine(line),
+      ninjaId: line.id,
+      kind: items ? "item" : "exchange",
+      type,
+    });
+    if (!items && icon) rememberIcon(name, line.image || line.icon || icon);
+  }
+  if (type === "Currency" && !(bag.exaltedPerDivine > 0) && bag.chaosPerDivine > 0) {
+    const exalt = rows.find((row) => /^exalted orb$/i.test(row.name));
+    if (exalt && exalt.unit === "chaos" && exalt.amount > 0) bag.exaltedPerDivine = bag.chaosPerDivine / exalt.amount;
+  }
+  bag.tables[type] = rows;
+}
+
+async function refreshPoe1Prices(force = false) {
+  if (poe1Prices.status === "loading") {
+    if (force) showToast("Already checking poe.ninja prices.");
+    return;
+  }
+  const league = econLeagueName();
+  poe1Prices.status = "loading";
+  poe1Prices.error = "";
+  paintPriceClock();
+  try {
+    const q = encodeURIComponent(league);
+    const currency = await ninjaFetch(`/poe1/api/economy/exchange/current/overview?league=${q}&type=Currency`, true);
+    poe1Prices.tables = {};
+    poe1Prices.history = {};
+    poe1Prices.primary = "divine";
+    poe1Prices.exaltedPerDivine = 0;
+    poe1Prices.chaosPerDivine = 0;
+    takePoe1Lines(currency, "Currency", false);
+    if (!poe1Prices.tables.Currency?.length) throw new Error("No poe.ninja prices returned");
+    poe1Prices.league = league;
+    poe1Prices.fetchedAt = Date.now();
+    paintPriceClock();
+    if (ui.view === "econ") render();
+    const rest = await Promise.all([
+      ...POE1_EXCHANGE.filter((type) => type !== "Currency").map((type) =>
+        ninjaFetch(`/poe1/api/economy/exchange/current/overview?league=${q}&type=${type}`, true)
+          .then((data) => ({ type, data }))
+          .catch(() => null)
+      ),
+      ...POE1_ITEMS.map((type) =>
+        ninjaFetch(`/poe1/api/economy/stash/current/item/overview?league=${q}&type=${type}`, true)
+          .then((data) => ({ type, data, items: true }))
+          .catch(() => null)
+      ),
+    ]);
+    rest.filter(Boolean).forEach((pack) => {
+      if (!pack.data) return;
+      takePoe1Lines(pack.data, pack.type, !!pack.items);
+    });
+    poe1Prices.status = "ready";
+  } catch (err) {
+    poe1Prices.error = err.message || "Could not reach poe.ninja";
+    poe1Prices.status = Object.keys(poe1Prices.tables).length ? "ready" : "error";
+  }
+  paintPriceClock();
+  if (ui.view === "econ") render();
+}
+
+function maybeRefreshPoe1() {
+  if (activeGame() !== "poe1" || ui.view !== "econ") return;
+  if (poe1Prices.status === "loading" || poe1Prices.status === "error") return;
+  const league = econLeagueName();
+  const ready = poe1Prices.league === league && poe1Prices.fetchedAt && hourStamp(poe1Prices.fetchedAt) >= hourStamp() && Object.keys(poe1Prices.tables).length;
+  if (ready) return;
+  refreshPoe1Prices(false);
 }
 
 function pricesHaveBeenSeeded() {
@@ -5073,19 +5428,33 @@ async function lookupOnePrice(name) {
 async function loadLeagues() {
   try {
     const leagues = await ninjaFetch("/poe2/api/economy/leagues");
-    const select = document.getElementById("league-input");
-    if (!select || !Array.isArray(leagues) || !leagues.length) return;
-    const ids = leagues.map((league) => league.id);
+    if (!Array.isArray(leagues) || !leagues.length) return;
+    poe2LeagueList = leagues.map((league) => ({ id: league.id, name: league.name || league.id }));
+    const ids = poe2LeagueList.map((league) => league.id);
     if (!state.league || !ids.includes(state.league)) {
-      state.league = leagues[0].id;
+      state.league = ids[0];
       save();
+      syncWealthAuto();
     }
-    const current = leagueId();
-    select.innerHTML = leagues
-      .map((league) => `<option value="${esc(league.id)}" ${league.id === current ? "selected" : ""}>${esc(league.name)}</option>`)
-      .join("");
+    syncLeagueChooser();
   } catch {
     /* keep the hardcoded option */
+  }
+}
+
+async function loadPoe1Leagues() {
+  try {
+    const leagues = await ninjaFetch("/poe1/api/economy/leagues");
+    if (!Array.isArray(leagues) || !leagues.length) return;
+    poe1LeagueList = leagues.map((league) => ({ id: league.id || league.name, name: league.name || league.id }));
+    const ids = poe1LeagueList.map((league) => league.id);
+    if (!state.poe1League || !ids.includes(state.poe1League)) {
+      state.poe1League = ids.find((id) => !/hardcore/i.test(id)) || ids[0];
+      save();
+    }
+    syncLeagueChooser();
+  } catch {
+    /* keep Standard */
   }
 }
 
@@ -5469,10 +5838,13 @@ function isFlavourLine(raw) {
   if (!t) return false;
   if (/[.!?]/.test(t) && !/[\d%]/.test(t)) return true;
   if (/[\d%+]/.test(t) || /^allocates /i.test(t) || /^grants skill/i.test(t)) return false;
-  if (/^(you|your|gain|grants|adds|cannot|always|enemies|allies|magic utility|socketed|hits against|culling)\b/i.test(t)) {
+  if (/^(you|your|gain|grants|adds|cannot|always|enemies|allies|magic utility|socketed|hits against|culling|has|while|during|skills?|attacks?)\b/i.test(t)) {
     return false;
   }
-  return /^(the|a |an |once |when |in |from |they |there )/i.test(t) && t.length >= 20;
+  if (/\b(damage|resistance|attack|spell|life|mana|energy shield|armour|armor|evasion|projectile|chance|critical|speed|socket|gem|flask|charge|curse|aura|minion|totem|trap|mine|brand|skill|level|radius|duration|cooldown|leech|regeneration|block|accuracy|strength|dexterity|intelligence|fire|cold|lightning|chaos|physical|elemental)\b/i.test(t)) {
+    return false;
+  }
+  return t.split(/\s+/).length >= 5;
 }
 
 function foldItemFlagLine(line) {
@@ -5739,15 +6111,33 @@ function parsePoeItem(text) {
   const useHit = raw.match(/(\d+)\s+uses? remaining/i);
   const usesRemaining = useHit ? Math.max(0, Number(String(useHit[1]).replace(/,/g, "")) || 0) : 0;
   const runeMods = mods.filter((mod) => canonicalRollKind(mod.kind) === "rune").length;
-  let runeSockets = 0;
-  const sock = raw.match(/^Sockets:\s*(.+)$/im);
-  if (sock) runeSockets = (sock[1].match(/S/gi) || []).length;
-  runeSockets = Math.max(runeSockets, runeMods);
+  const sockets = readSocketLine(raw);
+  const runeSockets = Math.max(sockets.count, runeMods);
   const charmHit = raw.match(/^Charm Slots:\s*(\d+)/im);
   const charmSlots = charmHit ? Math.max(0, Number(charmHit[1]) || 0) : 0;
   const isCorrupted = corrupted || mods.some((mod) => canonicalRollKind(mod.kind) === "corrupt");
   const desecrated = mods.some((mod) => mod.desecrated) || /^\s*(?:Unrevealed )?Desecrated (?:Modifier|Item)\s*$/im.test(raw);
-  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, mirrored, sanctified, foil, vaalUnique, desecrated, unidentified, unidentifiedTier, ravenTouched, fractured, mods, usesRemaining, runeSockets, charmSlots, props };
+  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, mirrored, sanctified, foil, vaalUnique, desecrated, unidentified, unidentifiedTier, ravenTouched, fractured, mods, usesRemaining, runeSockets, links: sockets.links, socketColors: sockets.colors, charmSlots, props };
+}
+
+function readSocketLine(raw) {
+  const sock = String(raw || "").match(/^Sockets:\s*(.+)$/im);
+  if (!sock) return { count: 0, links: 0, colors: [] };
+  const groups = sock[1].trim().split(/\s+/).filter(Boolean);
+  const colors = [];
+  let links = 0;
+  for (const group of groups) {
+    const parts = group.split("-").map((part) => part.trim()).filter(Boolean);
+    if (parts.length > links) links = parts.length;
+    for (const part of parts) colors.push(String(part[0] || "S").toUpperCase());
+  }
+  if (!colors.length) return { count: 0, links: 0, colors: [] };
+  return { count: Math.min(6, colors.length), links: Math.min(6, links), colors: colors.slice(0, 6) };
+}
+
+function socketColorClass(color) {
+  const c = String(color || "S").toUpperCase();
+  return "RGBWAS".includes(c) ? c : "S";
 }
 
 function canonicalRollKind(kind) {
@@ -5779,23 +6169,24 @@ function parseModInfoLine(rawLine) {
   const tierHit = inner.match(/\(tier:\s*(\d+)\)/i);
   const tier = tierHit ? Number(tierHit[1]) || 0 : 0;
   const fractured = /\bfractured\b/i.test(inner);
-  if (/corruption enhancement/i.test(inner) || /corrupted implicit/i.test(inner)) return { kind: "corrupt", slot: "", tier, unique: false, fractured };
-  if (/\bprefix modifier\b/i.test(inner) || /^prefix\b/i.test(inner)) return { kind: "explicit", slot: "prefix", tier, unique: false, fractured };
-  if (/\bsuffix modifier\b/i.test(inner) || /^suffix\b/i.test(inner)) return { kind: "explicit", slot: "suffix", tier, unique: false, fractured };
+  const crafted = /\bcrafted\b/i.test(inner);
+  if (/corruption enhancement/i.test(inner) || /corrupted implicit/i.test(inner)) return { kind: "corrupt", slot: "", tier, unique: false, fractured, crafted };
+  if (/\bprefix modifier\b/i.test(inner) || /^prefix\b/i.test(inner)) return { kind: "explicit", slot: "prefix", tier, unique: false, fractured, crafted };
+  if (/\bsuffix modifier\b/i.test(inner) || /^suffix\b/i.test(inner)) return { kind: "explicit", slot: "suffix", tier, unique: false, fractured, crafted };
   if (
     /\benchant modifier\b/i.test(inner) ||
     /^enchant\b/i.test(inner) ||
     /^enhancement\b/i.test(inner)
   ) {
-    return { kind: "enchant", slot: "", tier, unique: false, fractured };
+    return { kind: "enchant", slot: "", tier, unique: false, fractured, crafted };
   }
-  if (/\bimplicit modifier\b/i.test(inner) || /^implicit\b/i.test(inner)) return { kind: "implicit", slot: "", tier, unique: false, fractured };
+  if (/\bimplicit modifier\b/i.test(inner) || /^implicit\b/i.test(inner)) return { kind: "implicit", slot: "", tier, unique: false, fractured, crafted };
   if (/\b(?:added )?augment modifier\b/i.test(inner) || /\brune modifier\b/i.test(inner) || /^(?:rune|augment|added augment)\b/i.test(inner)) {
-    return { kind: "rune", slot: "", tier, unique: false, fractured };
+    return { kind: "rune", slot: "", tier, unique: false, fractured, crafted };
   }
-  if (/\b(?:vaal )?unique modifier\b/i.test(inner)) return { kind: "explicit", slot: "", tier: 0, unique: true, fractured };
-  if (/\bexplicit modifier\b/i.test(inner) || /^explicit\b/i.test(inner)) return { kind: "explicit", slot: "", tier, unique: false, fractured };
-  return { kind: "explicit", slot: "", tier, unique: false, fractured };
+  if (/\b(?:vaal )?unique modifier\b/i.test(inner)) return { kind: "explicit", slot: "", tier: 0, unique: true, fractured, crafted };
+  if (/\bexplicit modifier\b/i.test(inner) || /^explicit\b/i.test(inner)) return { kind: "explicit", slot: "", tier, unique: false, fractured, crafted };
+  return { kind: "explicit", slot: "", tier, unique: false, fractured, crafted };
 }
 
 function kindFromLineTag(rawLine) {
@@ -5824,6 +6215,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
     let sectionUnique = false;
     let sectionFractured = false;
     let sectionDesecrated = false;
+    let sectionCrafted = false;
     let headerAffix = 0;
     let sawHeader = false;
     const collected = [];
@@ -5835,6 +6227,25 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       if (itemBase && namesMatch(rawLine, itemBase)) continue;
       if (/^\{/.test(rawLine)) {
         if (isRavenTouchedLine(rawLine) || /raven-?touched/i.test(rawLine)) ravenTouched = true;
+        const header = /\bmodifier\b/i.test(rawLine);
+        const taggedBody = rawLine.replace(/\{[^}]*\}/g, " ").replace(/\s+/g, " ").trim();
+        if (!header && taggedBody && /[\d%]/.test(taggedBody)) {
+          const crafted = /\{crafted\}/i.test(rawLine) || /\(crafted\)/i.test(rawLine) || sectionCrafted;
+          collected.push({
+            text: parseAffixStrings(taggedBody).replace(/\s*\(desecrated\)/gi, "").replace(/\s*\(crafted\)/gi, ""),
+            kind: sectionKind,
+            slot: sectionSlot,
+            affix: sawHeader ? headerAffix : 0,
+            tier: sawHeader ? sectionTier : 0,
+            unique: sawHeader ? sectionUnique : false,
+            fractured: lineHasFracturedTag(rawLine) || (sawHeader && sectionFractured),
+            desecrated: /\(desecrated\)/i.test(rawLine) || (sawHeader && sectionDesecrated),
+            crafted,
+            charm,
+          });
+          if (crafted) sectionCrafted = true;
+          continue;
+        }
         const info = parseModInfoLine(rawLine);
         sectionKind = info.kind;
         sectionSlot = info.slot;
@@ -5842,6 +6253,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         sectionUnique = !!info.unique;
         sectionFractured = !!info.fractured;
         sectionDesecrated = /\bdesecrated\b/i.test(rawLine);
+        sectionCrafted = !!info.crafted;
         if (sectionFractured) itemFractured = true;
         affix += 1;
         headerAffix = affix;
@@ -5873,7 +6285,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       const fractured = lineHasFracturedTag(rawLine) || (sawHeader && sectionFractured);
       if (fractured) itemFractured = true;
       collected.push({
-        text: parseAffixStrings(rawLine).replace(/\s*\(desecrated\)/gi, ""),
+        text: parseAffixStrings(rawLine).replace(/\s*\(desecrated\)/gi, "").replace(/\s*\(crafted\)/gi, ""),
         kind,
         slot: tagged ? "" : sectionSlot,
         affix: sawHeader ? headerAffix : 0,
@@ -5881,6 +6293,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         unique: sawHeader ? sectionUnique : false,
         fractured,
         desecrated: /\(desecrated\)/i.test(rawLine) || (sawHeader && sectionDesecrated),
+        crafted: /\(crafted\)/i.test(rawLine) || /\{crafted\}/i.test(rawLine) || (sawHeader && sectionCrafted),
         charm,
       });
     }
@@ -5890,6 +6303,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       else if (
         !seenSlot &&
         !mod.unique &&
+        !mod.crafted &&
         !uniqueItem &&
         canonicalRollKind(mod.kind) === "explicit" &&
         !rollSlot(mod) &&
@@ -5952,7 +6366,7 @@ function parseAffixStrings(text) {
 function stripAdvancedRanges(text) {
   return String(text || "")
     .replace(/\s*[—–]\s*Unscalable Value/gi, "")
-    .replace(/\s*\((?:augmented|unmet|implicit|enchant|fractured|(?:added )?(?:rune|augment)|unscalable(?: value)?)\)/gi, "")
+    .replace(/\s*\((?:augmented|unmet|implicit|enchant|fractured|crafted|(?:added )?(?:rune|augment)|unscalable(?: value)?)\)/gi, "")
     .replace(/([+-]?)(-?\d+(?:\.\d+)?)\((?:[^)]*)\)/g, (_, sign, n) => (sign || "") + n)
     .replace(/\(([-+]?\d[\d.\s,|/~—–-]*[-+]?\d)\)/g, "")
     .replace(/\s+/g, " ")
@@ -5998,6 +6412,7 @@ function keepRollMeta(roll, text, kind, slot, pick) {
   if (roll?.unique) row.unique = true;
   if (roll?.fractured) row.fractured = true;
   if (roll?.desecrated) row.desecrated = true;
+  if (roll?.crafted) row.crafted = true;
   if (roll?.charm) row.charm = true;
   if (Number.isInteger(roll?.rid) && roll.rid > 0) row.rid = roll.rid;
   if (Number.isFinite(roll?.lo) && Number.isFinite(roll?.hi)) {
@@ -6176,7 +6591,8 @@ function resistanceValue(roll) {
   const match = text.match(/^([+-]?\d+(?:\.\d+)?)% to (all elemental resistances|all resistances|(?:fire|cold|lightning|chaos)(?: and (?:fire|cold|lightning|chaos))? resistances?)$/i);
   if (!match) return null;
   const types = match[2].toLowerCase();
-  const count = types === "all elemental resistances" ? 3 : types === "all resistances" ? 4 : types.includes(" and ") ? 2 : 1;
+  if (types === "all resistances" || types.includes("chaos")) return null;
+  const count = types === "all elemental resistances" ? 3 : types.includes(" and ") ? 2 : 1;
   return Number(match[1]) * count;
 }
 
@@ -6203,7 +6619,7 @@ function resistanceControlsHtml(log, drop) {
   const lo = Math.min(0, total.value, Number.isFinite(drop.wantTotalRes) ? drop.wantTotalRes : 0);
   const hi = Math.max(1, total.value, Number.isFinite(drop.wantTotalRes) ? drop.wantTotalRes : 0);
   const value = Math.max(lo, Math.min(hi, Number.isFinite(drop.wantTotalRes) ? drop.wantTotalRes : total.value));
-  return `<div class="price-overlay-resistance-controls" data-res-state="${!!drop.collapseRes}:${!!drop.pickTotalRes}">${drop.collapseRes ? `<div class="price-overlay-mod-wrap${drop.pickTotalRes ? " is-on" : ""}"><div class="price-overlay-mod-line" data-res-action="pick" data-res-value="${!drop.pickTotalRes}" ${mark} title="Total fire, cold, lightning and chaos resistance"><button type="button" class="price-overlay-q-toggle" aria-pressed="${!!drop.pickTotalRes}" aria-label="Select total resistance"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod"><span class="price-overlay-mod-main"><span class="price-overlay-mod-text"><b data-roll-live="total-resistance">${value}</b>% Total Resistance</span></span></div></div><div class="price-overlay-span"><span>${lo}</span><div class="price-overlay-span-bar"><input type="range" min="${lo}" max="${hi}" step="1" value="${value}" data-span-rid="total-resistance" ${mark} style="--fill:${(value-lo)/(hi-lo)*100}" aria-label="Total resistance minimum" /></div><span>${hi}</span></div></div>` : ""}<button type="button" class="btn" data-res-action="collapse" data-res-value="${!drop.collapseRes}" ${mark} aria-expanded="${!drop.collapseRes}">${drop.collapseRes ? "Expand resistances" : "Collapse resistances"}</button></div>`;
+  return `<div class="price-overlay-resistance-controls" data-res-state="${!!drop.collapseRes}:${!!drop.pickTotalRes}">${drop.collapseRes ? `<div class="price-overlay-mod-wrap${drop.pickTotalRes ? " is-on" : ""}"><div class="price-overlay-mod-line" data-res-action="pick" data-res-value="${!drop.pickTotalRes}" ${mark} title="Total fire, cold and lightning resistance"><button type="button" class="price-overlay-q-toggle" aria-pressed="${!!drop.pickTotalRes}" aria-label="Select total resistance"><i class="price-overlay-dps-box" aria-hidden="true"></i></button><div class="price-overlay-mod"><span class="price-overlay-mod-main"><span class="price-overlay-mod-text"><b data-roll-live="total-resistance">${value}</b>% Total Resistance</span></span></div></div><div class="price-overlay-span"><span>${lo}</span><div class="price-overlay-span-bar"><input type="range" min="${lo}" max="${hi}" step="1" value="${value}" data-span-rid="total-resistance" ${mark} style="--fill:${(value-lo)/(hi-lo)*100}" aria-label="Total resistance minimum" /></div><span>${hi}</span></div></div>` : ""}<button type="button" class="btn" data-res-action="collapse" data-res-value="${!drop.collapseRes}" ${mark} aria-expanded="${!drop.collapseRes}">${drop.collapseRes ? "Expand resistances" : "Collapse resistances"}</button></div>`;
 }
 
 function inspectRolls(drop) {
@@ -6310,7 +6726,7 @@ function handleOverlayClick(msg) {
   if (msg.pickUnid) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickUnid);
     if (!drop) return;
-    drop.pickUnid = searchUnidentified(drop) === false;
+    drop.pickUnid = msg.current === "true" ? false : msg.current === "false" ? true : searchUnidentified(drop) === false;
     drop.quoteTried = false;
     delete drop.quote;
     if (log?.id) save();
@@ -6345,6 +6761,11 @@ function handleOverlayClick(msg) {
   if (msg.pickRunesToggle != null) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
     toggleDropRunePick(log, drop);
+    return;
+  }
+  if (msg.pickLinksToggle != null) {
+    const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
+    toggleDropLinkPick(log, drop);
     return;
   }
   if (msg.pickProp) {
@@ -6647,13 +7068,17 @@ function rollKindLabel(roll, tierOverride) {
   else if (kind === "corrupt") tag = "Corrupted";
   else if (kind === "enchant") tag = "Enchant";
   else if (kind === "rune") tag = "Augment";
+  else if (roll?.crafted) {
+    const slot = rollSlot(roll);
+    tag = slot === "prefix" ? "Crafted Prefix" : slot === "suffix" ? "Crafted Suffix" : "Crafted";
+  }
   else {
     const slot = rollSlot(roll);
     if (slot === "prefix") tag = "Prefix";
     else if (slot === "suffix") tag = "Suffix";
   }
   const tier = Number.isInteger(tierOverride) && tierOverride > 0 ? tierOverride : Number(roll?.tier);
-  if (tag && tier > 0 && !roll?.unique && (roll?.fractured || rollHasAffixTiers(roll) || kind === "corrupt")) tag += " T" + tier;
+  if (tag && tier > 0 && !roll?.unique && !roll?.crafted && (roll?.fractured || rollHasAffixTiers(roll) || kind === "corrupt")) tag += " T" + tier;
   if (tag && roll?.hybrid) tag += " · hyb";
   return tag;
 }
@@ -6673,6 +7098,7 @@ function rollKindClass(roll) {
   }
   if (roll?.fractured) cls += " is-fractured";
   if (roll?.desecrated) cls += " is-desecrated";
+  if (roll?.crafted) cls += " is-crafted";
   return cls;
 }
 
@@ -7004,12 +7430,26 @@ function socketSearchCount(drop) {
   return Number.isInteger(drop?.pickRunes) ? Math.max(0, Math.min(6, drop.pickRunes)) : null;
 }
 
+function itemLinkCount(drop) {
+  const sockets = itemSocketCount(drop);
+  const n = Number.isInteger(drop?.links) ? drop.links : 0;
+  return Math.max(0, Math.min(sockets || 6, n));
+}
+
+function linkSearchCount(drop) {
+  if (!Number.isInteger(drop?.pickLinks)) return null;
+  const sockets = socketSearchCount(drop);
+  const cap = sockets == null ? itemSocketCount(drop) || 6 : sockets;
+  return Math.max(0, Math.min(cap, drop.pickLinks));
+}
+
 function setDropRunePick(log, drop, value, live) {
   if (!drop) return;
   if (value == null || value === "" || value === "any" || value === "off") drop.pickRunes = null;
   else {
     drop.pickRunes = Math.max(0, Math.min(6, Math.round(Number(value) || 0)));
     drop.wantRunes = drop.pickRunes;
+    if (Number.isInteger(drop.pickLinks) && drop.pickLinks > drop.pickRunes) drop.pickLinks = drop.pickRunes;
   }
   if (live) return;
   drop.quoteTried = false;
@@ -7029,16 +7469,85 @@ function toggleDropRunePick(log, drop) {
   setDropRunePick(log, drop, Math.max(0, Math.min(6, n)));
 }
 
+function setDropLinkPick(log, drop, value, live) {
+  if (!drop) return;
+  const cap = Number.isInteger(drop.pickRunes) ? drop.pickRunes : itemSocketCount(drop) || 6;
+  if (value == null || value === "" || value === "any" || value === "off") drop.pickLinks = null;
+  else drop.pickLinks = Math.max(0, Math.min(cap, Math.round(Number(value) || 0)));
+  if (live) return;
+  drop.quoteTried = false;
+  delete drop.quote;
+  if (log?.id) save();
+  if (ui.inspect) paintPriceOverlay();
+  else render();
+}
+
+function toggleDropLinkPick(log, drop) {
+  if (!drop) return;
+  if (Number.isInteger(drop.pickLinks)) {
+    setDropLinkPick(log, drop, null);
+    return;
+  }
+  setDropLinkPick(log, drop, itemLinkCount(drop));
+}
+
+const SOCKET_PATH = [
+  { c: 0, r: 0 },
+  { c: 1, r: 0 },
+  { c: 1, r: 1 },
+  { c: 0, r: 1 },
+  { c: 0, r: 2 },
+  { c: 1, r: 2 },
+];
+const SOCKET_EDGES = [
+  { a: 0, b: 1, dir: "h", c: 0, r: 0 },
+  { a: 1, b: 2, dir: "v", c: 1, r: 0 },
+  { a: 2, b: 3, dir: "h", c: 0, r: 1 },
+  { a: 3, b: 4, dir: "v", c: 0, r: 1 },
+  { a: 4, b: 5, dir: "h", c: 0, r: 2 },
+];
+
+function socketEdgeOn(step, count, linked) {
+  return linked >= step + 2 && count > step + 1;
+}
+
+function socketBoardHtml(count, linkCount, colors, showLinks = true) {
+  const linked = showLinks ? Math.max(0, Math.min(count, linkCount)) : 0;
+  const used = SOCKET_PATH.slice(0, Math.max(0, count));
+  const shiftC = used.length ? Math.min(...used.map((slot) => slot.c)) : 0;
+  const shiftR = used.length ? Math.min(...used.map((slot) => slot.r)) : 0;
+  const cols = used.length ? Math.max(...used.map((slot) => slot.c)) - shiftC + 1 : 2;
+  const rows = used.length ? Math.max(...used.map((slot) => slot.r)) - shiftR + 1 : 1;
+  const sock = (i) => {
+    const slot = SOCKET_PATH[i];
+    const color = socketColorClass(colors?.[i]);
+    const lit = i < linked ? " is-lit" : "";
+    return `<i class="price-overlay-socket is-${color}${lit}" data-i="${i}" style="--c:${slot.c - shiftC};--r:${slot.r - shiftR}"${i < count ? "" : " hidden"}></i>`;
+  };
+  const bars = showLinks ? SOCKET_EDGES.map((edge) => `<i class="socket-link ${edge.dir}${socketEdgeOn(edge.a, count, linked) ? "" : " is-off"}" data-link="${edge.a}-${edge.b}" style="--c:${edge.c - shiftC};--r:${edge.r - shiftR}"></i>`).join("") : "";
+  const label = showLinks ? `${count} sockets, ${linked} linked` : `${count} sockets`;
+  return `<span class="price-overlay-socket-preview is-board" role="img" aria-label="${label}" style="--cols:${cols};--rows:${rows}">${bars}${[0, 1, 2, 3, 4, 5].map(sock).join("")}<span class="price-overlay-no-sockets"${count ? " hidden" : ""}>None</span></span>`;
+}
+
 function overlayRuneHtml(log, drop) {
   if (!canHaveRunes(drop)) return "";
   const on = Number.isInteger(drop.pickRunes);
   const itemN = itemSocketCount(drop);
   const count = on ? socketSearchCount(drop) : itemN;
   const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
-  const sockets = Array.from({ length: 6 }, (_, i) => {
-    return `<i class="price-overlay-socket" aria-hidden="true"${i >= count ? " hidden" : ""}></i>`;
-  }).join("") + `<span class="price-overlay-no-sockets"${count ? " hidden" : ""}>None</span>`;
-  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-sockets${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-runes-toggle ${mark} title="${on ? "Clear socket filter" : `Search exactly ${itemN} sockets`}"><span>Sockets</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${count}" data-span-rid="runes" ${mark} aria-label="Socket count" /></span><span class="price-overlay-socket-preview" role="img" aria-label="${count} sockets">${sockets}</span></div>`;
+  const poe1 = activeGame() === "poe1";
+  const linkShown = poe1 ? (Number.isInteger(drop.pickLinks) ? linkSearchCount(drop) : itemLinkCount(drop)) : 0;
+  const sockets = socketBoardHtml(count, linkShown, poe1 ? drop.socketColors : null, poe1);
+  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-sockets${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-runes-toggle ${mark} title="${on ? "Clear socket filter" : `Search exactly ${itemN} sockets`}"><span>Sockets</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${count}" data-span-rid="runes" ${mark} aria-label="Socket count" /></span>${sockets}</div>`;
+}
+
+function overlayLinksHtml(log, drop) {
+  if (activeGame() !== "poe1" || !canHaveRunes(drop)) return "";
+  const on = Number.isInteger(drop.pickLinks);
+  const itemN = itemLinkCount(drop);
+  const count = on ? linkSearchCount(drop) : itemN;
+  const mark = `data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}"`;
+  return `<div class="price-overlay-prop price-overlay-prop-num is-meta is-links${on ? " is-on" : ""}"><button type="button" class="price-overlay-q-toggle" data-pick-links-toggle ${mark} title="${on ? "Clear link filter" : `Search at least ${itemN} links`}"><span>Links</span></button><span class="price-overlay-q-edit"><input type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" class="price-overlay-q-input" min="0" max="6" value="${count}" data-span-rid="links" ${mark} aria-label="Link count" /></span></div>`;
 }
 
 function overlayCharmHtml(log, drop) {
@@ -7063,7 +7572,8 @@ function overlayUnidHtml(log, drop) {
   if (!drop?.unidentified) return "";
   const on = searchUnidentified(drop) !== false;
   const tier = Number(drop.unidentifiedTier) > 0 ? " T" + drop.unidentifiedTier : "";
-  return `<button type="button" class="price-overlay-unid${on ? " is-on" : ""}" data-pick-unid="${esc(drop.id)}" data-pick-log="${esc(log.id)}">${on ? "Unidentified" + tier : "Identified"}</button>`;
+  const label = on ? "Unidentified" + tier : "Identified";
+  return `<button type="button" class="price-overlay-unid${on ? " is-on" : ""}" data-pick-unid="${esc(drop.id)}" data-pick-log="${esc(log.id)}" data-current="${on}" aria-pressed="${on}" title="${on ? "Searching unidentified" : "Searching identified"}"><span class="flag-check${on ? " is-checked" : ""}" aria-hidden="true"></span><span>${label}</span></button>`;
 }
 
 function overlayRavenHtml(log, drop) {
@@ -7437,7 +7947,7 @@ function weaponDpsRollKind(roll) {
   const t = String(roll.text || "")
     .trim()
     .toLowerCase()
-    .replace(/\s*\((?:augmented|unmet|implicit|enchant|fractured|(?:added )?(?:rune|augment)|unscalable(?: value)?)\)/gi, "")
+    .replace(/\s*\((?:augmented|unmet|implicit|enchant|fractured|crafted|(?:added )?(?:rune|augment)|unscalable(?: value)?)\)/gi, "")
     .replace(/\s+/g, " ")
     .trim();
   if (!t || /spell/.test(t)) return "";
@@ -8135,12 +8645,50 @@ function sanitizeOverlayMinInput(el) {
   }
   if (el.dataset.spanRid === "total-resistance" && raw.trimStart().startsWith("-")) next = "-" + next;
   if (next !== raw) el.value = next;
-  if (el.dataset.spanRid === "runes") paintSocketPreview(el);
+  if (el.dataset.spanRid === "runes" || el.dataset.spanRid === "links") paintSocketPreview(el);
 }
 
 function paintSocketPreview(input) {
-  const preview = input.closest(".is-sockets")?.querySelector(".price-overlay-socket-preview");
+  const column = input.closest(".price-overlay-sockets-column") || input.closest(".is-sockets");
+  const preview = column?.querySelector(".price-overlay-socket-preview");
   if (!preview) return;
+  if (preview.classList.contains("is-board")) {
+    const socketInput = column.querySelector('[data-span-rid="runes"]');
+    const linkInput = column.querySelector('[data-span-rid="links"]');
+    const count = Math.max(0, Math.min(6, Math.round(Number(socketInput?.value ?? input.value) || 0)));
+    let links = Math.max(0, Math.min(count, Math.round(Number(linkInput?.value) || 0)));
+    if (linkInput && Number(linkInput.value) > count) linkInput.value = String(links);
+    const used = SOCKET_PATH.slice(0, count);
+    const shiftC = used.length ? Math.min(...used.map((slot) => slot.c)) : 0;
+    const shiftR = used.length ? Math.min(...used.map((slot) => slot.r)) : 0;
+    const cols = used.length ? Math.max(...used.map((slot) => slot.c)) - shiftC + 1 : 2;
+    const rows = used.length ? Math.max(...used.map((slot) => slot.r)) - shiftR + 1 : 1;
+    preview.style.setProperty("--cols", String(cols));
+    preview.style.setProperty("--rows", String(rows));
+    preview.querySelectorAll(".price-overlay-socket").forEach((el) => {
+      const i = Number(el.dataset.i);
+      el.hidden = i >= count;
+      el.classList.toggle("is-lit", i < links);
+      const slot = SOCKET_PATH[i];
+      if (slot) {
+        el.style.setProperty("--c", String(slot.c - shiftC));
+        el.style.setProperty("--r", String(slot.r - shiftR));
+      }
+    });
+    preview.querySelectorAll(".socket-link[data-link]").forEach((el) => {
+      const step = Number(String(el.dataset.link).split("-")[0]);
+      const edge = SOCKET_EDGES[step];
+      el.classList.toggle("is-off", !socketEdgeOn(step, count, links));
+      if (edge) {
+        el.style.setProperty("--c", String(edge.c - shiftC));
+        el.style.setProperty("--r", String(edge.r - shiftR));
+      }
+    });
+    const none = preview.querySelector(".price-overlay-no-sockets");
+    if (none) none.hidden = count > 0;
+    preview.setAttribute("aria-label", linkInput ? `${count} sockets, ${links} linked` : `${count} sockets`);
+    return;
+  }
   const sockets = [...preview.querySelectorAll(".price-overlay-socket")];
   const count = Math.max(0, Math.min(sockets.length, Math.round(Number(input.value) || 0)));
   sockets.forEach((socket, i) => { socket.hidden = i >= count; });
@@ -8176,6 +8724,7 @@ function overlayPropsHtml(log, drop) {
   rest.sort((a, b) => weaponRank(a) - weaponRank(b));
   const compactWeapon = tradeCategory(drop.className).startsWith("weapon.") && rest.some((row) => weaponRank(row) >= 0);
   const rune = overlayRuneHtml(log, drop);
+  const links = overlayLinksHtml(log, drop);
   const metaBits = [
     ilvl ? overlayMinFilterHtml(log, drop, ilvl, true) : "",
     quality ? overlayMinFilterHtml(log, drop, quality, true) : "",
@@ -8217,8 +8766,8 @@ function overlayPropsHtml(log, drop) {
       return `<button type="button" class="price-overlay-prop${defence}${on}" data-pick-prop="${esc(row.id)}" ${mark}>${shown}</button>`;
     })
     .join("")}</div>` : "";
-  if (!meta && !props && !rune) return "";
-  return `<div class="price-overlay-properties${compactWeapon ? " is-weapon-layout" : ""}"><div class="price-overlay-property-column">${meta}${props}</div>${rune ? `<div class="price-overlay-sockets-column">${rune}</div>` : ""}</div>`;
+  if (!meta && !props && !rune && !links) return "";
+  return `<div class="price-overlay-properties${compactWeapon ? " is-weapon-layout" : ""}"><div class="price-overlay-property-column">${meta}${props}</div>${rune || links ? `<div class="price-overlay-sockets-column">${rune}${links}</div>` : ""}</div>`;
 }
 
 function overlayUsesExchange(drop) {
@@ -8371,9 +8920,51 @@ function tradeSiteQuery(drop, filters) {
 }
 
 async function tradeSiteUrl(drop) {
-  const league = leagueId();
+  const poe1 = activeGame() === "poe1";
+  const league = poe1 ? econLeagueName() : leagueId();
   if (!league) return "";
   // Always build from current toggles — never reuse a stale quote.url.
+  if (poe1 && overlayUsesExchange(drop)) {
+    const want = exchangeWantTag(drop);
+    if (!want) return "";
+    const q = JSON.stringify({
+      exchange: {
+        status: { option: "online" },
+        have: exchangeHaveCurrencies(drop),
+        want: [want],
+      },
+    });
+    return "https://www.pathofexile.com/trade/exchange/" + encodeURIComponent(league) + "?q=" + encodeURIComponent(q);
+  }
+  if (poe1) {
+    const query = {
+      status: { option: "available" },
+      stats: [{ type: "and", filters: [] }],
+      filters: {},
+    };
+    const typeLine = tradeBaseType(drop);
+    if (drop?.name && drop.name !== typeLine) query.name = drop.name;
+    if (typeLine) query.type = typeLine;
+    const typeBag = {};
+    if (/unique/i.test(drop?.rarity || "")) typeBag.rarity = { option: "unique" };
+    else if (canPickRarity(drop)) typeBag.rarity = { option: searchRarityFilter(drop) };
+    const ilvl = ilvlFilterState(drop);
+    if (ilvl?.on) typeBag.ilvl = { min: ilvl.min };
+    const quality = qualityFilterState(drop);
+    if (quality?.on) typeBag.quality = { min: quality.min };
+    if (Object.keys(typeBag).length) query.filters.type_filters = { filters: typeBag };
+    const misc = {};
+    if (typeof searchCorrupted(drop) === "boolean") misc.corrupted = { option: searchCorrupted(drop) ? "true" : "false" };
+    if (drop?.unidentified) misc.identified = { option: searchUnidentified(drop) === false ? "true" : "false" };
+    if (Object.keys(misc).length) query.filters.misc_filters = { filters: misc };
+    const socketBag = {};
+    const sockets = socketSearchCount(drop);
+    if (sockets !== null) socketBag.sockets = { min: sockets, max: sockets };
+    const links = linkSearchCount(drop);
+    if (links !== null && links >= 2) socketBag.links = { min: links };
+    if (Object.keys(socketBag).length) query.filters.socket_filters = { filters: socketBag };
+    return "https://www.pathofexile.com/trade/search/" + encodeURIComponent(league) + "?q=" + encodeURIComponent(JSON.stringify({ query, sort: { price: "asc" } }));
+  }
   if (overlayUsesExchange(drop)) {
     const want = exchangeWantTag(drop);
     if (!want) return "";
@@ -8640,7 +9231,7 @@ function priceOverlayHtml(log, drop) {
   const footBits = [charmExtra, exchange, tradeBtns].filter(Boolean).join("");
   const foot = pickHtml || !footBits ? "" : `<div class="price-overlay-foot">${footBits}</div>`;
   const side = hasOffers
-    ? `<aside class="price-overlay-side"><div class="price-overlay-side-head"><span class="price-overlay-side-label">PoE 2 trade</span></div>${offers}</aside>`
+    ? `<aside class="price-overlay-side"><div class="price-overlay-side-head"><span class="price-overlay-side-label">${activeGame() === "poe1" ? "PoE 1 trade" : "PoE 2 trade"}</span></div>${offers}</aside>`
     : "";
   return `
     <article class="price-overlay-card item-tip-card is-item-framed ${esc(kindClass)} ${overlayHeaderClasses(drop)}${hasOffers ? " has-offers" : ""}"${weaponDpsCardAttrs(drop)}>
@@ -8938,11 +9529,11 @@ function paintLiveDps(card) {
 
 function paintOverlaySpanLive(input) {
   if (!input) return;
-  if (input.dataset.spanRid === "runes") sanitizeOverlayMinInput(input);
+  if (input.dataset.spanRid === "runes" || input.dataset.spanRid === "links") sanitizeOverlayMinInput(input);
   const value = Number(input.value);
   if (!Number.isFinite(value)) return;
   const rid = String(input.dataset.spanRid || "");
-  if (rid === "quality" || rid === "ilvl" || rid === "runes") {
+  if (rid === "quality" || rid === "ilvl" || rid === "runes" || rid === "links") {
     input.closest(".price-overlay-prop-num")?.classList.add("is-on");
     return;
   }
@@ -9041,6 +9632,9 @@ function resetOverlayMin(log, drop, rid) {
   else if (rid === "runes") {
     setDropRunePick(log, drop, itemSocketCount(drop), false);
     return;
+  } else if (rid === "links") {
+    setDropLinkPick(log, drop, itemLinkCount(drop), false);
+    return;
   } else if (isSliderPropId(rid) || isTypedPropId(rid)) {
     if (drop.wantProps) delete drop.wantProps[rid];
   } else {
@@ -9082,6 +9676,10 @@ function setRollWantMin(log, drop, rid, raw, live) {
   }
   if (String(rid) === "runes") {
     setDropRunePick(log, drop, raw, live);
+    return;
+  }
+  if (String(rid) === "links") {
+    setDropLinkPick(log, drop, raw, live);
     return;
   }
   if (isSliderPropId(rid) || isTypedPropId(rid)) {
@@ -9194,17 +9792,31 @@ async function quoteRolledDrop(log, drop, force = false) {
   drop.quoting = true;
   drop.quoteTried = true;
   paintPriceOverlay();
-  const league = leagueId();
+  const poe1 = activeGame() === "poe1";
+  const league = poe1 ? econLeagueName() : leagueId();
   try {
     const extra = {
       typeLine: tradeBaseType(drop),
-      category: tradeCategory(drop.className),
+      category: poe1 ? "" : tradeCategory(drop.className),
       rarity: drop.rarity || "",
       rarityFilter: searchRarityFilter(drop),
+      game: poe1 ? "poe1" : "poe2",
     };
     if (overlayUsesExchange(drop)) {
       extra.exchange = true;
       extra.have = exchangeHavePick(drop);
+    } else if (poe1) {
+      extra.exactBase = searchExactBase(drop);
+      const ilvl = ilvlFilterState(drop);
+      if (ilvl?.on) extra.ilvlMin = ilvl.min;
+      const quality = qualityFilterState(drop);
+      if (quality?.on) extra.qualityMin = quality.min;
+      if (typeof searchCorrupted(drop) === "boolean") extra.corrupted = searchCorrupted(drop);
+      if (drop?.unidentified) extra.unidentified = searchUnidentified(drop) !== false;
+      const sockets = socketSearchCount(drop);
+      if (sockets !== null) extra.runeSockets = sockets;
+      const links = linkSearchCount(drop);
+      if (links !== null) extra.links = links;
     } else {
       const index = await ensureTradeStats();
       const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
@@ -9239,7 +9851,7 @@ async function quoteRolledDrop(log, drop, force = false) {
       amount: priced ? amount : null,
       unit,
       listings: row.listings || 0,
-      divine: priced ? toDivine(amount, unit) : null,
+      divine: priced ? (poe1 ? divineWithRates(amount, unit, poe1Prices.exaltedPerDivine, poe1Prices.chaosPerDivine) : toDivine(amount, unit)) : null,
       url: row.url || "",
       tag: row.tag || "",
       bulk: !!row.bulk,
@@ -9351,6 +9963,11 @@ function ingestClipboardItem(text, mode) {
     if (parsed.runeSockets > 0 && canHaveRunes(parsed)) {
       drop.runeSockets = parsed.runeSockets;
       drop.pickRunes = parsed.runeSockets;
+      if (parsed.socketColors?.length) drop.socketColors = parsed.socketColors;
+      if (activeGame() === "poe1" && parsed.links > 1) {
+        drop.links = parsed.links;
+        drop.pickLinks = parsed.links;
+      }
     }
     if (parsed.charmSlots > 0) drop.charmSlots = parsed.charmSlots;
     if (!isClipboardCurrency(parsed) && parsed.mods?.length) drop.rolls = parsed.mods.slice(0, 24);
@@ -9386,17 +10003,38 @@ function ingestClipboardItem(text, mode) {
   if (parsed.runeSockets > 0 && canHaveRunes(parsed)) {
     entry.runeSockets = parsed.runeSockets;
     entry.pickRunes = parsed.runeSockets;
+    if (parsed.socketColors?.length) entry.socketColors = parsed.socketColors;
+    if (activeGame() === "poe1" && parsed.links > 1) {
+      entry.links = parsed.links;
+      entry.pickLinks = parsed.links;
+    }
   }
   if (parsed.charmSlots > 0) entry.charmSlots = parsed.charmSlots;
   if (!isClipboardCurrency(parsed) && parsed.mods?.length) entry.rolls = parsed.mods.slice(0, 24);
   farmLogDrop(matched.boss?.id || farmBossId(), entry);
 }
 
+function signalUiPainted() {
+  const view = ui.view;
+  requestAnimationFrame(() => {
+    try { window.chrome?.webview?.postMessage({ type: "ui-painted", view }); } catch (_) {}
+  });
+}
+
 function handleAppHotkey(msg) {
-  if (msg?.action === "open-settings" || msg?.action === "open-dashboard") {
+  if (msg?.action === "open-settings" || msg?.action === "open-dashboard" || msg?.action === "open-wealth") {
     closeInspect();
-    ui.view = msg.action === "open-settings" ? "settings" : "dash";
-    render();
+    const next = msg.action === "open-settings" ? "settings" : msg.action === "open-wealth" ? "wealth" : "dash";
+    const resolved = activeGame() === "poe1" && next === "dash" ? "econ" : next;
+    if (ui.view !== resolved) {
+      ui.view = next;
+      render();
+    }
+    signalUiPainted();
+    return;
+  }
+  if (msg?.action === "refresh-wealth") {
+    readWealthTab({ auto: msg.auto === true });
     return;
   }
   if (msg?.action === "next-kill") {
@@ -9552,6 +10190,7 @@ function renderDash() {
 }
 
 function ninjaTypes() {
+  if (activeGame() === "poe1") return [...POE1_EXCHANGE, ...POE1_ITEMS];
   return [...NINJA_EXCHANGE, ...NINJA_ITEMS];
 }
 
@@ -9612,7 +10251,7 @@ function dedupeEconItems(rows) {
   const merged = new Map();
   const normalize = (text) => String(text || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/\brunemasted\b/g, "runemastered");
   for (const row of rows) {
-    const key = JSON.stringify([normalize(row.name), normalize(row.baseType), !!row.corrupted]);
+    const key = JSON.stringify([normalize(row.name), normalize(row.baseType), !!row.corrupted, Number(row.links) || 0]);
     const prev = merged.get(key);
     // Keep the quote and chart ID together, preferring the better-supported row.
     if (!prev || (Number.isFinite(row.divine) && !Number.isFinite(prev.divine)) ||
@@ -9624,9 +10263,10 @@ function dedupeEconItems(rows) {
 }
 
 function econRows(type) {
-  let rows = (prices.tables[type] || []).map((row) => ({ ...row, type: row.type || type }));
-  if (NINJA_ITEMS.includes(type)) rows = dedupeEconItems(rows);
-  if (!NINJA_ITEMS.includes(type)) {
+  const bag = econPrices();
+  let rows = (bag.tables[type] || []).map((row) => ({ ...row, type: row.type || type }));
+  if (econItemTypes().includes(type)) rows = dedupeEconItems(rows);
+  if (!econItemTypes().includes(type)) {
     const merged = new Map();
     for (const row of rows) {
       const key = (row.name || "").toLowerCase();
@@ -9662,14 +10302,14 @@ function econRowHtml(row, type) {
   const cat = type || row.type || ui.econType;
   const spark = row.spark || { data: [], change: 0 };
   const open = ui.econChart && ui.econChart.name === row.name && String(ui.econChart.ninjaId) === String(row.ninjaId);
-  const extra = [row.baseType || NINJA_LABELS[cat] || "", row.corrupted ? "corrupted" : "", row.listings ? row.listings.toLocaleString() + " listed" : ""]
+  const extra = [row.baseType || econTypeLabel(cat) || "", row.corrupted ? "corrupted" : "", row.listings ? row.listings.toLocaleString() + " listed" : ""]
     .filter(Boolean)
     .join(" · ");
   const priced = Number.isFinite(row.amount) || Number.isFinite(row.divine);
   return `<button class="econ-row${open ? " is-open" : ""}" type="button" aria-label="${esc(row.name + ', ' + extra)}" data-econ-open="${esc(row.name)}" data-econ-id="${esc(String(row.ninjaId ?? ""))}" data-econ-kind="${esc(row.kind || "")}" data-econ-type="${esc(cat)}">
-    <span class="econ-art" ${itemHoverAttr(row.name)}>${itemIconHtml(row.name, "", true)}</span>
+    <span class="econ-art" ${itemHoverAttr(row.name)}>${row.icon ? `<img class="item-icon" src="${esc(row.icon)}" alt="" draggable="false" onerror="this.remove()" />` : itemIconHtml(row.name, "", true)}</span>
     <span class="econ-copy">
-      <span class="${NINJA_ITEMS.includes(cat) ? "unique-name" : "econ-name"}">${esc(row.name)}</span>${NINJA_ITEMS.includes(cat) && row.baseType ? `<span class="econ-base">, ${esc(row.baseType)}${row.corrupted ? " · corrupted" : ""}</span>` : ""}
+      <span class="${econItemTypes().includes(cat) ? "unique-name" : "econ-name"}">${esc(row.name)}</span>${row.links > 0 ? `<span class="econ-links">${esc(String(row.links))}L</span>` : ""}${econItemTypes().includes(cat) && row.baseType ? `<span class="econ-base">, ${esc(row.baseType)}${row.corrupted ? " · corrupted" : ""}</span>` : ""}
     </span>
     ${sparkSvg(spark.data, spark.change)}
     ${changeHtml(spark.change)}
@@ -9692,7 +10332,7 @@ function econChartHtml() {
         ${itemIconHtml(row.name, "lg")}
         <div>
           <h3>${esc(row.name)}</h3>
-          <p class="muted">${esc(row.baseType || NINJA_LABELS[row.type] || "")} · 7-day trend ${changeHtml(spark.change)}</p>
+          <p class="muted">${esc(row.baseType || econTypeLabel(row.type) || "")} · 7-day trend ${changeHtml(spark.change)}</p>
         </div>
       </div>
       <button class="btn ghost" data-econ-chart-close type="button">Close</button>
@@ -9710,14 +10350,16 @@ async function fillEconChart() {
   const key = `${row.type}:${row.ninjaId}`;
   const unit = row.unit || "exalted";
   try {
-    if (!prices.history[key]) {
-      const q = encodeURIComponent(leagueId());
-      prices.history[key] = await ninjaFetch(
-        `/poe2/api/economy/stash/current/item/history?league=${q}&type=${encodeURIComponent(row.type)}&id=${encodeURIComponent(row.ninjaId)}`
+    const bag = econPrices();
+    if (!bag.history[key]) {
+      const q = encodeURIComponent(econLeagueName());
+      const root = activeGame() === "poe1" ? "/poe1/api/economy/" : "/poe2/api/economy/";
+      bag.history[key] = await ninjaFetch(
+        `${root}stash/current/item/history?league=${q}&type=${encodeURIComponent(row.type)}&id=${encodeURIComponent(row.ninjaId)}`
       );
     }
     if (ui.econChart !== row || !document.getElementById("econ-chart-body")) return;
-    const plot = historySvg(prices.history[key], unit);
+    const plot = historySvg(bag.history[key], unit);
     if (plot) {
       const spark = row.spark || { data: [], change: 0 };
       const unitLabel = unit === "exalted" ? "exalted" : unit === "chaos" ? "chaos" : "divine";
@@ -9735,7 +10377,6 @@ function trendChange(row) {
 
 function trendingLists() {
   const rows = gatherEconRows();
-  const multi = ui.econAll || selectedEconTypes().length !== 1;
   const byAbs = (a, b) => Math.abs(trendChange(b)) - Math.abs(trendChange(a)) || a.name.localeCompare(b.name);
   const up = rows.filter((row) => trendChange(row) >= 0.05).sort(byAbs);
   const down = rows.filter((row) => trendChange(row) <= -0.05).sort(byAbs);
@@ -9746,7 +10387,6 @@ function trendingLists() {
         (Number.isFinite(b.divine) ? b.divine : -1) - (Number.isFinite(a.divine) ? a.divine : -1) ||
         a.name.localeCompare(b.name)
     );
-  if (!multi) return { up, down, flat };
   return { up: up.slice(0, 24), down: down.slice(0, 24), flat: flat.slice(0, 80) };
 }
 
@@ -9758,16 +10398,17 @@ function trendCol(title, rows, empty) {
 }
 
 function renderEcon() {
+  const bag = econPrices();
   const types = selectedEconTypes();
   ui.econType = types[0] || "Currency";
   const picked = new Set(types);
-  const showBases = types.some((type) => NINJA_ITEMS.includes(type));
+  const showBases = types.some((type) => econItemTypes().includes(type));
   const chips = [
     `<button class="chip ${ui.econAll ? "is-active" : ""}" data-econ-all type="button">All items</button>`,
     ...ninjaTypes().map(
       (type) =>
         `<button class="chip ${!ui.econAll && picked.has(type) ? "is-active" : ""}" data-econ-cat="${esc(type)}" type="button">${esc(
-          NINJA_LABELS[type] || type
+          econTypeLabel(type)
         )}</button>`
     ),
   ].join("");
@@ -9776,10 +10417,10 @@ function renderEcon() {
     <button class="chip ${ui.econMode === "trend" ? "is-active" : ""}" data-econ-mode="trend" type="button">Trending</button>
   </div>`;
   let body = "";
-  const haveEcon = Object.keys(prices.tables || {}).length || prices.byName.size;
-  if (prices.status === "loading" && !haveEcon) body = `<p class="muted">Loading prices…</p>`;
-  else if (prices.status === "error" && !haveEcon) {
-    body = `<p class="muted">Could not load prices${prices.error ? " — " + esc(prices.error) : ""}. Use Check prices in the header.</p>`;
+  const haveEcon = Object.keys(bag.tables || {}).length || bag.byName?.size;
+  if (bag.status === "loading" && !haveEcon) body = `<p class="muted">Loading prices…</p>`;
+  else if (bag.status === "error" && !haveEcon) {
+    body = `<p class="muted">Could not load prices${bag.error ? " — " + esc(bag.error) : ""}. Click the dot to refresh.</p>`;
   } else if (ui.econMode === "trend") {
     const { up, down, flat } = trendingLists();
     if (!up.length && !down.length && !flat.length) {
@@ -9788,7 +10429,7 @@ function renderEcon() {
       const movers = up.length || down.length;
       const scopeLabel = ui.econAll
         ? "all items"
-        : types.map((type) => NINJA_LABELS[type] || type).join(", ") || "this category";
+        : types.map((type) => econTypeLabel(type)).join(", ") || "this category";
       body = `${
         movers
           ? `<div class="econ-trend">${trendCol("Rising", up, "Nothing rising.")}${trendCol("Falling", down, "Nothing falling.")}</div>`
@@ -9820,9 +10461,9 @@ function renderEcon() {
       <article class="panel">
         <div class="econ-head">
           <div>
-            <div class="econ-title-line"><h2>Economy</h2><button class="econ-update" type="button" data-check-prices title="Prices update hourly. Click to refresh." aria-label="Prices update hourly. Click to refresh."><span id="econ-live" class="econ-live-dot" aria-hidden="true"></span></button></div>
-            <p class="muted">${esc(prices.league || leagueId())}${prices.fetchedAt ? " · " + (prices.cached ? "last recorded " : "") + esc(formatHour(prices.fetchedAt)) : ""}${
-              prices.status === "loading" && haveEcon ? " · updating" : ""
+            <div class="econ-title-line"><p class="wealth-kicker">${activeGame() === "poe1" ? "PoE 1" : "PoE 2"}</p><h2>Economy</h2><button class="econ-update" type="button" data-check-prices title="Prices update hourly. Click to refresh." aria-label="Prices update hourly. Click to refresh."><span id="econ-live" class="econ-live-dot" aria-hidden="true"></span></button></div>
+            <p class="muted">${esc(bag.league || econLeagueName())}${bag.fetchedAt ? " · " + (bag.cached ? "last recorded " : "") + esc(formatHour(bag.fetchedAt)) : ""}${
+              bag.status === "loading" && haveEcon ? " · updating" : ""
             }</p>
           </div>
           <div class="econ-tools">
@@ -10025,17 +10666,18 @@ function renderDivineTape() {
   if (!btn || !card) return;
   const main = convertMain();
   const quote = convertQuote();
+  const rates = activeRates();
   const checks = `<p class="muted rate-card-note">Item prices use this currency.</p>
     <div class="rate-checks">${convertMainChecks()}</div>`;
-  if (prices.status !== "ready" || !prices.exaltedPerDivine) {
-    btn.textContent = prices.status === "loading" ? "Rates…" : "Rates";
+  if (!(rates.exaltedPerDivine > 0) && !(rates.chaosPerDivine > 0)) {
+    btn.textContent = rates.status === "loading" ? "Rates…" : "Rates";
     card.innerHTML = `
       <div class="rate-card-head">
         <h3>Convert</h3>
       </div>
       ${checks}
       <p class="muted">${
-        prices.status === "loading" ? "Checking prices…" : "Check prices in the header to fill conversions."
+        rates.status === "loading" ? "Checking prices…" : "Check prices in the header to fill conversions."
       }</p>`;
     return;
   }
@@ -10088,11 +10730,10 @@ function renderStats() {
   const mount = () => {
     if (renderStats.generation === generation) mountRankFx();
   };
-  requestAnimationFrame(() => {
-    if (renderStats.generation !== generation) return;
-    if (typeof requestIdleCallback === "function") requestIdleCallback(mount, { timeout: 800 });
-    else setTimeout(mount, 120);
-  });
+  const later = typeof requestIdleCallback === "function"
+    ? (fn) => requestIdleCallback(fn, { timeout: 1500 })
+    : (fn) => setTimeout(fn, 600);
+  later(mount);
 }
 
 function renderFilters() {
@@ -10240,7 +10881,9 @@ function renderLogView() {
 
 function renderGuides() {
 
-  const sections = Array.isArray(window.GUIDE_SECTIONS) ? window.GUIDE_SECTIONS : [];
+  const sections = activeGame() === "poe1"
+    ? poe1GuideSections()
+    : Array.isArray(window.GUIDE_SECTIONS) ? window.GUIDE_SECTIONS : [];
   const body = sections
     .map((section) => {
       const items = Array.isArray(section.items) ? section.items : [];
@@ -10270,6 +10913,7 @@ function renderGuides() {
   return `
     <section class="guides">
       <div>
+        <p class="wealth-kicker">${activeGame() === "poe1" ? "PoE 1" : "PoE 2"}</p>
         <h2 class="section-title">Tools &amp; Wiki</h2>
 
       </div>
@@ -10278,10 +10922,1195 @@ function renderGuides() {
   `;
 }
 
+const WEALTH_STASHES = [
+  { id: "abyss", name: "Abyss", price: "waystone-1" },
+  { id: "breach", name: "Breach", price: "waystone-2" },
+  { id: "currency", name: "Currency", price: "waystone-3", category: "currency" },
+  { id: "delirium", name: "Delirium", price: "waystone-4" },
+  { id: "essences", name: "Essences", price: "waystone-5" },
+  { id: "expedition", name: "Expedition", price: "waystone-6" },
+  { id: "fragments", name: "Fragments", price: "waystone-7" },
+  { id: "ritual", name: "Ritual", price: "waystone-8" },
+  { id: "socketables", name: "Augments", price: "waystone-9" },
+];
+
+function wealthTabName(stash) {
+  return "~price 99 " + stash.price;
+}
+
+function wealthOn(id) {
+  const flags = state.wealthTabs;
+  if (!flags || typeof flags !== "object" || !Object.prototype.hasOwnProperty.call(flags, id)) return true;
+  return !!flags[id];
+}
+
+function savedPoe1Tabs(league) {
+  const rows = state.poe1StashTabs?.[league];
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((tab) => Number.isInteger(Number(tab?.index)) && tab?.name)
+    .map((tab) => ({ index: Number(tab.index), name: String(tab.name) }));
+}
+
+function rememberPoe1Tabs(league, tabs) {
+  state.poe1StashTabs = { ...(state.poe1StashTabs || {}), [league]: tabs };
+  try { save(); } catch { /* the checks still show this visit */ }
+}
+
+function poe1StashOn(index) {
+  const bag = state.poe1StashOn?.[wealthLeague()];
+  const key = String(index);
+  if (!bag || !Object.prototype.hasOwnProperty.call(bag, key)) return true;
+  return !!bag[key];
+}
+
+function queuePoe1Tabs(draft) {
+  if (!poe1SignedIn || draft.busy || draft.tabsAsked) return;
+  if (Array.isArray(draft.poe1Tabs) && draft.poe1Tabs.length) return;
+  draft.tabsAsked = true;
+  setTimeout(() => { if (draft === wealthDraft()) listPoe1Stashes(); }, 0);
+}
+
+function poe1StashPicker(draft) {
+  const tabs = Array.isArray(draft.poe1Tabs) ? draft.poe1Tabs : [];
+  if (!tabs.length) return "";
+  return `<div class="wealth-poe1-tabs">${tabs.map(tab =>
+    `<label><input type="checkbox" data-poe1-stash="${esc(tab.index)}" ${poe1StashOn(tab.index) ? "checked" : ""} ${draft.busy ? "disabled" : ""}><span>${esc(tab.name)}</span></label>`
+  ).join("")}</div>`;
+}
+
+function activeGame() {
+  return state.activeGame === "poe1" ? "poe1" : "poe2";
+}
+
+function wealthLeague() {
+  if (activeGame() === "poe1") {
+    const named = String(state.poe1League || "").trim();
+    return named || "Standard";
+  }
+  return leagueId();
+}
+
+function wealthDraft() {
+  const league = wealthLeague();
+  if (ui.wealth?.league !== league) {
+    ui.wealth = {
+      league, busy: false, message: "",
+      account: typeof state.wealthAccount === "string" ? state.wealthAccount : "",
+      slots: [], find: "", stashFilter: "", setupOpen: false, setupAt: 0,
+      poe1Tabs: savedPoe1Tabs(league),
+    };
+  }
+  if (!Array.isArray(ui.wealth.poe1Tabs) || !ui.wealth.poe1Tabs.length) ui.wealth.poe1Tabs = savedPoe1Tabs(league);
+  return ui.wealth;
+}
+
+function wealthShown(divine) {
+  if (activeGame() !== "poe1") return valueHtml(divine);
+  if (!Number.isFinite(divine) || !(divine > 0)) return `<span class="muted">unpriced</span>`;
+  const exRate = Number(poe1Currency.exaltedPerDivine) || 0;
+  if (divine >= 1 || !(exRate > 0)) return valueFromAmount(divine, "divine");
+  return valueFromAmount(divine * exRate, "exalted");
+}
+
+function wealthUnit(name) {
+  if (namesMatch(name, "Divine Orb")) return 1;
+  if (activeGame() === "poe1") {
+    const priced = poe1Currency.byName.get(priceKey(name));
+    return Number.isFinite(priced) && priced > 0 ? priced : null;
+  }
+  const divine = hitDivine(lookupPrice(canonicalName(name)));
+  return Number.isFinite(divine) && divine > 0 ? divine : null;
+}
+
+function wealthValue(slots) {
+  let total = 0;
+  let unpriced = 0;
+  for (const slot of slots) {
+    const count = Number(slot.count);
+    if (!(count > 0)) continue;
+    const price = wealthUnit(slot.name);
+    if (price == null) unpriced++;
+    else total += count * price;
+  }
+  return { total, unpriced };
+}
+
+function wealthTotalText(draft) {
+  const value = wealthValue(draft.slots);
+  if (!prices.byName.size) return "poe.ninja prices are still loading.";
+  return formatDivine(value.total) + " divine · poe.ninja" +
+    (value.unpriced ? " · " + value.unpriced + " without a price" : "");
+}
+
+function syncWealthAuto() {
+  if (!window.chrome?.webview) return;
+  const saved = activeGame() === "poe2" ? state.wealthAuto?.[leagueId()] : null;
+  chrome.webview.postMessage({ type: "wealth-auto-config", config: saved?.enabled ? saved : null });
+}
+
+function setWealthAuto(config) {
+  const draft = wealthDraft();
+  const previous = state.wealthAuto;
+  state.wealthAuto = { ...previous, [draft.league]: config };
+  try {
+    save();
+  } catch {
+    state.wealthAuto = previous;
+    draft.message = "Could not save automatic capture settings.";
+    repaintWealth();
+    return;
+  }
+  syncWealthAuto();
+  repaintWealth();
+}
+
+const CURRENCY_FRAME = { x: 13, y: 171, w: 594, h: 594 };
+const CURRENCY_CONTENT = { x: 18, y: 168, w: 582, h: 606 };
+const CURRENCY_SLOTS = [
+  [50, 209, "Orb of Transmutation"], [108, 209, "Greater Orb of Transmutation"], [164, 209, "Perfect Orb of Transmutation"],
+  [240, 208, "Orb of Alchemy"], [301, 209, "Vaal Orb"], [378, 209, "Orb of Annulment"],
+  [438, 209, "Lesser Jeweller's Orb"], [495, 209, "Greater Jeweller's Orb"], [550, 208, "Perfect Jeweller's Orb"],
+  [47, 271, "Orb of Augmentation"], [107, 271, "Greater Orb of Augmentation"], [161, 272, "Perfect Orb of Augmentation"],
+  [240, 272, "Orb of Chance"], [300, 272, "Fracturing Orb"], [368, 271, "Divine Orb"], [554, 271, "Artificer's Orb"],
+  [51, 334, "Regal Orb"], [104, 334, "Greater Regal Orb"], [159, 334, "Perfect Regal Orb"],
+  [429, 354, "Arcanist's Etcher"], [491, 353, "Armourer's Scrap"], [555, 354, "Blacksmith's Whetstone"],
+  [54, 397, "Exalted Orb"], [106, 397, "Greater Exalted Orb"], [163, 397, "Perfect Exalted Orb"],
+  [489, 416, "Glassblower's Bauble"], [556, 416, "Gemcutter's Prism"],
+  [53, 460, "Chaos Orb"], [101, 461, "Greater Chaos Orb"], [157, 460, "Perfect Chaos Orb"],
+  [553, 498, "Scroll of Wisdom"],
+  [200, 581, "Transmutation Shard"], [264, 580, "Regal Shard"], [328, 581, "Chance Shard"], [390, 581, "Artificer's Shard"],
+];
+
+function stashHue(r, g, b) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const span = max - min;
+  if (!max || span / max < 0.25 || max < 52) return -1;
+  let hue = max === r ? 60 * (((g - b) / span) % 6)
+    : max === g ? 60 * ((b - r) / span + 2)
+    : 60 * ((r - g) / span + 4);
+  if (hue < 0) hue += 360;
+  return Math.min(23, Math.floor(hue / 15));
+}
+
+function longestHueRun(hues, offset, stride, count, hue) {
+  let best = 0;
+  let bestStart = 0;
+  let start = -1;
+  let end = 0;
+  let gap = 0;
+  const finish = () => {
+    const length = end - start + 1;
+    if (length > best) {
+      best = length;
+      bestStart = start;
+    }
+  };
+  for (let index = 0; index < count; index++) {
+    if (hues[offset + index * stride] === hue) {
+      if (start < 0) start = index;
+      end = index;
+      gap = 0;
+    } else if (start >= 0 && ++gap > 2) {
+      finish();
+      start = -1;
+      gap = 0;
+    }
+  }
+  if (start >= 0) finish();
+  return best ? { start: bestStart, len: best } : null;
+}
+
+function findStashPanel(pixels, width, height) {
+  const step = Math.max(1, Math.round(Math.min(width, height) / 700));
+  const columns = Math.ceil(width / step);
+  const rows = Math.ceil(height / step);
+  const hues = new Uint8Array(columns * rows);
+  hues.fill(255);
+  for (let row = 0; row < rows; row++) {
+    const y = Math.min(height - 1, row * step);
+    for (let column = 0; column < columns; column++) {
+      const x = Math.min(width - 1, column * step);
+      const index = (y * width + x) * 4;
+      const hue = stashHue(pixels[index], pixels[index + 1], pixels[index + 2]);
+      if (hue >= 0) hues[row * columns + column] = hue;
+    }
+  }
+  let best = null;
+  for (let hue = 0; hue < 24; hue++) {
+    const horizontal = [];
+    for (let row = 0; row < rows; row++) {
+      const run = longestHueRun(hues, row * columns, 1, columns, hue);
+      if (run && run.len * step >= 200) horizontal.push({ row, x0: run.start, x1: run.start + run.len - 1 });
+    }
+    const verticalMemo = new Map();
+    const verticalAt = column => {
+      if (verticalMemo.has(column)) return verticalMemo.get(column);
+      const run = longestHueRun(hues, column, columns, rows, hue);
+      verticalMemo.set(column, run);
+      return run;
+    };
+    for (let top = 0; top < horizontal.length; top++) {
+      for (let bottom = horizontal.length - 1; bottom > top; bottom--) {
+        const upper = horizontal[top];
+        const lower = horizontal[bottom];
+        const sharesEnd = Math.abs(upper.x0 - lower.x0) <= 4 || Math.abs(upper.x1 - lower.x1) <= 4;
+        const overlap = Math.min(upper.x1, lower.x1) - Math.max(upper.x0, lower.x0);
+        if (!sharesEnd || overlap < Math.min(upper.x1 - upper.x0, lower.x1 - lower.x0) * 0.6) continue;
+        const x = Math.min(upper.x0, lower.x0) * step;
+        const w = (Math.max(upper.x1, lower.x1) - Math.min(upper.x0, lower.x0)) * step;
+        const y = upper.row * step;
+        const h = (lower.row - upper.row) * step;
+        if (w < 200 || h < 200 || Math.min(w, h) / Math.max(w, h) < 0.8) continue;
+        let vertical = null;
+        const center = Math.round(x / step);
+        for (let delta = -4; delta <= 4; delta++) {
+          const column = Math.max(0, Math.min(columns - 1, center + delta));
+          const run = verticalAt(column);
+          if (run && (!vertical || run.len > vertical.len)) vertical = run;
+        }
+        if (!vertical || vertical.len * step < h * 0.8) continue;
+        if (!best || w * h > best.w * best.h) best = { x, y, w, h };
+      }
+    }
+  }
+  return best;
+}
+
+function currencySlotsInFrame(image, frame) {
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(image, 0, 0);
+  if (!frame) return [];
+  const scaleX = frame.w / CURRENCY_FRAME.w;
+  const scaleY = frame.h / CURRENCY_FRAME.h;
+  const content = {
+    x: frame.x + (CURRENCY_CONTENT.x - CURRENCY_FRAME.x) * scaleX,
+    y: frame.y + (CURRENCY_CONTENT.y - CURRENCY_FRAME.y) * scaleY,
+    w: CURRENCY_CONTENT.w * scaleX,
+    h: CURRENCY_CONTENT.h * scaleY,
+  };
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  return CURRENCY_SLOTS.flatMap(([cx, cy, name]) => {
+    const centerX = content.x + (cx - CURRENCY_CONTENT.x) / CURRENCY_CONTENT.w * content.w;
+    const centerY = content.y + (cy - CURRENCY_CONTENT.y) / CURRENCY_CONTENT.h * content.h;
+    const box = snapDigitBox(pixels, canvas.width, canvas.height, centerX, centerY, scaleX, scaleY);
+    if (!box) return [];
+    return [{
+      name, count: "",
+      x: box.left / canvas.width, y: box.top / canvas.height,
+      w: box.width / canvas.width, h: box.height / canvas.height,
+    }];
+  });
+}
+
+function snapDigitBox(pixels, width, height, centerX, centerY, scaleX, scaleY) {
+  const reachX = Math.max(14, 22 * scaleX);
+  const reachY = Math.max(8, 16 * scaleY);
+  const x0 = Math.max(0, Math.floor(centerX - reachX * 0.45));
+  const y0 = Math.max(0, Math.floor(centerY - reachY * 0.25));
+  const x1 = Math.min(width, Math.ceil(centerX + reachX));
+  const y1 = Math.min(height, Math.ceil(centerY + reachY * 1.15));
+  const cols = x1 - x0;
+  const rows = y1 - y0;
+  if (cols < 8 || rows < 6) return null;
+  const on = new Uint8Array(cols * rows);
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const index = (y * width + x) * 4;
+      const max = Math.max(pixels[index], pixels[index + 1], pixels[index + 2]);
+      const min = Math.min(pixels[index], pixels[index + 1], pixels[index + 2]);
+      if (max >= 168 && max - min <= 40) on[(y - y0) * cols + (x - x0)] = 1;
+    }
+  }
+  const seen = new Uint8Array(on.length);
+  let best = null;
+  for (let start = 0; start < on.length; start++) {
+    if (!on[start] || seen[start]) continue;
+    const stack = [start];
+    seen[start] = 1;
+    let count = 0;
+    let minX = cols;
+    let minY = rows;
+    let maxX = 0;
+    let maxY = 0;
+    let sumX = 0;
+    let sumY = 0;
+    while (stack.length) {
+      const at = stack.pop();
+      const x = at % cols;
+      const y = (at / cols) | 0;
+      count++;
+      sumX += x;
+      sumY += y;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      for (let dy = -1; dy <= 1; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= rows) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= cols) continue;
+          const next = ny * cols + nx;
+          if (!on[next] || seen[next]) continue;
+          seen[next] = 1;
+          stack.push(next);
+        }
+      }
+    }
+    const boxW = maxX - minX + 1;
+    const boxH = maxY - minY + 1;
+    if (count < 8 || boxH < 4 || boxW < 3 || boxH > reachY * 1.25 || boxW > reachX * 1.7) continue;
+    const foundX = x0 + sumX / count;
+    const foundY = y0 + sumY / count;
+    const dist = Math.hypot((foundX - centerX) / Math.max(scaleX, 0.2), (foundY - centerY) / Math.max(scaleY, 0.2));
+    if (!best || dist < best.dist) best = { dist, minX: x0 + minX, minY: y0 + minY, maxX: x0 + maxX, maxY: y0 + maxY };
+  }
+  if (!best) return null;
+  const pad = Math.max(1, Math.round(Math.min(scaleX, scaleY)));
+  const left = Math.max(0, best.minX - pad);
+  const top = Math.max(0, best.minY - pad);
+  const right = Math.min(width, best.maxX + 1 + pad);
+  const bottom = Math.min(height, best.maxY + 1 + pad);
+  if (right - left < 6 || bottom - top < 5) return null;
+  return { left, top, width: right - left, height: bottom - top };
+}
+
+async function readFramedCurrency(draft, region) {
+  const image = new Image();
+  image.src = draft.image;
+  await image.decode();
+  if (draft !== wealthDraft() || image.src !== draft.image) return;
+  const frame = {
+    x: region.x * image.naturalWidth,
+    y: region.y * image.naturalHeight,
+    w: region.w * image.naturalWidth,
+    h: region.h * image.naturalHeight,
+  };
+  if (frame.w < 180 || frame.h < 180) {
+    draft.message = "Draw the box around the whole Currency tab, along the colored border.";
+    repaintWealth();
+    return;
+  }
+  const found = currencySlotsInFrame(image, frame);
+  draft.frameTab = false;
+  draft.autoCurrency = found.length > 0;
+  draft.slots = found;
+  draft.message = found.length
+    ? "Reading Currency tab stacks…"
+    : "No stack numbers were inside that box. Draw it again along the colored border.";
+  if (!found.length) draft.frameTab = true;
+  repaintWealth();
+  if (found.length) await readWealthCounts();
+}
+
+async function markWealthTab(draft, region) {
+  const image = new Image();
+  image.src = draft.image;
+  await image.decode();
+  if (draft !== wealthDraft() || image.src !== draft.image) return;
+  const { width, height } = draft;
+  const x = Math.floor(region.x * width), y = Math.floor(region.y * height);
+  const w = Math.floor(region.w * width), h = Math.floor(region.h * height);
+  if (w < 40 || w > 600 || h < 24 || h > 300) {
+    draft.message = "Mark a region between 40 × 24 and 600 × 300 game pixels.";
+    repaintWealth();
+    return;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(image, x, y, w, h, 0, 0, w, h);
+  const pixels = ctx.getImageData(0, 0, w, h).data;
+  const signature = [];
+  for (let row = 0; row < 16; row++) {
+    for (let column = 0; column < 24; column++) {
+      const px = Math.floor((2 * column + 1) * w / 48);
+      const py = Math.floor((2 * row + 1) * h / 32);
+      const i = (py * w + px) * 4;
+      signature.push((pixels[i] * 77 + pixels[i + 1] * 150 + pixels[i + 2] * 29) >> 8);
+    }
+  }
+
+  if (Math.max(...signature) - Math.min(...signature) < 55 ||
+      signature.filter(pixel => pixel >= 95).length < 20) {
+    draft.message = "Mark a small, clear section of the Currency tab artwork. Include a distinctive bright icon or border and avoid stack numbers.";
+    repaintWealth();
+    return;
+  }
+  draft.markTab = false;
+  draft.message = "Auto capture enabled. Open the Currency tab again to try it.";
+  setWealthAuto({ enabled: true, width, height, x, y, w, h, signature: btoa(String.fromCharCode(...signature)) });
+}
+
+function wealthCountText(count) {
+  const n = Number(count);
+  if (!(n > 0)) return "0";
+  if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1).replace(/\.0$/, "") + "M";
+  if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 0 : 1).replace(/\.0$/, "") + "K";
+  return String(Math.round(n));
+}
+
+function wealthSamples(draft) {
+  const rows = [];
+  const push = row => {
+    if (!row || row.league !== draft.league) return;
+    const at = Number(row.at);
+    const total = Number(row.total);
+    if (!Number.isFinite(at) || !Number.isFinite(total)) return;
+    rows.push({ at, total });
+  };
+  for (const row of state.wealthSeries || []) push(row);
+  for (const row of state.wealthSnapshots || []) push(row);
+  if (draft.slots.length) push({ at: Date.now(), league: draft.league, total: wealthValue(draft.slots).total });
+  rows.sort((a, b) => a.at - b.at);
+  const out = [];
+  for (const row of rows) {
+    const prev = out[out.length - 1];
+    if (prev && row.at - prev.at < 30000) out[out.length - 1] = row;
+    else out.push(row);
+  }
+  return out;
+}
+
+function wealthPerHour(points) {
+  if (points.length < 2) return null;
+  const last = points[points.length - 1];
+  let first = points[0];
+  for (let i = points.length - 2; i >= 0; i--) {
+    if (last.at - points[i].at >= 3600000) {
+      first = points[i];
+      break;
+    }
+  }
+  const hours = (last.at - first.at) / 3600000;
+  if (hours < 1 / 60) return null;
+  return (last.total - first.total) / hours;
+}
+
+function wealthPlotUnit(values) {
+  const peak = Math.max(0, ...values.filter(value => Number.isFinite(value)));
+  const exRate = Number(poe1Currency.exaltedPerDivine) || 0;
+  if (activeGame() === "poe1" && peak < 1 && exRate > 0) return "exalted";
+  return "divine";
+}
+
+function wealthPlotAmount(divine, unit) {
+  if (unit !== "exalted") return divine;
+  const exRate = Number(poe1Currency.exaltedPerDivine) || 0;
+  return exRate > 0 ? divine * exRate : divine;
+}
+
+function wealthRateText(total, perHour) {
+  const unit = wealthPlotUnit([total]);
+  const amount = wealthPlotAmount(perHour, unit);
+  return `${amount > 0 ? "+" : ""}${formatAmount(amount, unit)}/h`;
+}
+
+function wealthHourLabel(at, span) {
+  const date = new Date(at);
+  if (span < 36 * 3600000) return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function wealthLiveLabel() {
+  const rows = [];
+  for (const row of [...(state.wealthSeries || []), ...(state.wealthSnapshots || [])]) {
+    if (!row || row.league !== wealthLeague()) continue;
+    const at = Number(row.at);
+    const total = Number(row.total);
+    if (!Number.isFinite(at) || !Number.isFinite(total)) continue;
+    rows.push({ at, total });
+  }
+  rows.sort((a, b) => a.at - b.at);
+  if (!rows.length) return "";
+  const total = rows[rows.length - 1].total;
+  const perHour = wealthPerHour(rows);
+  const rate = perHour == null ? "" : `   ${perHour > 0 ? "+" : ""}${formatAmount(perHour, "divine")}/h`;
+  return `Total wealth  ${formatAmount(total, "divine")}${rate}`;
+}
+
+function publishWealthLive(label) {
+  if (!window.chrome?.webview) return;
+  chrome.webview.postMessage({ type: "wealth-live", label: label == null ? wealthLiveLabel() : String(label) });
+}
+
+function rememberWealthPoint(draft) {
+  const total = wealthValue(draft.slots).total;
+  if (!draft.slots.length || !Number.isFinite(total)) return;
+  const rows = (Array.isArray(state.wealthSeries) ? state.wealthSeries : [])
+    .filter(row => row && Number.isFinite(Number(row.at)) && Number.isFinite(Number(row.total)));
+  state.wealthSeries = [{ at: Date.now(), league: draft.league, total }, ...rows].slice(0, 400);
+  try { save(); } catch { /* the chart still shows this read */ }
+  publishWealthLive();
+}
+
+function wealthChart(points) {
+  const w = 720;
+  const h = 228;
+  const left = 86;
+  const right = 18;
+  const top = 18;
+  const bottom = 32;
+  const plotW = w - left - right;
+  const plotH = h - top - bottom;
+  const base = top + plotH;
+  const unit = wealthPlotUnit(points.map(point => point.total));
+  const amounts = points.map(point => Math.max(0, wealthPlotAmount(point.total, unit)));
+  let max = amounts.length ? Math.max(...amounts) : 1;
+  if (!(max > 0)) max = 1;
+  max *= 1.08;
+  const yAt = value => top + (1 - value / max) * plotH;
+  const t0 = points[0]?.at ?? Date.now();
+  const t1 = points[points.length - 1]?.at ?? t0;
+  const span = Math.max(t1 - t0, 1);
+  const xAt = at => points.length < 2 ? left + plotW * 0.5 : left + ((at - t0) / span) * plotW;
+  const grid = [1, 0.5, 0].map(step => {
+    const value = max * step;
+    const y = yAt(value);
+    return `<line x1="${left}" y1="${y.toFixed(1)}" x2="${w - right}" y2="${y.toFixed(1)}" /><text x="${left - 12}" y="${(y + 4).toFixed(1)}" text-anchor="end">${esc(formatAmount(value, unit))}</text>`;
+  }).join("");
+  const xy = points.map((point, index) => [xAt(point.at), yAt(amounts[index])]);
+  const line = xy.length > 1 ? xy.map((point, index) => `${index ? "L" : "M"}${point[0].toFixed(1)} ${point[1].toFixed(1)}`).join(" ") : "";
+  const area = line
+    ? `${line} L${xy[xy.length - 1][0].toFixed(1)} ${base.toFixed(1)} L${xy[0][0].toFixed(1)} ${base.toFixed(1)} Z`
+    : "";
+  const dots = [];
+  xy.forEach((point, index) => {
+    const prev = dots[dots.length - 1];
+    const last = index === xy.length - 1;
+    if (!last && prev && Math.abs(point[0] - prev[0]) < 14 && Math.abs(point[1] - prev[1]) < 8) return;
+    dots.push(point);
+  });
+  const marks = dots.map(point => `<circle class="wealth-dot" cx="${point[0].toFixed(1)}" cy="${point[1].toFixed(1)}" r="3.5" />`).join("");
+  const axis = points.length
+    ? `<text x="${points.length < 2 ? xAt(t0) : left}" y="${h - 10}" text-anchor="${points.length < 2 ? "middle" : "start"}">${esc(wealthHourLabel(t0, span))}</text>`
+      + (points.length > 1 ? `<text x="${w - right}" y="${h - 10}" text-anchor="end">${esc(wealthHourLabel(t1, span))}</text>` : "")
+    : "";
+  return `<svg class="wealth-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Currency over time">
+    <g class="wealth-grid">${grid}</g>
+    ${area ? `<path class="wealth-area" d="${area}" />` : ""}
+    ${line ? `<path class="wealth-line" d="${line}" />` : ""}
+    ${marks}${axis}
+  </svg>`;
+}
+
+function wealthDonut(parts) {
+  const priced = parts.filter(part => part.value > 0);
+  const total = priced.reduce((sum, part) => sum + part.value, 0);
+  if (!(total > 0)) return `<p class="muted">No priced stacks yet.</p>`;
+  const colors = ["#c8a45a", "#7eb6d6", "#d07a6a", "#8fbf8f", "#b79ad6", "#d6b07a", "#8fd0c4", "#d68fb0", "#a8b0c0"];
+  let cursor = 0;
+  const stops = priced.map((part, index) => {
+    const start = cursor;
+    cursor += part.value / total * 100;
+    return `${colors[index % colors.length]} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`;
+  }).join(", ");
+  const legend = priced.map((part, index) =>
+    `<li><i style="background:${colors[index % colors.length]}"></i><b>${esc(part.name)}</b> <span>${esc(formatDivine(part.value))}</span></li>`).join("");
+  return `<div class="wealth-break"><div class="wealth-donut" style="background:conic-gradient(${stops})"><span>${esc(formatDivine(total))}</span></div><ul class="wealth-legend">${legend}</ul></div>`;
+}
+
+function renderWealth() {
+  const draft = wealthDraft();
+  const history = (Array.isArray(state.wealthSnapshots) ? state.wealthSnapshots : [])
+    .filter(snapshot => snapshot?.league === draft.league && Number.isFinite(snapshot.total));
+  const query = priceKey(draft.find || "");
+  const shown = draft.slots.filter(slot => {
+    if (draft.stashFilter && slot.stash !== draft.stashFilter) return false;
+    return !query || priceKey(slot.name).includes(query);
+  }).sort((a, b) => {
+    const value = row => {
+      const unit = wealthUnit(row.name);
+      const count = Number(row.count);
+      return unit == null || !(count > 0) ? -1 : unit * count;
+    };
+    return value(b) - value(a);
+  });
+  const rows = shown.map(slot => {
+    const count = Number(slot.count);
+    const unit = wealthUnit(slot.name);
+    const each = unit == null ? `<span class="muted">unpriced</span>` : wealthShown(unit);
+    const line = unit == null || !(count > 0) ? "—" : wealthShown(unit * count);
+    return `<tr>
+      <td><div class="wealth-item">${itemIconHtml(slot.name)}<span>${esc(slot.name)}</span></div></td>
+      <td><span class="wealth-stash">${esc(slot.stashName || "")}</span></td>
+      <td class="num">${esc(wealthCountText(count))}</td>
+      <td class="num">${each}</td>
+      <td class="num wealth-line">${line}</td>
+    </tr>`;
+  }).join("");
+  const poe1 = activeGame() === "poe1";
+  if (poe1) askPoe1Session();
+  const stashRows = poe1
+    ? [...new Map(draft.slots.map(slot => [slot.stash, slot.stashName || "Stash"])).entries()].map(([id, name]) => ({ id, name }))
+    : WEALTH_STASHES.map(stash => ({ id: stash.id, name: stash.name }));
+  const byStash = stashRows.map(stash => ({
+    name: stash.name,
+    value: draft.slots.filter(slot => slot.stash === stash.id).reduce((sum, slot) => {
+      const unit = wealthUnit(slot.name);
+      const count = Number(slot.count);
+      return sum + (unit == null || !(count > 0) ? 0 : unit * count);
+    }, 0),
+  }));
+  const points = wealthSamples(draft);
+  const perHour = wealthPerHour(points);
+  const value = wealthValue(draft.slots);
+  if (poe1) queuePoe1Tabs(draft);
+  return `<section class="wealth-view">
+    <header class="wealth-top panel">
+      <div>
+        <p class="wealth-kicker">${poe1 ? "PoE 1" : "PoE 2"}</p>
+        <h2>Wealth</h2>
+      </div>
+      <div class="wealth-read">
+        ${poe1
+          ? `        <button type="button" class="btn ghost" data-poe1-login ${draft.busy ? "disabled" : ""}>${poe1SignedIn ? "Signed in" : "Sign in"}</button>
+        <label for="wealth-poe1-league">League</label>
+        <input id="wealth-poe1-league" value="${esc(state.poe1League || "Standard")}" maxlength="64" ${draft.busy ? "disabled" : ""}>
+        <button type="button" class="btn gold" data-wealth-read-tab ${draft.busy ? "disabled" : ""}>${draft.busy ? "Reading…" : "Read stash"}</button>
+        ${poe1StashPicker(draft)}`
+          : `<button type="button" class="btn ghost" data-wealth-add ${draft.busy ? "disabled" : ""}>Add stash</button>
+        <label for="wealth-account">Account</label>
+        <input id="wealth-account" data-wealth-account value="${esc(draft.account)}" maxlength="60" placeholder="Account#1234" ${draft.busy ? "disabled" : ""}>
+        <button type="button" class="btn gold" data-wealth-read-tab ${draft.busy ? "disabled" : ""}>${draft.busy ? "Reading…" : "Read tabs"}</button>`}
+      </div>
+    </header>
+    <p id="wealth-status" role="status">${esc(draft.message)}</p>
+    ${draft.slots.length ? `<div class="wealth-summary">
+      <article class="panel wealth-hero">
+        <h3>Value over time</h3>
+        <p class="wealth-headline">${valueHtml(value.total)}${perHour == null ? "" : `<span class="wealth-rate">${esc(wealthRateText(value.total, perHour))}</span>`}</p>
+        ${wealthChart(points)}
+      </article>
+      <article class="panel">
+        <h3>Value breakdown</h3>
+        ${wealthDonut(byStash)}
+      </article>
+    </div>
+    <article class="panel wealth-sheet">
+      <div class="wealth-toolbar">
+        <input id="wealth-find" value="${esc(draft.find || "")}" placeholder="Search items" ${draft.busy ? "disabled" : ""}>
+        <select id="wealth-stash-filter" ${draft.busy ? "disabled" : ""}>
+          <option value="">All stashes</option>
+          ${stashRows.map(stash => `<option value="${esc(stash.id)}" ${draft.stashFilter === stash.id ? "selected" : ""}>${esc(stash.name)}</option>`).join("")}
+        </select>
+      </div>
+      <table class="rate-table wealth-counts"><thead><tr><th>Item</th><th>Stash</th><th>Units</th><th>Unit value</th><th>Total value</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="5" class="muted">Nothing matches.</td></tr>`}</tbody></table>
+    </article>` : ""}
+    ${history.length ? `<article class="panel"><h3>History</h3>
+      <table class="rate-table"><thead><tr><th>Saved</th><th>Estimated value</th><th>Change</th></tr></thead><tbody>
+      ${history.map((snapshot, index) => {
+        const previous = history[index + 1];
+        const names = entry => (Array.isArray(entry?.counts) ? entry.counts : []).map(slot => priceKey(slot?.name)).sort().join("|");
+        const comparable = previous && !snapshot.unpriced && !previous.unpriced && names(snapshot) === names(previous);
+        const change = comparable ? snapshot.total - previous.total : null;
+        return `<tr><td>${esc(new Date(snapshot.at).toLocaleString())}</td>
+          <td>${esc(formatNum(snapshot.total))} div${snapshot.unpriced ? " · partial" : ""}</td>
+          <td>${change == null ? "—" : esc((change > 0 ? "+" : "") + formatNum(change)) + " div"}</td></tr>`;
+      }).join("")}</tbody></table></article>` : ""}
+  </section>`;
+}
+
+function renderWealthSetup() {
+  const draft = wealthDraft();
+  const index = Math.min(WEALTH_STASHES.length - 1, Math.max(0, Number(draft.setupAt) || 0));
+  const stash = WEALTH_STASHES[index];
+  const pick = `<select id="wealth-add-stash" aria-label="Stash">${WEALTH_STASHES.map((row, rowIndex) =>
+    `<option value="${rowIndex}" ${rowIndex === index ? "selected" : ""}>${esc(row.name)}</option>`).join("")}</select>`;
+  return `<div class="sheet-inner wealth-setup-sheet">
+    <header>
+      <h2>Add stash</h2>
+      <button class="close" data-wealth-setup-later type="button" aria-label="Close">×</button>
+    </header>
+    ${pick}
+    <ol class="wealth-setup-steps">
+      <li><b>Make this stash tab public</b></li>
+      <li>
+        <b>Use this exact tab name</b>
+        <div class="wealth-setup-name">
+          <input readonly value="${esc(wealthTabName(stash))}" aria-label="Tab name">
+          <button type="button" class="btn ghost" data-wealth-copy="${esc(stash.id)}" aria-label="Copy tab name">Copy</button>
+        </div>
+      </li>
+    </ol>
+    <div class="wealth-setup-actions">
+      <button type="button" class="btn ghost" data-wealth-setup-later>Cancel</button>
+      <button type="button" class="btn gold" data-wealth-add-confirm>Add</button>
+    </div>
+  </div>`;
+}
+
+function setWealthListed(id, on) {
+  state.wealthTabs = { ...(state.wealthTabs || {}), [id]: !!on };
+  try { save(); } catch { /* the choice still shows */ }
+}
+
+function paintWealthSetup() {
+  const dialog = document.getElementById("wealth-setup");
+  if (!dialog) return;
+  if (!dialog.dataset.wired) {
+    dialog.dataset.wired = "1";
+    dialog.addEventListener("close", () => { wealthDraft().setupOpen = false; });
+  }
+  const draft = wealthDraft();
+  if (ui.view !== "wealth" || !draft.setupOpen) {
+    if (dialog.open) dialog.close();
+    return;
+  }
+  dialog.innerHTML = renderWealthSetup();
+  if (!dialog.open) dialog.showModal();
+}
+
+function repaintWealth() {
+  if (ui.view !== "wealth" || wealthDraft().drawing) return;
+  document.getElementById("main").innerHTML = renderWealth();
+  const draft = wealthDraft();
+  if (draft.focus) {
+    const field = document.getElementById(draft.focus);
+    if (field) {
+      field.focus();
+      if (typeof draft.focusAt === "number" && field.setSelectionRange) field.setSelectionRange(draft.focusAt, draft.focusAt);
+    }
+  }
+  const capture = document.getElementById("wealth-capture");
+  paintWealthSetup();
+  if (!capture) return;
+  capture.addEventListener("pointerdown", event => {
+    if (event.button !== 0 || draft.drawing || draft.busy || (!draft.markTab && !draft.frameTab && draft.slots.length >= 48)) return;
+    event.preventDefault();
+    const rect = capture.getBoundingClientRect();
+    const point = e => ({
+      x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height)),
+    });
+    const start = point(event);
+    const marker = document.createElement("span");
+    marker.className = "wealth-region";
+    capture.append(marker);
+    capture.setPointerCapture(event.pointerId);
+    draft.drawing = true;
+    let region;
+    const move = e => {
+      if (e.pointerId !== event.pointerId) return;
+      const end = point(e);
+      region = { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y),
+        w: Math.abs(end.x - start.x), h: Math.abs(end.y - start.y) };
+      Object.assign(marker.style, { left: region.x * 100 + "%", top: region.y * 100 + "%",
+        width: region.w * 100 + "%", height: region.h * 100 + "%" });
+    };
+    const finish = e => {
+      if (e.pointerId !== event.pointerId) return;
+      capture.removeEventListener("pointermove", move);
+      capture.removeEventListener("pointerup", finish);
+      capture.removeEventListener("pointercancel", finish);
+      capture.removeEventListener("lostpointercapture", finish);
+      draft.drawing = false;
+      marker.remove();
+      if (e.type !== "pointerup" || !region || region.w * rect.width < 5 || region.h * rect.height < 5) return;
+      if (draft.frameTab) {
+        readFramedCurrency(draft, region).catch(() => {
+          draft.message = "Could not read that box. Draw it again along the colored border.";
+          repaintWealth();
+        });
+        return;
+      }
+      if (draft.markTab) {
+        markWealthTab(draft, region).catch(() => {
+          draft.message = "Could not read the marked region. Try again.";
+          repaintWealth();
+        });
+        return;
+      }
+      draft.slots.push({ ...region, name: "", count: "" });
+      draft.dirty = true;
+      repaintWealth();
+    };
+    capture.addEventListener("pointermove", move);
+    capture.addEventListener("pointerup", finish);
+    capture.addEventListener("pointercancel", finish);
+    capture.addEventListener("lostpointercapture", finish);
+  });
+}
+
+async function acceptWealthCapture(msg) {
+  const draft = wealthDraft();
+  if (msg.automatic && (!state.wealthAuto?.[draft.league]?.enabled || draft.dirty || draft.busy || draft.markTab || draft.drawing)) return;
+  draft.busy = false;
+  if (msg.error) {
+    draft.message = msg.error;
+    repaintWealth();
+    return;
+  }
+  if (typeof msg.image !== "string" || !msg.image.startsWith("data:image/png;base64,")) {
+    draft.message = "SSE did not receive a screenshot. Try marking the Currency tab again.";
+    repaintWealth();
+    return;
+  }
+  const capture = draft.capture = {};
+  const image = new Image();
+  image.src = msg.image;
+  try { await image.decode(); }
+  catch {
+    if (draft.capture === capture) {
+      draft.busy = false;
+      draft.message = "The screenshot could not be read.";
+      repaintWealth();
+    }
+    return;
+  }
+  if (draft.capture !== capture || draft !== wealthDraft()) return;
+  const calibration = state.wealthCalibration?.[draft.league];
+  const width = draft.width || calibration?.width;
+  const height = draft.height || calibration?.height;
+  if (width !== image.naturalWidth || height !== image.naturalHeight) draft.slots = [];
+  draft.image = msg.image;
+  draft.dirty = false;
+  draft.markTab = !!msg.markTab;
+  draft.width = image.naturalWidth;
+  draft.height = image.naturalHeight;
+  draft.busy = false;
+  draft.autoCurrency = false;
+  draft.frameTab = false;
+  if (!draft.markTab) {
+    draft.frameTab = true;
+    draft.slots = [];
+    draft.message = "Draw a tight box around the Currency tab, along the colored border.";
+  } else {
+    draft.slots.forEach(slot => { slot.count = ""; });
+    draft.message = "Draw a box on the image below.";
+  }
+  if (ui.view !== "wealth" && (draft.markTab || !msg.automatic)) {
+    ui.view = "wealth";
+    render();
+  } else {
+    repaintWealth();
+  }
+  if (draft.markTab || draft.frameTab) document.querySelector(".shell")?.scrollTo({ top: 0, left: 0 });
+  else if (draft.slots.length) await readWealthCounts();
+}
+
+async function readWealthCounts() {
+  const draft = wealthDraft();
+  if (!draft.image || draft.busy || !draft.slots.length) return;
+  const source = draft.image;
+  const capture = draft.capture;
+  const slots = draft.slots.slice();
+  draft.busy = true;
+  draft.message = "Reading counts…";
+  repaintWealth();
+  try {
+    const image = new Image();
+    image.src = source;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    const crops = slots.map(slot => {
+      const width = Math.max(1, Math.round(slot.w * image.naturalWidth));
+      const height = Math.max(1, Math.round(slot.h * image.naturalHeight));
+      const scale = Math.min(8, Math.max(4, Math.ceil(72 / height)));
+      const pad = 12;
+      canvas.width = Math.min(420, width * scale + pad * 2);
+      canvas.height = Math.min(180, height * scale + pad * 2);
+      context.fillStyle = "#000";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.imageSmoothingEnabled = false;
+      context.drawImage(image, Math.round(slot.x * image.naturalWidth),
+        Math.round(slot.y * image.naturalHeight), width, height, pad, pad, width * scale, height * scale);
+      return canvas.toDataURL("image/png").split(",")[1];
+    });
+    const counts = await webviewJson({ type: "wealth-ocr", crops }, 35000, "Count recognition timed out.");
+    if (draft.capture !== capture || draft !== wealthDraft()) return;
+    if (!Array.isArray(counts) || counts.length !== slots.length) throw new Error("Count recognition returned an incomplete result.");
+    slots.forEach((slot, index) => {
+      const text = String(counts[index] || "").trim().replace(/[,\s]/g, "");
+      slot.count = /^\d{1,7}$/.test(text) ? text : "";
+    });
+    const read = slots.filter(slot => slot.count !== "").length;
+    draft.message = draft.autoCurrency
+      ? `Read ${read} stack${read === 1 ? "" : "s"}. Fix any blank or wrong count, then save.`
+      : "Review the counts. Enter 0 for an empty slot.";
+  } catch (err) {
+    if (draft.capture === capture) draft.message = err.message;
+  } finally {
+    if (draft.image === source) { draft.busy = false; repaintWealth(); }
+  }
+}
+
+const WEALTH_REFRESH_MS = 15 * 60 * 1000;
+let wealthReadStarted = 0;
+let wealthRetryAt = 0;
+let wealthRefreshTimer = 0;
+let poe1Currency = { league: "", byName: new Map() };
+let poe1SignedIn = false;
+let poe1SessionAsked = false;
+
+function askPoe1Session() {
+  if (poe1SessionAsked || !window.chrome?.webview) return;
+  poe1SessionAsked = true;
+  webviewJson({ type: "poe1-session" }, 4000, "session")
+    .then((result) => {
+      poe1SignedIn = !!result?.signedIn;
+      if (activeGame() === "poe1") scheduleWealthRefresh();
+      if (ui.view === "wealth" && activeGame() === "poe1") repaintWealth();
+    })
+    .catch(() => { poe1SessionAsked = false; });
+}
+
+async function loadPoe1Currency(league) {
+  if (poe1Currency.league === league && poe1Currency.byName.size) return;
+  try {
+    const data = await ninjaFetch(`/poe1/api/economy/exchange/current/overview?league=${encodeURIComponent(league)}&type=Currency`);
+    const names = new Map();
+    for (const item of [...(data?.core?.items || []), ...(data?.items || [])]) {
+      if (item?.id && item?.name) names.set(String(item.id), item.name);
+      if (item?.detailsId && item?.name) names.set(String(item.detailsId), item.name);
+    }
+    const primary = data?.core?.primary || "chaos";
+    const staged = [];
+    for (const line of data?.lines || []) {
+      const name = names.get(String(line.id)) || line.name || line.currencyTypeName || "";
+      let amount = Number(line.primaryValue);
+      let unit = primary;
+      if (!Number.isFinite(amount)) {
+        amount = Number(line.chaosValue);
+        unit = "chaos";
+      }
+      if (!name || !Number.isFinite(amount) || !(amount > 0)) continue;
+      staged.push({ name, amount, unit });
+    }
+    const rates = data?.core?.rates || {};
+    let chaosPerDivine = 0;
+    let exaltedPerDivine = 0;
+    if (primary === "chaos" && rates.divine > 0 && rates.divine < 1) chaosPerDivine = 1 / rates.divine;
+    else if (rates.chaos > 0) chaosPerDivine = rates.chaos;
+    if (!(chaosPerDivine > 0) && primary === "chaos") {
+      const divineOrb = staged.find((row) => /^divine orb$/i.test(row.name));
+      if (divineOrb && divineOrb.amount > 1) chaosPerDivine = divineOrb.amount;
+    }
+    const exalt = staged.find((row) => /^exalted orb$/i.test(row.name) && row.amount > 0);
+    if (exalt && chaosPerDivine > 0) exaltedPerDivine = chaosPerDivine / exalt.amount;
+    const byName = new Map();
+    for (const row of staged) {
+      const divine = divineWithRates(row.amount, row.unit, exaltedPerDivine, chaosPerDivine);
+      if (!Number.isFinite(divine) || !(divine > 0)) continue;
+      byName.set(priceKey(row.name), divine);
+    }
+    if (byName.size) poe1Currency = { league, byName, chaosPerDivine, exaltedPerDivine };
+  } catch { /* stacks still list when prices are missing */ }
+}
+
+function wealthLastReadAt() {
+  let latest = 0;
+  for (const row of state.wealthSeries || []) {
+    if (!row || row.league !== wealthLeague()) continue;
+    const at = Number(row.at);
+    if (at > latest) latest = at;
+  }
+  return latest;
+}
+
+function wealthHasBaseline() {
+  const league = wealthLeague();
+  return (state.wealthSeries || []).some((row) => row && row.league === league && Number(row.at) > 0);
+}
+
+function poe1WealthTabs() {
+  const draft = wealthDraft();
+  const tabs = Array.isArray(draft.poe1Tabs) && draft.poe1Tabs.length ? draft.poe1Tabs : savedPoe1Tabs(draft.league);
+  return tabs.filter((tab) => poe1StashOn(tab.index));
+}
+
+function wealthAutoArmed() {
+  return activeGame() === "poe1" && poe1SignedIn && poe1WealthTabs().length > 0 && wealthHasBaseline();
+}
+
+function wealthRefreshDue() {
+  if (wealthRetryAt && Date.now() < wealthRetryAt) return false;
+  const last = Math.max(wealthLastReadAt(), wealthReadStarted);
+  if (activeGame() === "poe1") return last > 0 && Date.now() - last >= WEALTH_REFRESH_MS;
+  return !last || Date.now() - last >= WEALTH_REFRESH_MS;
+}
+
+function scheduleWealthRefresh() {
+  clearTimeout(wealthRefreshTimer);
+  if (!wealthAutoArmed()) return;
+  const last = Math.max(wealthLastReadAt(), wealthReadStarted);
+  let wait = last > 0 ? WEALTH_REFRESH_MS - (Date.now() - last) : WEALTH_REFRESH_MS;
+  if (wealthRetryAt) wait = Math.min(wait, wealthRetryAt - Date.now());
+  if (!(wait > 0)) wait = 4000;
+  wealthRefreshTimer = setTimeout(() => {
+    Promise.resolve(readWealthTab({ auto: true })).finally(() => scheduleWealthRefresh());
+  }, wait);
+}
+
+async function signInPoe1() {
+  const draft = wealthDraft();
+  if (draft.busy) return;
+  if (!window.chrome?.webview) {
+    draft.message = "Sign-in runs in Still Sane.";
+    repaintWealth();
+    return;
+  }
+  draft.busy = true;
+  draft.message = "Sign in on the Path of Exile page. It stays open until the account page loads.";
+  repaintWealth();
+  try {
+    await webviewJson({ type: "poe1-login" }, 660000, "Sign-in was closed.");
+    if (draft === wealthDraft()) {
+      poe1SignedIn = true;
+      poe1SessionAsked = true;
+      draft.message = "Signed in. That login stays on this PC.";
+      scheduleWealthRefresh();
+    }
+  } catch (err) {
+    if (draft === wealthDraft()) {
+      const message = String(err?.message || "");
+      draft.message = !message.trim() || /sign-in was closed/i.test(message) || message === "{\"error\":\"\"}" ? "" : message;
+    }
+  } finally {
+    if (draft === wealthDraft()) {
+      draft.busy = false;
+      repaintWealth();
+    }
+  }
+}
+
+async function listPoe1Stashes() {
+  const draft = wealthDraft();
+  if (draft.busy) return;
+  if (!window.chrome?.webview) {
+    draft.message = "Reading the tab runs in Still Sane.";
+    repaintWealth();
+    return;
+  }
+  draft.busy = true;
+  draft.message = "Loading stash tabs…";
+  repaintWealth();
+  try {
+    const result = await webviewJson(
+      { type: "wealth-stash", game: "poe1", league: draft.league, list: true },
+      30000,
+      "The stash read timed out. Try again in a moment.");
+    if (draft !== wealthDraft()) return;
+    const tabs = Array.isArray(result?.tabs) ? result.tabs : [];
+    draft.poe1Tabs = tabs.filter(tab => Number.isInteger(tab?.index) && tab.index >= 0 && tab.index <= 500 && tab.name)
+      .map(tab => ({ index: tab.index, name: String(tab.name) }));
+    if (draft.poe1Tabs.length) rememberPoe1Tabs(draft.league, draft.poe1Tabs);
+    draft.message = draft.poe1Tabs.length ? "" : "No stash tabs in that league.";
+    draft.tabsReady = draft.poe1Tabs.length > 0;
+  } catch (err) {
+    if (draft === wealthDraft()) {
+      draft.message = err.message || "Could not load the stash tabs.";
+      if (/sign in again/i.test(draft.message)) poe1SignedIn = false;
+    }
+  } finally {
+    if (draft === wealthDraft()) {
+      draft.busy = false;
+      repaintWealth();
+      scheduleWealthRefresh();
+    }
+  }
+}
+
+async function readWealthTab(opts) {
+  const draft = wealthDraft();
+  const auto = opts?.auto === true;
+  const poe1 = activeGame() === "poe1";
+  if (draft.busy) return;
+  if (auto && poe1 && !wealthAutoArmed()) return;
+  if (auto && !wealthRefreshDue()) return;
+  const account = draft.account.trim();
+  if (!poe1 && account.length < 2) {
+    if (auto) return;
+    draft.message = "Enter the account name from the Path of Exile website.";
+    repaintWealth();
+    return;
+  }
+  if (!window.chrome?.webview) {
+    if (auto) return;
+    draft.message = "Reading the tab runs in Still Sane.";
+    repaintWealth();
+    return;
+  }
+  if (poe1 && (!Array.isArray(draft.poe1Tabs) || !draft.poe1Tabs.length)) draft.poe1Tabs = savedPoe1Tabs(draft.league);
+  const poe1Tabs = poe1 ? (Array.isArray(draft.poe1Tabs) ? draft.poe1Tabs : []).filter(tab => poe1StashOn(tab.index)) : [];
+  const stashes = poe1 ? [] : WEALTH_STASHES.filter(stash => wealthOn(stash.id)).map(stash => ({
+    id: stash.id, name: stash.name, price: stash.price, category: stash.category || "",
+  }));
+  if (poe1 && !poe1Tabs.length) {
+    if (auto) return;
+    draft.message = Array.isArray(draft.poe1Tabs) && draft.poe1Tabs.length
+      ? "Turn on at least one stash tab."
+      : "Choose the stash tabs first.";
+    repaintWealth();
+    return;
+  }
+  if (!poe1 && !stashes.length) {
+    if (auto) return;
+    draft.message = "Turn on at least one stash tab.";
+    repaintWealth();
+    return;
+  }
+  if (!poe1) {
+    state.wealthAccount = account;
+    try { save(); } catch { /* the read can still run */ }
+  }
+  draft.busy = true;
+  draft.message = poe1 ? "Reading stash tabs…" : "Reading public stash tabs…";
+  publishWealthLive("Reading…");
+  repaintWealth();
+  try {
+    if (poe1) await loadPoe1Currency(draft.league);
+    const result = await webviewJson(
+      poe1
+        ? { type: "wealth-stash", game: "poe1", league: draft.league, tabs: poe1Tabs.map(tab => tab.index) }
+        : { type: "wealth-stash", league: draft.league, account, stashes },
+      poe1 ? 150000 : 90000,
+      poe1 ? "The stash read timed out. Try again in a moment." : "The trade site timed out. Try again in a moment.");
+    if (draft !== wealthDraft()) return;
+    const groups = Array.isArray(result?.stashes) ? result.stashes : [];
+    draft.slots = groups.flatMap(group => (Array.isArray(group?.stacks) ? group.stacks : []).filter(row => row && row.name).map(row => ({
+      name: String(row.name),
+      count: String(row.count ?? ""),
+      stash: String(group.id || ""),
+      stashName: String(group.name || ""),
+    })));
+    rememberWealthPoint(draft);
+    wealthReadStarted = Date.now();
+    wealthRetryAt = 0;
+    const partial = groups.some(group => group?.partial);
+    draft.message = draft.slots.length
+      ? `Read ${draft.slots.length} stacks${partial || result.limited ? (poe1 ? ". Some selected tabs were not read." : ". The trade site stopped before every tab finished.") : "."}`
+      : (poe1 ? "Nothing in the selected stash tabs." : "Nothing listed yet. Name each tab exactly as shown, set it public, change zones, then read again.");
+  } catch (err) {
+    if (draft === wealthDraft()) {
+      draft.message = err.message || "Could not read the tab.";
+      if (/sign in again/i.test(draft.message)) poe1SignedIn = false;
+      wealthRetryAt = Date.now() + 2 * 60 * 1000;
+    }
+  } finally {
+    if (draft === wealthDraft()) {
+      draft.busy = false;
+      publishWealthLive();
+      repaintWealth();
+    }
+    if (poe1) scheduleWealthRefresh();
+  }
+}
+
 function renderSettings() {
   return `
     <section class="settings">
       <div>
+        <p class="wealth-kicker">${activeGame() === "poe1" ? "PoE 1" : "PoE 2"}</p>
         <h2 class="section-title">Settings</h2>
         <p class="muted">Changes save automatically.</p>
       </div>
@@ -10290,27 +12119,27 @@ function renderSettings() {
         window.chrome?.webview
           ? `<article class="panel">
         <h3>Hotkeys</h3>
-        <p class="muted" style="margin-top:8px">Log boss drops or check prices in-game.</p>
+        <p class="muted" style="margin-top:8px">${activeGame() === "poe1" ? "Check prices or go to hideout in-game." : "Log boss drops or check prices in-game."}</p>
         <div class="hotkey-rows">
           <div class="hotkey-row"><span>Go to hideout</span><button class="hotkey-btn${ui.hotkeyCapture === "hideout" ? " is-listening" : ""}" data-hotkey-bind="hideout" type="button">${ui.hotkeyCapture === "hideout" ? "Press a key…" : esc(hotkeys().hideout)}</button></div>
-          <div class="hotkey-row">
+          ${activeGame() === "poe1" ? "" : `<div class="hotkey-row">
             <span>Log copied item</span>
             <button class="hotkey-btn${ui.hotkeyCapture === "log" ? " is-listening" : ""}" data-hotkey-bind="log" type="button">${
               ui.hotkeyCapture === "log" ? "Press a key…" : esc(hotkeys().log)
             }</button>
-          </div>
+          </div>`}
           <div class="hotkey-row">
             <span>Price overlay</span>
             <button class="hotkey-btn${ui.hotkeyCapture === "price" ? " is-listening" : ""}" data-hotkey-bind="price" type="button">${
               ui.hotkeyCapture === "price" ? "Press a key…" : esc(hotkeys().price)
             }</button>
           </div>
-          <div class="hotkey-row">
+          ${activeGame() === "poe1" ? "" : `<div class="hotkey-row">
             <span>Next kill</span>
             <button class="hotkey-btn${ui.hotkeyCapture === "next" ? " is-listening" : ""}" data-hotkey-bind="next" type="button">${
               ui.hotkeyCapture === "next" ? "Press a key…" : esc(hotkeys().next)
             }</button>
-          </div>
+          </div>`}
         </div>
         <p class="muted">Click a key to change it. Esc cancels.</p>
         <label class="settings-check" style="margin-top:14px">
@@ -10329,7 +12158,7 @@ function renderSettings() {
       </article>`
       }
 
-      <article class="panel settings-storage-panel">
+      ${activeGame() === "poe1" ? "" : `<article class="panel settings-storage-panel">
         <h3>Default save folder</h3>
         ${
           window.chrome?.webview
@@ -10342,7 +12171,7 @@ function renderSettings() {
           <button class="btn ghost" id="settings-import-btn" type="button">Import</button>
           <button class="btn gold" id="settings-export-btn" type="button">Export</button>
         </div>
-      </article>
+      </article>`}
       <article class="panel settings-app-panel">
         <h3>App</h3>
         <p class="muted" id="update-status" style="margin-top:8px">v${esc(APP_VERSION)}</p>
@@ -10823,6 +12652,8 @@ function wireFarmPad() {
 function render() {
   const shown = document.getElementById("item-tip")?.dataset.for || "";
   if (ui.view === "hunt" || ui.view === "bosses" || ui.view === "title" || ui.view === "decks") ui.view = "dash";
+  if (activeGame() === "poe1" && ui.view === "dash") ui.view = "econ";
+  document.querySelector('[data-view="dash"]')?.toggleAttribute("hidden", activeGame() === "poe1");
   document.body.classList.toggle("view-bosses", ui.view === "bosses");
   document.body.classList.toggle("view-econ", ui.view === "econ");
   document.body.classList.toggle("view-dash", ui.view === "dash");
@@ -10835,10 +12666,8 @@ function render() {
   document.getElementById("farm-boss").innerHTML = allBosses()
     .map((boss) => `<option value="${esc(boss.id)}" ${boss.id === farmBossId() ? "selected" : ""}>${esc(boss.name)}</option>`)
     .join("");
-  const leagueSelect = document.getElementById("league-input");
-  if (leagueSelect && [...leagueSelect.options].some((opt) => opt.value === leagueId())) {
-    leagueSelect.value = leagueId();
-  }
+  syncLeagueChooser();
+  if (ui.view === "econ") maybeRefreshPoe1();
   document.querySelectorAll("[data-view]").forEach((tab) => {
     tab.classList.toggle("is-active", tab.dataset.view === ui.view);
     if (tab.dataset.view === ui.view) tab.setAttribute("aria-current", "page");
@@ -10864,6 +12693,8 @@ function render() {
   if (ui.view === "guides") {
     main.innerHTML = renderGuides();
   }
+  if (ui.view === "wealth") repaintWealth();
+  else document.getElementById("wealth-setup")?.close();
   if (ui.view === "settings") {
     main.innerHTML = renderSettings();
     checkAppUpdate();
@@ -10893,6 +12724,53 @@ function render() {
 }
 
 function onClick(event) {
+  if (event.target.closest("[data-wealth-copy]")) {
+    const stash = WEALTH_STASHES.find(row => row.id === event.target.closest("[data-wealth-copy]").dataset.wealthCopy);
+    if (!stash) return;
+    copyFeedbackText(wealthTabName(stash));
+    const button = event.target.closest("button");
+    if (button) {
+      const previous = button.textContent;
+      button.textContent = "Copied";
+      setTimeout(() => { if (button.isConnected) button.textContent = previous; }, 900);
+    }
+    return;
+  }
+  if (event.target.closest("[data-poe1-login]")) { signInPoe1(); return; }
+  if (event.target.closest("[data-poe1-stashes]")) { listPoe1Stashes(); return; }
+  if (event.target.closest("[data-wealth-add]")) {
+    const draft = wealthDraft();
+    const off = WEALTH_STASHES.findIndex(stash => !wealthOn(stash.id));
+    draft.setupOpen = true;
+    draft.setupMode = "add";
+    draft.setupAt = off >= 0 ? off : 0;
+    repaintWealth();
+    return;
+  }
+  if (event.target.closest("[data-wealth-add-confirm]")) {
+    const draft = wealthDraft();
+    const stash = WEALTH_STASHES[Math.min(WEALTH_STASHES.length - 1, Math.max(0, Number(draft.setupAt) || 0))];
+    if (stash) setWealthListed(stash.id, true);
+    draft.setupOpen = false;
+    repaintWealth();
+    return;
+  }
+  if (event.target.closest("[data-wealth-setup-later]")) {
+    wealthDraft().setupOpen = false;
+    repaintWealth();
+    return;
+  }
+  if (event.target.closest("[data-wealth-read-tab]")) { readWealthTab(); return; }
+  const removeRegion = event.target.closest("[data-wealth-remove]");
+  if (removeRegion) {
+    const draft = wealthDraft();
+    if (!draft.busy) {
+      draft.slots.splice(Number(removeRegion.dataset.wealthRemove), 1);
+      draft.dirty = true;
+      repaintWealth();
+    }
+    return;
+  }
   const previewToggle = event.target.closest("[data-preview-enabled]");
   if (previewToggle) {
     event.preventDefault();
@@ -11027,6 +12905,14 @@ function onClick(event) {
     event.stopPropagation();
     const { log, drop } = overlayLogDrop(pickRunesToggle.dataset.pickLog, pickRunesToggle.dataset.pickDrop);
     toggleDropRunePick(log, drop);
+    return;
+  }
+  const pickLinksToggle = event.target.closest("[data-pick-links-toggle]");
+  if (pickLinksToggle) {
+    event.preventDefault();
+    event.stopPropagation();
+    const { log, drop } = overlayLogDrop(pickLinksToggle.dataset.pickLog, pickLinksToggle.dataset.pickDrop);
+    toggleDropLinkPick(log, drop);
     return;
   }
   const resistanceAction = event.target.closest("[data-res-action]");
@@ -11197,7 +13083,8 @@ function onClick(event) {
     return;
   }
   if (event.target.closest("[data-check-prices]")) {
-    refreshPrices(true);
+    if (activeGame() === "poe1") refreshPoe1Prices(true);
+    else refreshPrices(true);
     return;
   }
   const farmNext = event.target.closest("[data-farm-next]");
@@ -11222,7 +13109,7 @@ function onClick(event) {
     state.farmBossId = farm.dataset.farm;
     ui.inspect = null;
     ui.dashRollId = null;
-    ui.view = "dash";
+    if (activeGame() !== "poe1") ui.view = "dash";
     clearLiveKill();
     document.getElementById("boss-dialog")?.close();
     save();
@@ -11310,7 +13197,7 @@ function onClick(event) {
   }
   const tab = event.target.closest("[data-view]");
   if (tab) {
-    ui.view = tab.dataset.view;
+    ui.view = activeGame() === "poe1" && tab.dataset.view === "dash" ? "econ" : tab.dataset.view;
     render();
     document.querySelector(".shell")?.scrollTo({ top: 0, left: 0 });
     if (tab.hasAttribute("data-feedback")) focusFeedback();
@@ -11362,6 +13249,60 @@ function onClick(event) {
 }
 
 function onChange(event) {
+  const target = event.target;
+  if (target.matches("[data-poe1-stash]")) {
+    const league = wealthLeague();
+    const bag = { ...(state.poe1StashOn?.[league] || {}) };
+    bag[target.dataset.poe1Stash] = target.checked;
+    state.poe1StashOn = { ...(state.poe1StashOn || {}), [league]: bag };
+    try { save(); } catch { /* the checkbox still shows */ }
+    scheduleWealthRefresh();
+    return;
+  }
+  if (target.matches("[data-wealth-tab]")) {
+    state.wealthTabs = { ...(state.wealthTabs || {}), [target.dataset.wealthTab]: target.checked };
+    try { save(); } catch { /* the checkbox still shows */ }
+    return;
+  }
+  if (target.id === "wealth-poe1-league") {
+    state.poe1League = target.value.trim();
+    try { save(); } catch { /* the typed league still shows */ }
+    ui.wealth = null;
+    repaintWealth();
+    return;
+  }
+  if (target.id === "wealth-stash-filter" || target.id === "wealth-add-stash") {
+    const draft = wealthDraft();
+    if (target.id === "wealth-add-stash") draft.setupAt = Number(target.value) || 0;
+    else draft.stashFilter = target.value;
+    repaintWealth();
+    return;
+  }
+  if (target.matches("[data-wealth-account]")) {
+    const draft = wealthDraft();
+    draft.account = target.value.trim();
+    state.wealthAccount = draft.account;
+    try { save(); } catch { /* keep the typed name */ }
+    return;
+  }
+  if (target.matches("[data-wealth-name], [data-wealth-count]")) {
+    const draft = wealthDraft();
+    const isName = target.hasAttribute("data-wealth-name");
+    const slot = draft.slots[Number(isName ? target.dataset.wealthName : target.dataset.wealthCount)];
+    if (slot) {
+      if (slot[isName ? "name" : "count"] !== target.value.trim()) draft.dirty = true;
+      slot[isName ? "name" : "count"] = target.value.trim();
+      if (!isName) {
+        const valueCell = target.closest("tr")?.lastElementChild;
+        const unit = wealthUnit(slot.name);
+        const count = Number(slot.count);
+        if (valueCell) valueCell.innerHTML = unit == null || !(count > 0) ? "—" : wealthShown(unit * count);
+      }
+      const total = document.getElementById("wealth-total");
+      if (total) total.textContent = wealthTotalText(draft);
+    }
+    return;
+  }
   if (event.target?.matches?.("[data-overlay-click-away]")) {
     state.overlayClickAway = !!event.target.checked;
     state._clickAwaySet = true;
@@ -11376,9 +13317,9 @@ function onChange(event) {
   }
   const span = event.target.closest("[data-span-rid]");
   if (span) {
-    if (span.dataset.spanRid === "runes" && event.type === "change") return;
+    if ((span.dataset.spanRid === "runes" || span.dataset.spanRid === "links") && event.type === "change") return;
     if (span.classList.contains("price-overlay-q-input") && span.value.trim() === "" && event.type === "change") return;
-    if (span.dataset.spanRid === "runes" && span.value.trim() !== "") {
+    if ((span.dataset.spanRid === "runes" || span.dataset.spanRid === "links") && span.value.trim() !== "") {
       span.value = String(Math.max(0, Math.min(Number(span.max), Math.round(Number(span.value) || 0))));
     }
     const { log, drop } = overlayLogDrop(span.dataset.pickLog, span.dataset.pickDrop);
@@ -11391,11 +13332,23 @@ function onChange(event) {
     return;
   }
   if (event.target.id === "league-input") {
+    const next = event.target.value;
+    if (ui.view !== "dash" && activeGame() === "poe1") {
+      state.poe1League = next;
+      save();
+      poe1Prices.league = "";
+      poe1Prices.fetchedAt = 0;
+      poe1Prices.status = "idle";
+      publishWealthLive();
+      render();
+      return;
+    }
     persistPrices();
     clearTimeout(persistPricesSoon.timer);
-    const next = event.target.value;
     state.league = next;
     save();
+    syncWealthAuto();
+    publishWealthLive();
     hydratePriceCache();
     prices.league = next;
     if (prices.byName.size) {
@@ -11467,6 +13420,15 @@ document.addEventListener("paste", (event) => {
   }
 });
 document.addEventListener("input", (event) => {
+  if (event.target.id === "wealth-find") {
+    const draft = wealthDraft();
+    draft.find = event.target.value;
+    draft.focus = "wealth-find";
+    draft.focusAt = event.target.selectionStart;
+    repaintWealth();
+    return;
+  }
+  if (event.target.matches("[data-wealth-name], [data-wealth-count]")) { onChange(event); return; }
   const span = event.target.closest("[data-span-rid]");
   if (span) {
     if (span.classList?.contains("price-overlay-q-input")) {
@@ -11560,6 +13522,33 @@ document.addEventListener("submit", (event) => {
   if (event.target.id === "feedback-form") {
     event.preventDefault();
     submitFeedback(event.target, "send");
+  }
+});
+
+document.getElementById("wealth-screenshot-file").addEventListener("change", async event => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  const draft = wealthDraft();
+  try {
+    if (file.size > 24_000_000) throw new Error("Choose a screenshot under 24 MB.");
+    const bitmap = await createImageBitmap(file);
+    let capture;
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.floor(bitmap.width / 2);
+      canvas.height = bitmap.height;
+      if (canvas.width < 100 || canvas.height < 100 || canvas.width * canvas.height > 12_000_000)
+        throw new Error("Choose a full-size game-window screenshot.");
+      canvas.getContext("2d").drawImage(bitmap, 0, 0);
+      capture = canvas.toDataURL("image/png");
+    } finally {
+      bitmap.close();
+    }
+    if (draft === wealthDraft()) await acceptWealthCapture({ image: capture, markTab: true });
+  } catch (error) {
+    draft.message = error.message || "Could not open the screenshot.";
+    repaintWealth();
   }
 });
 
@@ -11783,9 +13772,11 @@ try {
 } catch (_) {}
 refreshBackupInfo();
 render();
-// Saved shortcuts must register even while the companion has never been shown.
 syncHotkeys();
 syncAppScale();
+syncWealthAuto();
+publishWealthLive();
+signalUiPainted();
 requestAnimationFrame(() => {
   startPriceClock();
 });
@@ -11796,6 +13787,7 @@ afterPaint(() => {
   startRateBar();
   hydratePriceCache();
   const diskPrices = hydratePriceDisk();
+  loadPoe1Leagues();
   loadLeagues().then(() => diskPrices).then(() => {
     if (!prices.byName.size) hydratePriceCache();
     linkCatalogPrices();
@@ -11803,9 +13795,13 @@ afterPaint(() => {
     paintLivePrices();
     render();
     if (prices.byName.size) persistCatalogCache();
-    kickFirstPriceCheck();
   });
 });
+setTimeout(() => kickFirstPriceCheck(), 2500);
+setTimeout(() => {
+  if (activeGame() === "poe1") scheduleWealthRefresh();
+  else readWealthTab({ auto: true });
+}, 5000);
 setTimeout(() => ensureIcons(), 1600);
 setTimeout(() => checkAppUpdate(), 2800);
 

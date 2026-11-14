@@ -53,6 +53,13 @@ sealed class GameMenuVisibility
 
     public void ClearHeldKeys() => _held.Clear();
 
+    public void Reset()
+    {
+        _open.Clear();
+        _held.Clear();
+        _chat = false;
+    }
+
     public void Observe(uint key, bool down, uint modifiers, bool gameFocused)
     {
         if (!down) { _held.Remove(key); return; }
@@ -79,7 +86,10 @@ sealed class GameMenuVisibility
         foreach (var (name, binding) in _bindings)
         {
             if (name is "chat" or "close_panels" || binding.Key == 0 || binding.Key != key || binding.Modifiers != modifiers) continue;
-            if (!_open.Add(name)) _open.Remove(name);
+            // One full panel at a time. The same key closes it; a different panel replaces it.
+            if (_open.Count == 1 && _open.Contains(name)) _open.Clear();
+            else { _open.Clear(); _open.Add(name); }
+            return;
         }
     }
 }

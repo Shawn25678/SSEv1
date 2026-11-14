@@ -264,11 +264,23 @@
         "button, a, input, textarea, select, [data-res-action], [data-pick-text], .price-overlay-mods, .price-overlay-flags, .price-overlay-base-modes, .price-overlay-dps-tags, .price-overlay-offers, .price-overlay-prop-quality, .price-overlay-prop-num, .price-overlay-q-edit, .price-overlay-rate-wrap";
 
       document.addEventListener("pointerdown", (event) => {
+        const flag = event.target.closest("[data-pick-unid],[data-pick-corrupt],[data-pick-raven],[data-pick-fractured]");
+        if (flag && event.button === 0 && window.chrome?.webview) {
+          event.preventDefault();
+          event.stopPropagation();
+          const payload = { type: "overlay-click" };
+          for (const a of flag.attributes) {
+            if (a.name.startsWith("data-")) payload[camel(a.name)] = a.value;
+          }
+          chrome.webview.postMessage(payload);
+          skipClick = performance.now() + 400;
+          return;
+        }
         if (event.button !== 0) return;
         endDrag();
-        const headerControl = event.target.closest(".item-tip-head") &&
-          !event.target.closest("input, textarea, select, a");
-        if (event.target.closest(overlayControlSel) && !headerControl) {
+        const onControl = event.target.closest(overlayControlSel);
+        const headerDrag = event.target.closest(".item-tip-head") && !onControl;
+        if (onControl && !headerDrag) {
           if (event.target.closest("input, textarea, .price-overlay-q-edit, .price-overlay-prop-quality, .price-overlay-prop-num")) {
             chrome.webview?.postMessage({ type: "overlay-activate" });
           }
@@ -454,8 +466,28 @@
       }
 
       function paintSocketPreview(input) {
-        const preview = input.closest(".is-sockets")?.querySelector(".price-overlay-socket-preview");
+        const column = input.closest(".price-overlay-sockets-column") || input.closest(".is-sockets");
+        const preview = column?.querySelector(".price-overlay-socket-preview");
         if (!preview) return;
+        if (preview.classList.contains("is-board")) {
+          const socketInput = column.querySelector('[data-span-rid="runes"]');
+          const linkInput = column.querySelector('[data-span-rid="links"]');
+          const count = Math.max(0, Math.min(6, Math.round(Number(socketInput?.value ?? input.value) || 0)));
+          const links = Math.max(0, Math.min(count, Math.round(Number(linkInput?.value) || 0)));
+          if (linkInput && Number(linkInput.value) > count) linkInput.value = String(links);
+          preview.querySelectorAll(".price-overlay-socket").forEach((el) => {
+            el.hidden = Number(el.dataset.i) >= count;
+          });
+          preview.querySelectorAll(".socket-link[data-link]").forEach((el) => {
+            const pair = String(el.dataset.link).split("-").map(Number);
+            const joined = pair[0] < count && pair[1] < count && pair[0] < links && pair[1] < links && links >= 2;
+            el.classList.toggle("is-off", !joined);
+          });
+          const none = preview.querySelector(".price-overlay-no-sockets");
+          if (none) none.hidden = count > 0;
+          preview.setAttribute("aria-label", count + " sockets, " + links + " linked");
+          return;
+        }
         const sockets = [...preview.querySelectorAll(".price-overlay-socket")];
         const count = Math.max(0, Math.min(sockets.length, Math.round(Number(input.value) || 0)));
         sockets.forEach((socket, i) => { socket.hidden = i >= count; });
@@ -477,7 +509,7 @@
         }
         if (t.dataset.spanRid === "total-resistance" && raw.trimStart().startsWith("-")) next = "-" + next;
         if (next !== raw) t.value = next;
-        if (t.dataset.spanRid === "runes") paintSocketPreview(t);
+        if (t.dataset.spanRid === "runes" || t.dataset.spanRid === "links") paintSocketPreview(t);
       }
 
       function paintSpan(t) {
@@ -486,7 +518,7 @@
         if (box) sanitizeBox(t);
         const value = Number(t.value);
         if (!Number.isFinite(value)) return;
-        if (rid === "quality" || rid === "ilvl" || rid === "runes") {
+        if (rid === "quality" || rid === "ilvl" || rid === "runes" || rid === "links") {
           t.closest(".price-overlay-prop-num")?.classList.add("is-on");
           return;
         }
@@ -705,7 +737,7 @@
       document.addEventListener("change", (event) => {
         const t = event.target.closest("[data-span-rid]");
         if (!t) return;
-        if (t.dataset.spanRid === "runes") return;
+        if (t.dataset.spanRid === "runes" || t.dataset.spanRid === "links") return;
         if (t.classList.contains("price-overlay-q-input") && t.value.trim() === "") return;
         paintSpan(t);
         postSpan(t, false);
@@ -714,7 +746,7 @@
       document.addEventListener("focusout", (event) => {
         const t = event.target.closest('.price-overlay-q-input[data-span-rid]');
         if (!t) return;
-        if (t.dataset.spanRid !== "runes" && t.value.trim() !== "") return;
+        if (t.dataset.spanRid !== "runes" && t.dataset.spanRid !== "links" && t.value.trim() !== "") return;
         if (t.value.trim() !== "") {
           t.value = String(Math.max(0, Math.min(6, Math.round(Number(t.value) || 0))));
           paintSpan(t);

@@ -27,6 +27,9 @@
           <span class="nav-symbol" aria-hidden="true">↗</span>
           <span class="menu-link-title">Economy</span>
         </button>
+        <button class="menu-link" data-view="wealth" type="button">
+          <span class="menu-link-title">Wealth</span>
+        </button>
         <button class="menu-link" data-view="guides" type="button">
           <span class="nav-symbol" aria-hidden="true">▤</span>
           <span class="menu-link-title">Tools &amp; Wiki</span>
@@ -85,6 +88,9 @@
       <div id="log-dialog-body"></div>
     </dialog>
 
+    <dialog id="wealth-setup" class="sheet wealth-setup-dialog"></dialog>
+
+    <input id="wealth-screenshot-file" type="file" accept="image/png,image/jpeg,image/webp" hidden />
     <input id="import-file" type="file" accept="application/json" hidden />
     <div id="toast" class="toast" hidden></div>
     <div id="price-overlay" class="price-overlay" hidden></div>

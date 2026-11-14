@@ -58,17 +58,21 @@ sealed class TrackerWindow : Form
     const int HotPriceId = 3;
     const int HotHideoutId = 4;
     const int HotSettingsId = 5;
+    const int HotWealthId = 6;
     static readonly Size CompanionMinimum = new(900, 640);
     double _companionWindowScale = 1;
-    bool _companionSizeDirty;
+    Rectangle _lastCompanionArea;
     Size ScaledCompanionMinimum => new((int)Math.Round(CompanionMinimum.Width * _companionWindowScale), (int)Math.Round(CompanionMinimum.Height * _companionWindowScale));
     bool _launcherHotkeyRegistered;
     bool _hotkeysPaused;
     bool _companionAboveGame;
-    bool _companionPlaced;
+    bool _pagePainted;
+    bool _webWarm;
     bool _openingCompanion;
     int _companionOpenGeneration;
     bool _appReady;
+    string _indexPage = "";
+    Task? _webReady;
     string _companionViewAction = "open-dashboard";
     long _companionOpeningUntil;
     GameLauncherForm? _launcher;
@@ -80,8 +84,12 @@ sealed class TrackerWindow : Form
     string _hotNext = "F9";
     string _hotPrice = "F7";
     bool _capturingItem;
+    bool _wealthSnapshot;
+    WealthTabDetector? _wealthTabDetector;
+    long _nextWealthTabCheck;
     readonly MovementShortcutState _movementShortcuts = new();
     readonly GameMenuVisibility _gameMenus = new();
+    readonly System.Windows.Forms.Timer _wealthRefresh = new() { Interval = 60_000 };
     readonly HashSet<(uint Modifiers, uint Key)> _registeredGameHotkeys = new();
     string? _gameMenuConfigPath;
     DateTime _gameMenuConfigStamp;
@@ -90,7 +98,8 @@ sealed class TrackerWindow : Form
     IntPtr _keyboardHook;
     KeyboardHookProc? _keyboardHookProc;
     IntPtr _hookForeground;
-    bool _hookPoe2Focused;
+    string _hookGame = "";
+    string _focusedGame = "poe2";
     CoreWebView2Environment? _env;
     PriceOverlayForm? _overlay;
     PriceOverlayForm? _previewOverlay;
@@ -136,16 +145,18 @@ sealed class TrackerWindow : Form
         };
         Resize += (_, _) =>
         {
-            if (WindowState == FormWindowState.Minimized && !_openingCompanion)
+            if (WindowState == FormWindowState.Minimized && !_openingCompanion && !_wealthSnapshot)
             {
                 HideCompanionWindow();
             }
         };
         Load += OnLoad;
-        Shown += (_, _) => { if (!_companionAboveGame && !_openingCompanion) HideCompanionWindow(); };
+        Shown += (_, _) => { if (!_companionAboveGame && !_openingCompanion && !_webWarm) HideCompanionWindow(); };
         FormClosed += (_, _) =>
         {
             ClearHotkeys();
+            _wealthRefresh.Stop();
+            _wealthRefresh.Dispose();
             _launcher?.Dispose();
             _overlay?.Dispose();
             _previewOverlay?.Dispose();
@@ -155,31 +166,86 @@ sealed class TrackerWindow : Form
         };
     }
 
+    // Opacity 0 still hit-tests. While the page is parked over the game, clicks must pass through.
+    void SetCompanionPassthrough(bool on)
+    {
+        if (!IsHandleCreated) return;
+        const long pass = 0x20 | 0x08000000; // WS_EX_TRANSPARENT | WS_EX_NOACTIVATE
+        var style = GetWindowLongPtr(Handle, -20).ToInt64();
+        var next = on ? style | pass : style & ~pass;
+        if (next != style) SetWindowLongPtr(Handle, -20, new IntPtr(next));
+        // Windows keeps the old click-through test until the frame is refreshed,
+        // so the menus look ready while clicks still fall through.
+        SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0, 0x0037);
+    }
+
     void RestoreFromTray()
     {
-        var recenter = !Visible;
         WindowState = FormWindowState.Normal;
+        SetCompanionPassthrough(false);
+        var recenter = !Visible;
         PlaceCompanionWindow(recenter);
-        var placedSize = Size;
+        if (!Visible) Show();
+        if (IsIconic(Handle)) ShowWindow(Handle, 9);
+        PlaceCompanionWindow(recenter);
+        TopMost = true;
         Opacity = 1;
-        Show();
-        if (IsIconic(Handle)) ShowWindow(Handle, 9); // Restore the native HWND as well as WinForms state.
-        // Showing/restoring a hidden window can reapply Windows' saved bounds
-        // or change DPI. Correct its position before giving it keyboard focus.
-        Size = placedSize;
-        PlaceCompanionWindow(recenter);
-        _companionPlaced = true;
-        FocusCompanionWindow();
         if (_tray != null) _tray.Visible = true;
+        FocusCompanionWindow();
+    }
+
+    // Paint off to the side until the game size is known. Showing at 0,0 covers
+    // the corner and opening then has to resize, which is the stall.
+    void ParkCompanion()
+    {
+        if (IsDisposed || (_companionAboveGame && _pagePainted && Opacity > 0.5)) return;
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        _webWarm = true;
+        var opening = _companionAboveGame;
+        // Stay above the game until the page has painted once. Under the game,
+        // the browser treats the window as covered and never finishes the frame.
+        TopMost = opening || !_pagePainted;
+        if (!IsHandleCreated) return;
+        if (!Visible) Show();
+        ShowWindow(Handle, 4);
+        if (!CompanionArea().IsEmpty) PlaceCompanionWindow(recenter: true);
+        else if (!opening) Location = new Point(-32000, -32000);
+        SetCompanionPassthrough(!opening);
+        // Fully clear only after the first paint. Alpha 0 stops the browser from drawing.
+        Opacity = !opening && !_pagePainted ? 0.01 : 0;
+        if (Opacity < 0.5) ReturnFocusToGame();
+    }
+
+    void ReturnFocusToGame()
+    {
+        _launcher?.NoteGameWindow();
+        var game = _launcher?.GameWindow ?? IntPtr.Zero;
+        if (game == IntPtr.Zero) return;
+        var foreground = GetForegroundWindow();
+        GetWindowThreadProcessId(foreground, out var foregroundPid);
+        if (foregroundPid != (uint)Environment.ProcessId) return;
+        var gameThread = GetWindowThreadProcessId(game, out _);
+        var ours = GetCurrentThreadId();
+        var attached = gameThread != 0 && gameThread != ours && AttachThreadInput(ours, gameThread, true);
+        try { SetForegroundWindow(game); }
+        finally { if (attached) AttachThreadInput(ours, gameThread, false); }
     }
 
     void FocusCompanionWindow()
     {
         if (!_companionAboveGame || !Visible) return;
+        var foreground = GetForegroundWindow();
+        var foregroundThread = GetWindowThreadProcessId(foreground, out _);
+        var ours = GetCurrentThreadId();
+        var attached = foregroundThread != 0 && foregroundThread != ours && AttachThreadInput(ours, foregroundThread, true);
         ShowWindow(Handle, 5);
         SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0043); // Show above PoE without changing bounds.
-        Activate();
-        SetForegroundWindow(Handle);
+        try
+        {
+            Activate();
+            SetForegroundWindow(Handle);
+        }
+        finally { if (attached) AttachThreadInput(ours, foregroundThread, false); }
         if (_web.CoreWebView2 is not null)
         {
             _web.Select();
@@ -190,9 +256,31 @@ sealed class TrackerWindow : Form
     void FinishCompanionNavigation(bool success)
     {
         _appReady = success;
-        if (!_appReady || !_companionAboveGame) return;
-        PushHotkey(_companionViewAction);
-        if (SettingsShortcutContext(Poe2HasFocus())) FocusCompanionWindow();
+        if (!_appReady) return;
+        if (_companionAboveGame)
+        {
+            PushHotkey(_companionViewAction);
+            RestoreFromTray();
+        }
+        else ParkCompanion();
+    }
+
+    void RevealCompanionIfOpen(string view)
+    {
+        _pagePainted = true;
+        if (!_companionAboveGame)
+        {
+            ParkCompanion();
+            return;
+        }
+        var want = _companionViewAction switch
+        {
+            "open-settings" => "settings",
+            "open-wealth" => "wealth",
+            _ => "dash",
+        };
+        if (view != want && !(want == "dash" && view == "econ")) return;
+        RestoreFromTray();
     }
 
     bool SseHasForeground()
@@ -213,7 +301,7 @@ sealed class TrackerWindow : Form
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
         if (keyData == (Keys.Shift | Keys.Space) && SettingsShortcutAvailable() &&
-            SettingsShortcutContext(Poe2HasFocus()))
+            SettingsShortcutContext(GameHasFocus()))
         {
             OpenCompanionView("settings");
             return true;
@@ -226,7 +314,6 @@ sealed class TrackerWindow : Form
         _web.ZoomFactor = 1;
         if (Math.Abs(_companionWindowScale - scale) < 0.001) return;
         _companionWindowScale = scale;
-        _companionSizeDirty = true;
         PlaceCompanionWindow(recenter: false);
     }
 
@@ -234,21 +321,22 @@ sealed class TrackerWindow : Form
     {
         var area = CompanionArea();
         if (area.IsEmpty) return;
+        _lastCompanionArea = area;
         var minimum = new Size(Math.Min(ScaledCompanionMinimum.Width, area.Width), Math.Min(ScaledCompanionMinimum.Height, area.Height));
         if (MinimumSize != minimum) MinimumSize = minimum;
         var size = new Size(
-            Math.Max(minimum.Width, Math.Min(_companionPlaced && !_companionSizeDirty ? Width : (int)(area.Width * 0.5328 * _companionWindowScale), area.Width - 24)),
-            Math.Max(minimum.Height, Math.Min(_companionPlaced && !_companionSizeDirty ? Height : (int)(area.Height * 0.6048 * _companionWindowScale), area.Height - 24)));
+            Math.Max(minimum.Width, Math.Min((int)(area.Width * 0.5328 * _companionWindowScale), area.Width - 24)),
+            Math.Max(minimum.Height, Math.Min((int)(area.Height * 0.6048 * _companionWindowScale), area.Height - 24)));
         var point = recenter
             ? new Point(area.Left + Math.Max(0, (area.Width - size.Width) / 2), area.Top + Math.Max(0, (area.Height - size.Height) / 2))
             : Location;
         var bounds = FitCompanionBounds(new Rectangle(point, size), area);
         if (Bounds != bounds) Bounds = bounds;
-        _companionSizeDirty = false;
     }
 
     Rectangle CompanionArea()
     {
+        _launcher?.NoteGameWindow();
         if (_launcher?.GameRunning != true) return Rectangle.Empty;
         var game = _launcher.GameClientBounds;
         if (game.Width <= 0 || game.Height <= 0) return Rectangle.Empty;
@@ -278,6 +366,11 @@ sealed class TrackerWindow : Form
     {
         _companionOpenGeneration++;
         _companionAboveGame = false;
+        if (_webWarm && IsHandleCreated && !_wealthSnapshot)
+        {
+            ParkCompanion();
+            return;
+        }
         TopMost = false;
         Hide();
         Opacity = 0;
@@ -289,7 +382,12 @@ sealed class TrackerWindow : Form
         // not cancel a menu action the user already invoked over the game.
         if (_launcher?.GameRunning != true) return;
         var generation = ++_companionOpenGeneration;
-        _companionViewAction = view == "settings" ? "open-settings" : "open-dashboard";
+        _companionViewAction = view switch
+        {
+            "settings" => "open-settings",
+            "wealth" => "open-wealth",
+            _ => "open-dashboard",
+        };
         _openingCompanion = true;
         _companionOpeningUntil = Environment.TickCount64 + 600;
         try
@@ -297,15 +395,17 @@ sealed class TrackerWindow : Form
             _overlay?.HideOverlay();
             _companionAboveGame = true;
             TopMost = true;
-            RestoreFromTray();
-            if (_appReady) PushHotkey(_companionViewAction);
-            UpdateLauncherShortcut(Poe2HasFocus());
+            if (!_appReady) _ = EnsureWebAsync();
+            else PushHotkey(_companionViewAction);
+            if (_appReady) RestoreFromTray();
+            else ParkCompanion();
+            UpdateLauncherShortcut(GameHasFocus());
             // The popup/WebView can finish their own focus cleanup after Show().
             // Finish this user-requested handoff once, without reviving a closed view.
             BeginInvoke(() =>
             {
-                if (generation == _companionOpenGeneration && _companionAboveGame &&
-                    SettingsShortcutContext(Poe2HasFocus())) FocusCompanionWindow();
+                if (generation == _companionOpenGeneration && _appReady && _companionAboveGame &&
+                    Opacity > 0.5 && SettingsShortcutContext(GameHasFocus())) FocusCompanionWindow();
             });
         }
         finally { _openingCompanion = false; }
@@ -313,15 +413,22 @@ sealed class TrackerWindow : Form
 
     void UpdateLauncherShortcut(bool gameFocused)
     {
+        if (_wealthSnapshot) return;
+        NoteFocusedGame();
         if (gameFocused && Environment.TickCount64 >= _nextGameMenuConfigCheck)
         {
             _nextGameMenuConfigCheck = Environment.TickCount64 + 5000;
             RefreshGameMenuBindings();
         }
         if (!gameFocused) _gameMenus.ClearHeldKeys();
+        else if (!_companionAboveGame && !_webWarm) ParkCompanion();
+        else if (!_companionAboveGame && _webWarm && !CompanionArea().IsEmpty && CompanionArea() != _lastCompanionArea)
+            PlaceCompanionWindow(recenter: true);
+        WatchWealthTab(gameFocused);
         _overlay?.ConstrainToGame();
         _previewOverlay?.ConstrainToGame();
-        if (_companionAboveGame && !_openingCompanion) PlaceCompanionWindow(recenter: false);
+        if (_companionAboveGame && !_openingCompanion && CompanionArea() != _lastCompanionArea)
+            PlaceCompanionWindow(recenter: false);
         // Keep the launcher-opened app above PoE, but never above unrelated apps.
         var foreground = GetForegroundWindow();
         GetWindowThreadProcessId(foreground, out var foregroundPid);
@@ -487,13 +594,20 @@ sealed class TrackerWindow : Form
             var id = m.WParam.ToInt32();
             if (id == HotSettingsId)
             {
-                if (SettingsShortcutAvailable() && SettingsShortcutContext(Poe2HasFocus()))
+                if (SettingsShortcutAvailable() && SettingsShortcutContext(GameHasFocus()))
                     BeginInvoke(() => OpenCompanionView("settings"));
                 m.Result = IntPtr.Zero;
                 return;
             }
-            if (!Poe2HasFocus()) { base.WndProc(ref m); return; }
-            if (id == HotLogId) BeginInvoke(() => CaptureClipboardItem("log-item"));
+            if (id == HotWealthId) { m.Result = IntPtr.Zero; return; }
+            var playing = FocusedGame();
+            if (playing.Length == 0) { base.WndProc(ref m); return; }
+            if (playing == "poe1")
+            {
+                if (id == HotPriceId) BeginInvoke(() => CaptureClipboardItem("price-item"));
+                else if (id == HotHideoutId) BeginInvoke(SendHideout);
+            }
+            else if (id == HotLogId) BeginInvoke(() => CaptureClipboardItem("log-item"));
             else if (id == HotPriceId) BeginInvoke(() => CaptureClipboardItem("price-item"));
             else if (id == HotNextId) BeginInvoke(() => PushHotkey("next-kill"));
             else if (id == HotHideoutId) BeginInvoke(SendHideout);
@@ -523,6 +637,12 @@ sealed class TrackerWindow : Form
         base.WndProc(ref m);
     }
 
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW", SetLastError = true)]
+    static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
+    static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr newLong);
+
     [DllImport("user32.dll", SetLastError = true)]
     static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
@@ -547,37 +667,63 @@ sealed class TrackerWindow : Form
     static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr message, IntPtr data);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     static extern IntPtr GetModuleHandle(string? name);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool CreateHardLink(string fileName, string existingFileName, IntPtr security);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     static extern int GetWindowText(IntPtr window, System.Text.StringBuilder text, int count);
 
-    bool Poe2HasFocus()
+    string FocusedGame()
     {
         var window = GetForegroundWindow();
-        if (window == _hookForeground) return _hookPoe2Focused;
+        if (window == _hookForeground) return _hookGame;
         _hookForeground = window;
-        _hookPoe2Focused = false;
+        _hookGame = "";
         try
         {
             GetWindowThreadProcessId(window, out var pid);
             using var process = Process.GetProcessById((int)pid);
             var title = new System.Text.StringBuilder(256);
             GetWindowText(window, title, title.Capacity);
-            _hookPoe2Focused = process.ProcessName.StartsWith("PathOfExile2", StringComparison.OrdinalIgnoreCase) ||
-                (process.ProcessName.StartsWith("PathOfExile", StringComparison.OrdinalIgnoreCase) &&
-                 title.ToString().Equals("Path of Exile 2", StringComparison.OrdinalIgnoreCase));
+            var processName = process.ProcessName;
+            var titleText = title.ToString();
+            if (processName.StartsWith("PathOfExile2", StringComparison.OrdinalIgnoreCase) ||
+                (processName.StartsWith("PathOfExile", StringComparison.OrdinalIgnoreCase) &&
+                 titleText.StartsWith("Path of Exile 2", StringComparison.OrdinalIgnoreCase)))
+                _hookGame = "poe2";
+            else if (processName.StartsWith("PathOfExile", StringComparison.OrdinalIgnoreCase))
+                _hookGame = "poe1";
         }
         catch { /* Foreground process may have closed. */ }
-        return _hookPoe2Focused;
+        return _hookGame;
+    }
+
+    bool Poe2HasFocus() => FocusedGame() == "poe2";
+
+    bool GameHasFocus() => FocusedGame().Length > 0;
+
+    void NoteFocusedGame()
+    {
+        var game = FocusedGame();
+        if (game.Length == 0 || game == _focusedGame) return;
+        _focusedGame = game;
+        _gameMenuConfigStamp = DateTime.MinValue;
+        var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        _gameMenuConfigPath = game == "poe1"
+            ? Path.Combine(documents, "My Games", "Path of Exile", "production_Config.ini")
+            : Path.Combine(documents, "My Games", "Path of Exile 2", "poe2_production_Config.ini");
+        _gameMenus.Reset();
+        PushJson(new { type = "active-game", game });
     }
 
     void DispatchMovementShortcut(int id, uint key, uint scan, bool releaseMovement)
     {
-        if (releaseMovement && Poe2HasFocus()) keybd_event((byte)key, (byte)scan, 0x0002, 0);
-        if (!Poe2HasFocus()) return;
-        if (id == HotLogId) CaptureClipboardItem("log-item");
-        else if (id == HotPriceId) CaptureClipboardItem("price-item");
-        else if (id == HotNextId) PushHotkey("next-kill");
+        var playing = FocusedGame();
+        if (releaseMovement && playing.Length > 0) keybd_event((byte)key, (byte)scan, 0x0002, 0);
+        if (playing.Length == 0) return;
+        if (id == HotPriceId) CaptureClipboardItem("price-item");
         else if (id == HotHideoutId) SendHideout();
+        else if (playing == "poe2" && id == HotLogId) CaptureClipboardItem("log-item");
+        else if (playing == "poe2" && id == HotNextId) PushHotkey("next-kill");
     }
 
     IntPtr InterceptMovementShortcut(int code, IntPtr message, IntPtr data)
@@ -596,17 +742,11 @@ sealed class TrackerWindow : Form
         if ((GetAsyncKeyState(0x10) & 0x8000) != 0) modifiers |= 4;
         if (((GetAsyncKeyState(0x5B) | GetAsyncKeyState(0x5C)) & 0x8000) != 0) modifiers |= 8;
         var down = msg is 0x100 or 0x104;
-        var gameFocused = Poe2HasFocus();
+        var gameFocused = GameHasFocus();
         var decision = key.Key is 0x57 or 0x41 or 0x53 or 0x44
             ? _movementShortcuts.Handle(key.Key, down, gameFocused, modifiers, _movementBindings)
             : default;
-        if (!down || (!decision.Block && !_registeredGameHotkeys.Contains((modifiers, key.Key)) &&
-            !(_launcherHotkeyRegistered && modifiers == 4 && key.Key == 0x20)))
-        {
-            var wasHidden = _gameMenus.Hidden;
-            _gameMenus.Observe(key.Key, down, modifiers, gameFocused);
-            if (wasHidden != _gameMenus.Hidden) BeginInvoke(() => _launcher?.SetGameMenuHidden(_gameMenus.Hidden));
-        }
+        _gameMenus.Observe(key.Key, down, modifiers, gameFocused);
         if (decision.Action != 0)
             BeginInvoke(() => DispatchMovementShortcut(decision.Action, key.Key, key.Scan, decision.ReleaseMovement));
         return decision.Block ? new IntPtr(1) : CallNextHookEx(_keyboardHook, code, message, data);
@@ -624,7 +764,8 @@ sealed class TrackerWindow : Form
         _movementShortcuts.Clear();
         _gameMenus.ClearHeldKeys();
         _hookForeground = IntPtr.Zero;
-        _hookPoe2Focused = false;
+        _hookGame = "";
+        UnregisterHotKey(Handle, HotWealthId);
         try { UnregisterHotKey(Handle, HotLogId); } catch { /* ignore */ }
         try { UnregisterHotKey(Handle, HotNextId); } catch { /* ignore */ }
         try { UnregisterHotKey(Handle, HotPriceId); } catch { /* ignore */ }
@@ -655,6 +796,8 @@ sealed class TrackerWindow : Form
         var nextOk = Bind(HotNextId, _hotNext, out _);
         var priceOk = Bind(HotPriceId, _hotPrice, out _);
         var hideoutOk = Bind(HotHideoutId, _hotHideout, out _);
+        var wealthOk = Bind(HotWealthId, "Ctrl+Shift+F9", out _);
+        PushJson(new { type = "wealth-hotkey", available = wealthOk });
         EnsureGameKeyboardHook();
         if (!logOk || !nextOk || !priceOk || !hideoutOk)
         {
@@ -765,31 +908,46 @@ sealed class TrackerWindow : Form
     [DllImport("user32.dll")]
     static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll")]
+    static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+    [DllImport("kernel32.dll")]
+    static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")]
     static extern short GetAsyncKeyState(int key);
+    [DllImport("user32.dll")]
+    static extern short VkKeyScan(char ch);
 
-    async void SendHideout()
+    void SendHideout()
     {
-        if (_sendingHideout) return;
-        var game = GetForegroundWindow();
+        if (_sendingHideout || !GameHasFocus()) return;
         try
         {
-            if (!Poe2HasFocus()) return;
             _sendingHideout = true;
-            TryParseHotkey(_hotHideout, out _, out var trigger);
-            var keys = new[] { (int)trigger, 0x10, 0x11, 0x12, 0x5B, 0x5C };
-            for (var attempt = 0; attempt < 40; attempt++)
+            TryParseHotkey(_hotHideout, out var modifiers, out var trigger);
+            const uint keyUp = 0x0002;
+            if ((modifiers & 4) != 0) keybd_event(0x10, 0, keyUp, 0);
+            if ((modifiers & 2) != 0) keybd_event(0x11, 0, keyUp, 0);
+            if ((modifiers & 1) != 0) keybd_event(0x12, 0, keyUp, 0);
+            if (trigger != 0) keybd_event((byte)trigger, 0, keyUp, 0);
+            TapKey(0x0D);
+            foreach (var ch in "/hideout")
             {
-                if (GetForegroundWindow() != game) return;
-                if (keys.All(key => (GetAsyncKeyState(key) & 0x8000) == 0))
-                {
-                    SendKeys.SendWait("{ENTER}/hideout{ENTER}");
-                    return;
-                }
-                await Task.Delay(50);
+                var packed = VkKeyScan(ch);
+                if (packed == -1) continue;
+                var shift = (packed & 0x100) != 0;
+                if (shift) keybd_event(0x10, 0, 0, 0);
+                TapKey((byte)(packed & 0xFF));
+                if (shift) keybd_event(0x10, 0, keyUp, 0);
             }
+            TapKey(0x0D);
         }
         catch { /* Game closed or input is unavailable. */ }
         finally { _sendingHideout = false; }
+    }
+
+    static void TapKey(byte vk)
+    {
+        keybd_event(vk, 0, 0, 0);
+        keybd_event(vk, 0, 0x0002, 0);
     }
 
     async void CaptureClipboardItem(string action)
@@ -798,6 +956,7 @@ sealed class TrackerWindow : Form
         _capturingItem = true;
         try
         {
+            var web = EnsureWebAsync();
             var before = ReadClipboardText();
             SendCtrlC();
             var text = before;
@@ -812,6 +971,7 @@ sealed class TrackerWindow : Form
                     if (now != before || i >= 3) break;
                 }
             }
+            await web;
             PushJson(new { type = "hotkey", action, text });
             if (LooksLikePoeItem(text))
             {
@@ -822,6 +982,84 @@ sealed class TrackerWindow : Form
         finally
         {
             _capturingItem = false;
+        }
+    }
+
+    void WatchWealthTab(bool gameFocused)
+    {
+        if (_wealthTabDetector is not { } detector) return;
+        if (!gameFocused || !_appReady || Visible || _overlay?.Visible == true || _previewOverlay?.Visible == true)
+        {
+            detector.Pause();
+            return;
+        }
+        if (Environment.TickCount64 < _nextWealthTabCheck) return;
+        _nextWealthTabCheck = Environment.TickCount64 + 900;
+        try
+        {
+            var window = GetForegroundWindow();
+            if (!Poe2HasFocus() || GetForegroundWindow() != window) return;
+            var bounds = GameLauncherForm.GetVisibleClientBounds(window);
+            if (!detector.Check(bounds) || GetForegroundWindow() != window) return;
+            var image = WealthCapture.Take(bounds);
+            if (GetForegroundWindow() == window)
+                PushJson(new { type = "wealth-capture", image, automatic = true });
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or
+            InvalidOperationException or ArgumentException or System.Runtime.InteropServices.ExternalException)
+        {
+            detector.Pause();
+        }
+    }
+
+    async void CaptureWealthSnapshot()
+    {
+        if (!_appReady || _wealthSnapshot) return;
+        if (_launcher?.GameRunning != true)
+        {
+            PushJson(new { type = "wealth-capture", error = "Open Path of Exile 2 with the Currency tab visible, then capture again." });
+            return;
+        }
+        var game = _launcher.GameClientBounds;
+        if (game.Width < 200 || game.Height < 200)
+        {
+            PushJson(new { type = "wealth-capture", error = "The PoE 2 window is minimized or too small to capture." });
+            return;
+        }
+        var saved = Bounds;
+        var restore = Visible;
+        _wealthSnapshot = true;
+        try
+        {
+            if (restore)
+            {
+                Opacity = 0;
+                Hide();
+                await Task.Delay(120);
+            }
+            var image = WealthCapture.Take(game);
+            PushJson(new { type = "wealth-capture", image });
+        }
+        catch (Exception ex)
+        {
+            PushJson(new { type = "wealth-capture", error = ex.Message });
+        }
+        finally
+        {
+            if (restore && IsHandleCreated)
+            {
+                _companionAboveGame = true;
+                TopMost = true;
+                Bounds = saved;
+                Opacity = 1;
+                Show();
+                Bounds = saved;
+                FocusCompanionWindow();
+                var now = Bounds;
+                if (now.X != saved.X || now.Y != saved.Y || now.Width != saved.Width || now.Height != saved.Height)
+                    Bounds = saved;
+            }
+            _wealthSnapshot = false;
         }
     }
 
@@ -843,6 +1081,7 @@ sealed class TrackerWindow : Form
     {
         try
         {
+            await EnsureWebAsync();
             _overlay ??= new PriceOverlayForm(ForwardOverlayJson,
                 () => _launcher?.GameRunning == true ? _launcher.GameClientBounds : Rectangle.Empty);
             var page = Path.Combine(AppDataDir(), "www", "overlay.html");
@@ -862,6 +1101,7 @@ sealed class TrackerWindow : Form
         if (!enabled) { _previewOverlay?.HideOverlay(); return; }
         try
         {
+            await EnsureWebAsync();
             _previewOverlay ??= new PriceOverlayForm(_ => { },
                 () => _launcher?.GameRunning == true ? _launcher.GameClientBounds : Rectangle.Empty, pinnedPreview: true);
             _previewInitialization ??= _previewOverlay.EnsureAsync(_env, Path.Combine(AppDataDir(), "www", "overlay.html"));
@@ -887,6 +1127,8 @@ sealed class TrackerWindow : Form
     static readonly TradeLimiter ExchangeLimit = TradeLimiter.Default();
     Dictionary<string, string>? ExchangeTags;
     DateTime ExchangeTagsAt;
+    Dictionary<string, string>? Poe1ExchangeTags;
+    DateTime Poe1ExchangeTagsAt;
     static readonly SemaphoreSlim SlotLock = new(1, 1);
     const double RateDesyncSec = 2;
 
@@ -1006,6 +1248,24 @@ sealed class TrackerWindow : Form
         client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
         client.DefaultRequestHeaders.TryAddWithoutValidation("Origin", "https://www.pathofexile.com");
         client.DefaultRequestHeaders.TryAddWithoutValidation("Referer", "https://www.pathofexile.com/trade2");
+        return client;
+    }
+
+    static readonly HttpClient Poe1Http = CreatePoe1Http();
+
+    static HttpClient CreatePoe1Http()
+    {
+        var handler = new SocketsHttpHandler
+        {
+            AutomaticDecompression = DecompressionMethods.All,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+            UseCookies = false,
+        };
+        var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(25) };
+        client.DefaultRequestHeaders.TryAddWithoutValidation(
+            "User-Agent",
+            "StillSaneExile/1.2 (contact: local-desktop-tracker)");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
         return client;
     }
 
@@ -1149,7 +1409,7 @@ sealed class TrackerWindow : Form
         }
     }
 
-    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool exchange = false, string havePref = "", bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null, string rarityFilter = "")
+    async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool exchange = false, string havePref = "", bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null, string rarityFilter = "", string game = "", int? links = null)
     {
         name = (name ?? "").Trim();
         league = (league ?? "").Trim();
@@ -1163,9 +1423,10 @@ sealed class TrackerWindow : Form
             return;
         }
         if (name.Length is < 2 or > 80) name = typeLine.Length > 0 ? typeLine : name;
+        var poe1 = string.Equals(game, "poe1", StringComparison.Ordinal);
         var rollList = (rolls ?? Array.Empty<string>()).Where(r => !string.IsNullOrWhiteSpace(r)).Take(12).ToArray();
-        IReadOnlyList<RollFilter> mapped = preMapped is { Count: > 0 } ? preMapped : Array.Empty<RollFilter>();
-        if (mapped.Count == 0 && rollList.Length > 0)
+        IReadOnlyList<RollFilter> mapped = poe1 ? Array.Empty<RollFilter>() : preMapped is { Count: > 0 } ? preMapped : Array.Empty<RollFilter>();
+        if (!poe1 && mapped.Count == 0 && rollList.Length > 0)
             mapped = await MapRollsToFilters(rollList, category);
         var useExchange = (exchange || WantsExchange(rarity, category)) && mapped.Count == 0 && rollList.Length == 0;
                 var extra = mapped.Count > 0
@@ -1182,6 +1443,7 @@ sealed class TrackerWindow : Form
         extra += unidentifiedTier is int ut && ut > 0 ? ":ut" + ut : "";
         extra += ravenTouched ? ":rt" : "";
         extra += runeSockets is int rs ? ":r" + rs : "";
+        extra += links is int ln ? ":l" + ln : "";
         extra += ":st:" + (useExchange ? TradeExchangeLive : TradeLive);
         extra += ":" + rarity.ToLowerInvariant();
         extra += ":rf:" + rarityFilter.ToLowerInvariant();
@@ -1191,7 +1453,7 @@ sealed class TrackerWindow : Form
         extra += qualityMin is int ql && ql > 0 ? ":ql" + ql : "";
         extra += category.Length > 0 ? ":k:" + category.ToLowerInvariant() : "";
         extra += useExchange ? ":xchg:" + havePref : "";
-        var cacheKey = "trade:" + league + ":" + name.ToLowerInvariant() + extra;
+        var cacheKey = (poe1 ? "trade1:" : "trade:") + league + ":" + name.ToLowerInvariant() + extra;
         if (!bust && Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < CacheFor)
         {
             Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
@@ -1206,10 +1468,15 @@ sealed class TrackerWindow : Form
                 return;
             }
             TradeLookup? payload = null;
-            if (useExchange)
-                payload = await LookupExchangeListing(league, name, typeLine, havePref);
-            if (payload is null || (payload.Json is null && !payload.RateLimited && !payload.Forbidden))
-                payload = await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin, rarityFilter);
+            if (poe1)
+                payload = await LookupPoe1Price(league, name, typeLine, rarity, corrupted, ilvlMin, qualityMin, rarityFilter, useExchange, havePref, runeSockets, links, unidentified);
+            else
+            {
+                if (useExchange)
+                    payload = await LookupExchangeListing(league, name, typeLine, havePref);
+                if (payload is null || (payload.Json is null && !payload.RateLimited && !payload.Forbidden))
+                    payload = await LookupRolledListing(league, name, typeLine, mapped, corrupted, rarity, runeSockets, category, ravenTouched, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin, rarityFilter);
+            }
             if (payload is { RateLimited: true })
             {
                 Reply(id, false, 429, "{\"error\":\"rate limited\"}");
@@ -1601,8 +1868,8 @@ sealed class TrackerWindow : Form
             var inner = new JsonObject();
             if (corrupted is bool flag)
                 inner["corrupted"] = new JsonObject { ["option"] = flag ? "true" : "false" };
-            if (unidentified is true)
-                inner["identified"] = new JsonObject { ["option"] = "false" };
+            if (unidentified is bool unidFlag)
+                inner["identified"] = new JsonObject { ["option"] = unidFlag ? "false" : "true" };
             if (unidentifiedTier is int ut && ut > 0)
                 inner["unidentified_tier"] = new JsonObject { ["min"] = ut };
             var bag = new JsonObject();
@@ -1712,6 +1979,194 @@ sealed class TrackerWindow : Form
             yield return Body(false, true).ToJsonString();
         if (!hasType && !hasCat)
             yield return Body(false, false).ToJsonString();
+    }
+
+    async Task<TradeLookup> LookupPoe1Price(string league, string name, string typeLine, string rarity, bool? corrupted, int? ilvlMin, int? qualityMin, string rarityFilter, bool exchange, string havePref, int? sockets = null, int? links = null, bool? unidentified = null)
+    {
+        if (exchange)
+        {
+            var bulk = await LookupPoe1Exchange(league, name, typeLine, havePref);
+            if (bulk.Json is not null || bulk.RateLimited || bulk.Forbidden) return bulk;
+        }
+        var query = new JsonObject
+        {
+            ["status"] = new JsonObject { ["option"] = TradeLive },
+            ["stats"] = new JsonArray { new JsonObject { ["type"] = "and", ["filters"] = new JsonArray() } },
+        };
+        if (!string.IsNullOrWhiteSpace(name) && !name.Equals(typeLine, StringComparison.OrdinalIgnoreCase))
+            query["name"] = name;
+        if (!string.IsNullOrWhiteSpace(typeLine)) query["type"] = typeLine;
+        var filters = new JsonObject();
+        var typeBag = new JsonObject();
+        var unique = rarity.Equals("Unique", StringComparison.OrdinalIgnoreCase);
+        if (unique) typeBag["rarity"] = new JsonObject { ["option"] = "unique" };
+        else if (rarity.Equals("Rare", StringComparison.OrdinalIgnoreCase) ||
+                 rarity.Equals("Magic", StringComparison.OrdinalIgnoreCase) ||
+                 rarity.Equals("Normal", StringComparison.OrdinalIgnoreCase))
+            typeBag["rarity"] = new JsonObject { ["option"] = rarityFilter is "normal" or "magic" or "rare" ? rarityFilter : "nonunique" };
+        if (ilvlMin is int il && il > 0) typeBag["ilvl"] = new JsonObject { ["min"] = il };
+        if (qualityMin is int ql && ql > 0) typeBag["quality"] = new JsonObject { ["min"] = ql };
+        if (typeBag.Count > 0) filters["type_filters"] = new JsonObject { ["filters"] = typeBag };
+        var misc = new JsonObject();
+        if (corrupted is bool corrupt)
+            misc["corrupted"] = new JsonObject { ["option"] = corrupt ? "true" : "false" };
+        if (unidentified is bool unidFlag)
+            misc["identified"] = new JsonObject { ["option"] = unidFlag ? "false" : "true" };
+        if (misc.Count > 0)
+            filters["misc_filters"] = new JsonObject { ["filters"] = misc };
+        var socketBag = new JsonObject();
+        if (sockets is int socketN && socketN is >= 0 and <= 6)
+            socketBag["sockets"] = new JsonObject { ["min"] = socketN, ["max"] = socketN };
+        if (links is int linkN && linkN is >= 2 and <= 6)
+            socketBag["links"] = new JsonObject { ["min"] = linkN };
+        if (socketBag.Count > 0)
+            filters["socket_filters"] = new JsonObject { ["filters"] = socketBag };
+        if (filters.Count > 0) query["filters"] = filters;
+        var body = new JsonObject { ["query"] = query, ["sort"] = new JsonObject { ["price"] = "asc" } }.ToJsonString();
+        var (json, status) = await PostTradeSearch("https://www.pathofexile.com/api/trade/search/" + Uri.EscapeDataString(league), body);
+        if (status == 429) return new TradeLookup(RateLimited: true);
+        if (status is 401 or 403) return new TradeLookup(Forbidden: true);
+        if (json is null) return new TradeLookup();
+        JsonDocument search;
+        try { search = JsonDocument.Parse(json); }
+        catch (JsonException) { return new TradeLookup(); }
+        using (search)
+        {
+            var root = search.RootElement;
+            var queryId = root.TryGetProperty("id", out var idEl) ? JsonString(idEl) : "";
+            var total = root.TryGetProperty("total", out var totalEl) && JsonInt(totalEl, out var listed) ? listed : 0;
+            if (!root.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array || result.GetArrayLength() == 0)
+            {
+                return new TradeLookup(JsonSerializer.Serialize(new
+                {
+                    name,
+                    listings = total,
+                    mapped = 0,
+                    league,
+                    url = string.IsNullOrWhiteSpace(queryId) ? "" : "https://www.pathofexile.com/trade/search/" + Uri.EscapeDataString(league) + "/" + Uri.EscapeDataString(queryId),
+                }, JsonOut));
+            }
+            var hashes = result.EnumerateArray().Select(el => JsonString(el)).Where(h => !string.IsNullOrWhiteSpace(h)).Take(TradeFetchCap).ToArray();
+            var fetched = await FetchListingOffers(hashes, queryId, name, "https://www.pathofexile.com/api/trade/fetch/");
+            if (fetched.Rate) return new TradeLookup(RateLimited: true);
+            if (fetched.Forbidden) return new TradeLookup(Forbidden: true);
+            if (fetched.Offers is null || fetched.Offers.Count == 0) return new TradeLookup();
+            return new TradeLookup(ListingPayload(name, fetched.Offers, total, league, queryId, 0).Replace(
+                "https://www.pathofexile.com/trade2/search/poe2/",
+                "https://www.pathofexile.com/trade/search/",
+                StringComparison.Ordinal));
+        }
+    }
+
+    async Task<TradeLookup> LookupPoe1Exchange(string league, string name, string typeLine, string havePref)
+    {
+        var tags = await GetPoe1ExchangeTags();
+        if (tags is null) return new TradeLookup();
+        string tag = "";
+        foreach (var key in ExchangeNameKeys(name, typeLine))
+        {
+            if (tags.TryGetValue(key, out var found) && !string.IsNullOrWhiteSpace(found)) { tag = found; break; }
+        }
+        if (string.IsNullOrWhiteSpace(tag)) return new TradeLookup();
+        var have = ExchangeHave.Where(h => !h.Equals(tag, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (have.Length == 0) have = ["chaos", "divine"];
+        have = !string.IsNullOrWhiteSpace(havePref) ? [havePref] : [have[0]];
+        var body = JsonSerializer.Serialize(new
+        {
+            engine = "new",
+            query = new { status = new { option = TradeExchangeLive }, have, want = new[] { tag } },
+            sort = new Dictionary<string, string> { ["have"] = "asc" },
+        }, JsonOut);
+        var (json, status) = await PostTradeExchange("https://www.pathofexile.com/api/trade/exchange/" + Uri.EscapeDataString(league), body);
+        if (status == 429) return new TradeLookup(RateLimited: true);
+        if (status is 401 or 403) return new TradeLookup(Forbidden: true);
+        if (json is null) return new TradeLookup();
+        JsonDocument search;
+        try { search = JsonDocument.Parse(json); }
+        catch (JsonException) { return new TradeLookup(); }
+        using (search)
+        {
+            var root = search.RootElement;
+            var total = root.TryGetProperty("total", out var totalEl) && JsonInt(totalEl, out var listed) ? listed : 0;
+            var offers = ReadExchangeOffers(root, name);
+            SortExchangeOffers(offers, havePref);
+            var url = "https://www.pathofexile.com/trade/exchange/" + Uri.EscapeDataString(league) + "?q=" + Uri.EscapeDataString(JsonSerializer.Serialize(new
+            {
+                exchange = new { status = new { option = TradeExchangeLive }, have, want = new[] { tag } },
+            }, JsonOut));
+            if (offers.Count == 0)
+                return new TradeLookup(JsonSerializer.Serialize(new { name, listings = total, mapped = 0, league, url, tag, bulk = true }, JsonOut));
+            return new TradeLookup(ExchangePayload(name, offers, total, league, tag, url));
+        }
+    }
+
+    async Task<Dictionary<string, string>?> GetPoe1ExchangeTags()
+    {
+        if (Poe1ExchangeTags is not null && DateTime.UtcNow - Poe1ExchangeTagsAt < TimeSpan.FromHours(12))
+            return Poe1ExchangeTags;
+        var body = await GetPoe1StaticBody();
+        if (string.IsNullOrWhiteSpace(body)) return Poe1ExchangeTags;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (!doc.RootElement.TryGetProperty("result", out var groups) || groups.ValueKind != JsonValueKind.Array)
+                return Poe1ExchangeTags;
+            foreach (var group in groups.EnumerateArray())
+            {
+                if (!group.TryGetProperty("entries", out var entries) || entries.ValueKind != JsonValueKind.Array)
+                    continue;
+                foreach (var entry in entries.EnumerateArray())
+                {
+                    var tag = entry.TryGetProperty("id", out var idEl) ? JsonString(idEl) : "";
+                    var text = entry.TryGetProperty("text", out var textEl) ? JsonString(textEl) : "";
+                    if (string.IsNullOrWhiteSpace(tag) || tag == "sep" || string.IsNullOrWhiteSpace(text)) continue;
+                    map[FoldExchangeName(text)] = tag;
+                }
+            }
+            if (map.Count > 0)
+            {
+                Poe1ExchangeTags = map;
+                Poe1ExchangeTagsAt = DateTime.UtcNow;
+            }
+            return Poe1ExchangeTags;
+        }
+        catch (JsonException)
+        {
+            return Poe1ExchangeTags;
+        }
+    }
+
+    async Task<string?> GetPoe1StaticBody()
+    {
+        const string cacheKey = "trade-static-poe1-v1";
+        if (Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < TimeSpan.FromHours(12) && hit.status is >= 200 and < 300)
+            return hit.body;
+        var disk = Path.Combine(AppDataDir(), "trade-static-poe1.json");
+        try
+        {
+            if (File.Exists(disk) && DateTime.UtcNow - File.GetLastWriteTimeUtc(disk) < TimeSpan.FromHours(12))
+            {
+                var stored = await File.ReadAllTextAsync(disk);
+                if (stored.TrimStart().StartsWith('{'))
+                {
+                    Cache[cacheKey] = (DateTime.UtcNow, 200, stored);
+                    return stored;
+                }
+            }
+        }
+        catch { /* fetch below */ }
+        if (!await WaitForSlot(SearchLimit)) return null;
+        using var res = await TradeHttp.GetAsync("https://www.pathofexile.com/api/trade/data/static");
+        NoteRate(res, SearchLimit);
+        var text = await res.Content.ReadAsStringAsync();
+        if (res.IsSuccessStatusCode && text.TrimStart().StartsWith('{'))
+        {
+            Cache[cacheKey] = (DateTime.UtcNow, (int)res.StatusCode, text);
+            try { await File.WriteAllTextAsync(disk, text); } catch { /* keep memory cache */ }
+            return text;
+        }
+        return null;
     }
 
     async Task<TradeLookup> LookupRolledListing(string league, string name, string typeLine, IReadOnlyList<RollFilter> filters, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null, string rarityFilter = "")
@@ -1981,6 +2436,378 @@ sealed class TrackerWindow : Form
         return null;
     }
 
+    static List<(string Id, string Name, string Price, string Category)> WealthJobs(JsonElement root)
+    {
+        var jobs = new List<(string Id, string Name, string Price, string Category)>();
+        if (root.TryGetProperty("stashes", out var stashes) && stashes.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var row in stashes.EnumerateArray())
+            {
+                var id = row.TryGetProperty("id", out var idEl) ? JsonString(idEl) : "";
+                var name = row.TryGetProperty("name", out var nameEl) ? JsonString(nameEl) : "";
+                var price = row.TryGetProperty("price", out var priceEl) ? JsonString(priceEl) : "";
+                var category = row.TryGetProperty("category", out var categoryEl) ? JsonString(categoryEl) : "";
+                if (id.Length is < 1 or > 24 || name.Length is < 1 or > 40) continue;
+                if (!Regex.IsMatch(price, "^waystone-(?:[1-9]|1[0-6])$")) continue;
+                if (category is not ("" or "currency")) continue;
+                jobs.Add((id, name, price, category));
+                if (jobs.Count >= 12) break;
+            }
+        }
+        if (jobs.Count == 0) jobs.Add(("currency", "Currency", "waystone-3", "currency"));
+        return jobs;
+    }
+
+    async Task<string> LookupWealthTabs(string league, string account, IReadOnlyList<(string Id, string Name, string Price, string Category)> stashes)
+    {
+        var results = new JsonArray();
+        var limited = false;
+        foreach (var stash in stashes)
+        {
+            string one;
+            try
+            {
+                one = await LookupWealthStash(league, account, stash.Price, stash.Category);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("rate limited", StringComparison.OrdinalIgnoreCase))
+            {
+                limited = true;
+                break;
+            }
+            var node = JsonNode.Parse(one) as JsonObject ?? new JsonObject();
+            node["id"] = stash.Id;
+            node["name"] = stash.Name;
+            results.Add(node);
+        }
+        return new JsonObject { ["stashes"] = results, ["limited"] = limited }.ToJsonString();
+    }
+
+    async Task<bool> ShowPoe1Login()
+    {
+        var session = await Poe1BrowserLogin.Capture();
+        var account = Poe1BrowserLogin.Account.Trim();
+        if (session.Length < 8 || account.Length < 2)
+            throw new InvalidOperationException("Sign in on the Path of Exile page and wait until the window closes.");
+        File.WriteAllText(Poe1SessionPath(), JsonSerializer.Serialize(new { session, account }));
+        return true;
+    }
+
+    static string Poe1SessionPath() => Path.Combine(AppDataDir(), "poe1-session.json");
+
+    static string ReadPoe1Session() => ReadPoe1SessionField("session");
+
+    static string ReadPoe1Account() => ReadPoe1SessionField("account");
+
+    static string ReadPoe1SessionField(string name)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(Poe1SessionPath()));
+            var value = doc.RootElement.TryGetProperty(name, out var node) ? node.GetString() ?? "" : "";
+            if (name == "session")
+                return value.Length >= 8 && value.All(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_') ? value : "";
+            return value.Length is >= 2 and <= 60 && value.Any(char.IsLetter) && value.All(ch => char.IsLetterOrDigit(ch) || ch is '#' or '_' or '-') ? value : "";
+        }
+        catch { return ""; }
+    }
+
+    static List<int>? Poe1TabPicks(JsonElement root)
+    {
+        if (root.TryGetProperty("list", out var listEl) && listEl.ValueKind == JsonValueKind.True) return null;
+        var picks = new List<int>();
+        if (root.TryGetProperty("tabs", out var tabs) && tabs.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var tab in tabs.EnumerateArray())
+            {
+                if (JsonInt(tab, out var index) && index is >= 0 and <= 500 && !picks.Contains(index))
+                    picks.Add(index);
+                if (picks.Count >= 80) break;
+            }
+        }
+        return picks;
+    }
+
+    async Task<string> LookupPoe1Wealth(string league, IReadOnlyList<int>? only)
+    {
+        var account = ReadPoe1Account();
+        league = league.Trim();
+        if (account.Length < 2)
+            throw new InvalidOperationException("Sign in to Path of Exile first.");
+        if (!ValidLeague(league))
+            throw new InvalidOperationException("Enter the PoE 1 league name.");
+        var session = ReadPoe1Session();
+        if (session.Length < 8)
+            throw new InvalidOperationException("Sign in to Path of Exile first.");
+        var first = await GetPoe1Stash(session, account, league, 0, true);
+        if (first.Status is 401 or 403)
+            throw new InvalidOperationException(first.AuthRejected
+                ? "Sign in again. Path of Exile rejected the stash read."
+                : "Path of Exile did not return the stash. The saved sign-in was kept.");
+        if (first.Status == 429)
+            throw new InvalidOperationException("The stash site is rate limited. Wait a moment, then read again.");
+        if (first.Status != 200 || first.Json is null)
+            throw new InvalidOperationException("Path of Exile did not return the stash.");
+        var tabs = new List<(int Index, string Name)>();
+        if (first.Json.RootElement.TryGetProperty("tabs", out var tabRows) && tabRows.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var tab in tabRows.EnumerateArray())
+            {
+                if (tab.TryGetProperty("hidden", out var hidden) && hidden.ValueKind == JsonValueKind.True) continue;
+                var index = tab.TryGetProperty("i", out var indexEl) && JsonInt(indexEl, out var indexN) ? indexN : tabs.Count;
+                var name = tab.TryGetProperty("n", out var nameEl) ? JsonString(nameEl) : "Stash";
+                if (string.IsNullOrWhiteSpace(name)) name = "Stash";
+                tabs.Add((index, name.Trim()));
+            }
+        }
+        if (only is null)
+        {
+            var listed = new JsonArray();
+            foreach (var tab in tabs)
+                listed.Add(new JsonObject { ["index"] = tab.Index, ["name"] = tab.Name });
+            first.Json.Dispose();
+            return new JsonObject { ["tabs"] = listed }.ToJsonString();
+        }
+        tabs = tabs.Where(tab => only.Contains(tab.Index)).ToList();
+        if (tabs.Count == 0)
+        {
+            first.Json.Dispose();
+            throw new InvalidOperationException("Turn on at least one stash tab.");
+        }
+        var limited = tabs.Count > 24;
+        var results = new JsonArray();
+        var taken = 0;
+        foreach (var tab in tabs)
+        {
+            if (taken >= 24) break;
+            JsonDocument? doc = tab.Index == 0 ? first.Json : null;
+            var owned = false;
+            if (doc is null)
+            {
+                await Task.Delay(350);
+                var next = await GetPoe1Stash(session, account, league, tab.Index, false);
+                if (next.Status == 429) { next.Json?.Dispose(); limited = true; break; }
+                if (next.Status is 401 or 403)
+                {
+                    next.Json?.Dispose();
+                    first.Json.Dispose();
+                    throw new InvalidOperationException(next.AuthRejected
+                        ? "Sign in again. Path of Exile rejected the stash read."
+                        : "Path of Exile did not return the stash. The saved sign-in was kept.");
+                }
+                doc = next.Json;
+                owned = true;
+            }
+            taken++;
+            if (doc is null) continue;
+            try
+            {
+                var stacks = Poe1Stacks(doc);
+                if (stacks.Count == 0) continue;
+                results.Add(new JsonObject
+                {
+                    ["id"] = tab.Index.ToString(),
+                    ["name"] = tab.Name,
+                    ["stacks"] = stacks,
+                });
+            }
+            finally
+            {
+                if (owned) doc.Dispose();
+            }
+        }
+        var json = new JsonObject { ["stashes"] = results, ["limited"] = limited }.ToJsonString();
+        first.Json.Dispose();
+        return json;
+    }
+
+    async Task<(int Status, JsonDocument? Json, bool AuthRejected)> GetPoe1Stash(string session, string account, string league, int tabIndex, bool listTabs)
+    {
+        var url = "https://www.pathofexile.com/character-window/get-stash-items?accountName="
+            + Uri.EscapeDataString(account) + "&realm=pc&league=" + Uri.EscapeDataString(league)
+            + "&tabs=" + (listTabs ? "1" : "0") + "&tabIndex=" + tabIndex;
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.TryAddWithoutValidation("Cookie", "POESESSID=" + session);
+        request.Headers.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
+        request.Headers.Referrer = new Uri("https://www.pathofexile.com/");
+        using var response = await Poe1Http.SendAsync(request);
+        var status = (int)response.StatusCode;
+        var body = await response.Content.ReadAsStringAsync();
+        var rejected = status is 401 or 403 && Poe1AuthRejected(body);
+        if (rejected)
+        {
+            try { File.Delete(Poe1SessionPath()); } catch { /* the next sign-in replaces it */ }
+            return (status, null, true);
+        }
+        if (status != 200) return (status, null, false);
+        try { return (status, JsonDocument.Parse(body), false); }
+        catch { return (status, null, false); }
+    }
+
+    static bool Poe1AuthRejected(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("error", out var error)) return false;
+            if (error.TryGetProperty("code", out var code) && code.TryGetInt32(out var number) && number == 6) return true;
+            var message = error.TryGetProperty("message", out var messageEl) ? messageEl.GetString() ?? "" : "";
+            return message.Equals("Forbidden", StringComparison.OrdinalIgnoreCase) || message.Equals("Unauthorized", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    static JsonArray Poe1Stacks(JsonDocument doc)
+    {
+        var totals = new Dictionary<string, (string Name, long Count)>(StringComparer.OrdinalIgnoreCase);
+        if (!doc.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
+            return new JsonArray();
+        foreach (var item in items.EnumerateArray())
+        {
+            var name = item.TryGetProperty("name", out var nameEl) ? JsonString(nameEl).Trim() : "";
+            if (string.IsNullOrWhiteSpace(name))
+                name = item.TryGetProperty("typeLine", out var typeEl) ? JsonString(typeEl).Trim() : "";
+            if (string.IsNullOrWhiteSpace(name) && item.TryGetProperty("baseType", out var baseEl))
+                name = JsonString(baseEl).Trim();
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            var count = 1L;
+            if (item.TryGetProperty("stackSize", out var stackEl) && JsonInt(stackEl, out var stack) && stack > 0) count = stack;
+            if (totals.TryGetValue(name, out var existing)) totals[name] = (existing.Name, Math.Min(9_999_999, existing.Count + count));
+            else totals[name] = (name, count);
+        }
+        var stacks = new JsonArray();
+        foreach (var row in totals.Values.Where(row => row.Count > 0).OrderByDescending(row => row.Count))
+            stacks.Add(new JsonObject { ["name"] = row.Name, ["count"] = row.Count });
+        return stacks;
+    }
+
+    async Task<string> LookupWealthStash(string league, string account, string priceId = "waystone-3", string category = "currency")
+    {
+        account = account.Trim();
+        league = league.Trim();
+        if (account.Length is < 2 or > 60 || account.Any(char.IsControl))
+            throw new InvalidOperationException("Enter the account name from the Path of Exile website.");
+        if (string.IsNullOrWhiteSpace(league))
+            throw new InvalidOperationException("Choose a league first.");
+        var filters = new JsonObject
+        {
+            ["trade_filters"] = new JsonObject
+            {
+                ["filters"] = new JsonObject
+                {
+                    ["account"] = new JsonObject { ["input"] = account },
+                    ["price"] = new JsonObject { ["option"] = priceId, ["min"] = 99, ["max"] = 99 },
+                },
+            },
+        };
+        if (category == "currency")
+        {
+            filters["type_filters"] = new JsonObject
+            {
+                ["filters"] = new JsonObject
+                {
+                    ["category"] = new JsonObject { ["option"] = "currency" },
+                },
+            };
+        }
+        var body = new JsonObject
+        {
+            ["query"] = new JsonObject
+            {
+                ["status"] = new JsonObject { ["option"] = "any" },
+                ["stats"] = new JsonArray
+                {
+                    new JsonObject { ["type"] = "and", ["filters"] = new JsonArray() },
+                },
+                ["filters"] = filters,
+            },
+            ["sort"] = new JsonObject { ["price"] = "asc" },
+        }.ToJsonString();
+        var (json, status) = await PostTradeSearch(
+            "https://www.pathofexile.com/api/trade2/search/poe2/" + Uri.EscapeDataString(league), body);
+        if (status == 429)
+            throw new InvalidOperationException("The trade site is rate limited. Wait a moment, then read the tab again.");
+        if (status is 401 or 403)
+            throw new InvalidOperationException("The trade site refused the search.");
+        if (json is null)
+            throw new InvalidOperationException("The trade site did not return the Currency tab.");
+        using var search = JsonDocument.Parse(json);
+        var root = search.RootElement;
+        if (root.TryGetProperty("error", out var errorEl))
+        {
+            var message = errorEl.ValueKind == JsonValueKind.Object && errorEl.TryGetProperty("message", out var messageEl)
+                ? JsonString(messageEl) : "";
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(message) ? "The trade site rejected the search." : message);
+        }
+        var queryId = root.TryGetProperty("id", out var idEl) ? JsonString(idEl) : "";
+        var total = root.TryGetProperty("total", out var totalEl) && JsonInt(totalEl, out var listed) ? listed : 0;
+        if (!root.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array || result.GetArrayLength() == 0)
+            return JsonSerializer.Serialize(new { stacks = Array.Empty<object>(), listed = total, partial = false }, JsonOut);
+        var hashes = result.EnumerateArray().Select(item => JsonString(item)).Where(hash => !string.IsNullOrWhiteSpace(hash)).Take(TradeFetchCap).ToArray();
+        var totals = new Dictionary<string, (string Name, long Count)>(StringComparer.OrdinalIgnoreCase);
+        var accounts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < hashes.Length; index += TradeFetchBatch)
+        {
+            var batch = hashes.Skip(index).Take(TradeFetchBatch).ToArray();
+            if (!await WaitForSlot(FetchLimit))
+                throw new InvalidOperationException("The trade site is rate limited. Wait a moment, then read the tab again.");
+            var fetchUrl = "https://www.pathofexile.com/api/trade2/fetch/" + string.Join(",", batch) + "?query=" + Uri.EscapeDataString(queryId);
+            using var fetchRes = await TradeHttp.GetAsync(fetchUrl);
+            NoteRate(fetchRes, FetchLimit);
+            var fetchStatus = (int)fetchRes.StatusCode;
+            if (fetchStatus == 429)
+                throw new InvalidOperationException("The trade site is rate limited. Wait a moment, then read the tab again.");
+            if (fetchStatus is 401 or 403)
+                throw new InvalidOperationException("The trade site refused the search.");
+            if (!fetchRes.IsSuccessStatusCode) break;
+            ReadWealthFetch(await fetchRes.Content.ReadAsStringAsync(), account, priceId, totals, accounts);
+        }
+        if (accounts.Count > 1)
+            throw new InvalidOperationException("More than one account matched. Enter the full name, including the #number.");
+        var stacks = totals.Values.Where(row => row.Count > 0).OrderByDescending(row => row.Count)
+            .Select(row => new { name = row.Name, count = row.Count }).ToArray();
+        return JsonSerializer.Serialize(new { stacks, listed = total, partial = total > hashes.Length }, JsonOut);
+    }
+
+    static void ReadWealthFetch(string json, string account, string priceId, Dictionary<string, (string Name, long Count)> totals, HashSet<string> accounts)
+    {
+        using var fetched = JsonDocument.Parse(json);
+        if (!fetched.RootElement.TryGetProperty("result", out var rows) || rows.ValueKind != JsonValueKind.Array) return;
+        foreach (var row in rows.EnumerateArray())
+        {
+            if (!row.TryGetProperty("listing", out var listing)) continue;
+            if (listing.TryGetProperty("account", out var accountEl) && accountEl.ValueKind == JsonValueKind.Object &&
+                accountEl.TryGetProperty("name", out var nameEl))
+            {
+                var listed = JsonString(nameEl);
+                if (!WealthAccountMatches(listed, account)) continue;
+                if (!string.IsNullOrWhiteSpace(listed)) accounts.Add(listed);
+            }
+            if (!listing.TryGetProperty("price", out var price) || price.ValueKind != JsonValueKind.Object) continue;
+            var amount = price.TryGetProperty("amount", out var amountEl) && JsonDouble(amountEl, out var priced) ? priced : 0;
+            var currency = price.TryGetProperty("currency", out var currencyEl) ? JsonString(currencyEl) : "";
+            if (Math.Abs(amount - 99) > 0.001 || !currency.Equals(priceId, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!row.TryGetProperty("item", out var item) || item.ValueKind != JsonValueKind.Object) continue;
+            var name = item.TryGetProperty("typeLine", out var typeEl) ? JsonString(typeEl) : "";
+            if (string.IsNullOrWhiteSpace(name) && item.TryGetProperty("baseType", out var baseEl)) name = JsonString(baseEl);
+            name = name.Trim();
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            var count = 1L;
+            if (item.TryGetProperty("stackSize", out var stackEl) && JsonInt(stackEl, out var stack) && stack > 0) count = stack;
+            if (totals.TryGetValue(name, out var existing)) totals[name] = (existing.Name, Math.Min(9_999_999, existing.Count + count));
+            else totals[name] = (name, Math.Min(9_999_999, count));
+        }
+    }
+
+    static bool WealthAccountMatches(string listed, string wanted)
+    {
+        listed = listed.Trim();
+        wanted = wanted.Trim();
+        if (listed.Length == 0 || wanted.Length == 0) return false;
+        if (listed.Equals(wanted, StringComparison.OrdinalIgnoreCase)) return true;
+        var tag = listed.IndexOf('#');
+        return !wanted.Contains('#') && tag > 0 && listed[..tag].Equals(wanted, StringComparison.OrdinalIgnoreCase);
+    }
+
     async Task<(string? json, int status)> PostTradeSearch(string uri, string body)
     {
         if (!await WaitForSlot(SearchLimit)) return (null, 429);
@@ -2015,16 +2842,17 @@ sealed class TrackerWindow : Form
         return ListingPayload(fallbackName, offers, total, league, queryId, mapped);
     }
 
-    async Task<(List<OfferRow>? Offers, bool Rate, bool Forbidden)> FetchListingOffers(string[] hashes, string queryId, string fallbackName)
+    async Task<(List<OfferRow>? Offers, bool Rate, bool Forbidden)> FetchListingOffers(string[] hashes, string queryId, string fallbackName, string? fetchRoot = null)
     {
         var offers = new List<OfferRow>();
+        var rootUrl = string.IsNullOrWhiteSpace(fetchRoot) ? "https://www.pathofexile.com/api/trade2/fetch/" : fetchRoot;
         for (var i = 0; i < hashes.Length; i += TradeFetchBatch)
         {
             var batch = hashes.Skip(i).Take(TradeFetchBatch).ToArray();
             if (batch.Length == 0) break;
             if (!await WaitForSlot(FetchLimit))
                 return offers.Count > 0 ? (offers, false, false) : (null, true, false);
-            var fetchUrl = "https://www.pathofexile.com/api/trade2/fetch/" + string.Join(",", batch) + "?query=" + Uri.EscapeDataString(queryId ?? "");
+            var fetchUrl = rootUrl + string.Join(",", batch) + "?query=" + Uri.EscapeDataString(queryId ?? "");
             using var fetchRes = await TradeHttp.GetAsync(fetchUrl);
             NoteRate(fetchRes, FetchLimit);
             var status = (int)fetchRes.StatusCode;
@@ -2207,11 +3035,13 @@ sealed class TrackerWindow : Form
     static bool AllowedNinjaPath(string path)
     {
         if (string.IsNullOrWhiteSpace(path) || path.Contains("..", StringComparison.Ordinal)) return false;
-        return path.StartsWith("/poe2/api/economy/", StringComparison.Ordinal);
+        return path.StartsWith("/poe2/api/economy/", StringComparison.Ordinal) ||
+            path.StartsWith("/poe1/api/economy/", StringComparison.Ordinal);
     }
 
-    async void OnLoad(object? sender, EventArgs e)
+    void OnLoad(object? sender, EventArgs e)
     {
+        Poe1BrowserLogin.ProfileDir();
         DropUnusedJsonFolder();
         string index;
         try
@@ -2229,22 +3059,43 @@ sealed class TrackerWindow : Form
             return;
         }
         // The menu must be usable even when a hidden WebView is still starting.
-        _launcher = new GameLauncherForm(Poe2HasFocus, UpdateLauncherShortcut,
+        _launcher = new GameLauncherForm(GameHasFocus, () => _gameMenus.Hidden, UpdateLauncherShortcut,
             Path.Combine(AppDataDir(), "launcher-position.json"),
             Path.Combine(AppDataDir(), "www", "still-sane-sigil.png"),
-            () => OpenCompanionView("dash"), () => OpenCompanionView("settings"));
+            () => OpenCompanionView("dash"), () => OpenCompanionView("settings"), RefreshWealthFromButton);
         _gameMenuConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
             "My Games", "Path of Exile 2", "poe2_production_Config.ini");
         RefreshGameMenuBindings();
         EnsureGameKeyboardHook();
+        _indexPage = index;
+        ApplyHotkeys(_hotLog, _hotNext, _hotPrice);
+        BeginInvoke(() => { if (!IsDisposed) _ = EnsureWebAsync(); });
+    }
+
+    async void RefreshWealthFromButton()
+    {
+        await EnsureWebAsync();
+        PushHotkey("refresh-wealth");
+    }
+
+    Task EnsureWebAsync()
+    {
+        if (_web.CoreWebView2 is not null && _appReady) return Task.CompletedTask;
+        if (InvokeRequired) return (Task)Invoke(EnsureWebAsync);
+        return _webReady ??= StartWebAsync();
+    }
+
+    async Task StartWebAsync()
+    {
         var userData = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ExileLedger");
         Directory.CreateDirectory(userData);
-
+        var options = new CoreWebView2EnvironmentOptions("--disable-features=msSmartScreenProtection,CalculateNativeWinOcclusion --disable-background-networking --disable-sync --disable-backgrounding-occluded-windows");
+        _web.DefaultBackgroundColor = Color.FromArgb(12, 10, 8);
         try
         {
-            _env = await CoreWebView2Environment.CreateAsync(userDataFolder: userData);
+            _env = await CoreWebView2Environment.CreateAsync(null, userData, options);
             await _web.EnsureCoreWebView2Async(_env);
         }
         catch (WebView2RuntimeNotFoundException)
@@ -2258,19 +3109,29 @@ sealed class TrackerWindow : Form
             return;
         }
 
+        ParkCompanion();
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _web.CoreWebView2.Settings.AreDevToolsEnabled = false;
         _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _web.CoreWebView2.Settings.IsWebMessageEnabled = true;
         _web.CoreWebView2.WebMessageReceived += OnWebMessage;
-        _web.CoreWebView2.NavigationCompleted += (_, e) => FinishCompanionNavigation(e.IsSuccess);
+        _web.CoreWebView2.NavigationCompleted += (_, ev) =>
+        {
+            FinishCompanionNavigation(ev.IsSuccess);
+            if (ev.IsSuccess && _focusedGame.Length > 0)
+                PushJson(new { type = "active-game", game = _focusedGame });
+            ready.TrySetResult();
+        };
         _web.CoreWebView2.NewWindowRequested += (_, ev) =>
         {
             ev.Handled = true;
             OpenTradeUrl(ev.Uri);
         };
-        _web.CoreWebView2.Navigate(new Uri(index).AbsoluteUri);
-        ApplyHotkeys(_hotLog, _hotNext, _hotPrice);
+        _web.CoreWebView2.Navigate(new Uri(_indexPage).AbsoluteUri);
+        _wealthRefresh.Tick += (_, _) => PushJson(new { type = "hotkey", action = "refresh-wealth", auto = true });
+        _wealthRefresh.Start();
+        await ready.Task;
     }
 
     async void OnWebMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -2301,6 +3162,12 @@ sealed class TrackerWindow : Form
             if (type == "window-hide")
             {
                 BeginInvoke(HideCompanionWindow);
+                return;
+            }
+            if (type == "ui-painted")
+            {
+                var view = root.TryGetProperty("view", out var viewEl) ? viewEl.GetString() ?? "" : "";
+                BeginInvoke(() => RevealCompanionIfOpen(view));
                 return;
             }
             if (type == "hotkeys-pause")
@@ -2491,6 +3358,12 @@ sealed class TrackerWindow : Form
                 BeginInvoke(() => _overlay?.HideOverlay());
                 return;
             }
+            if (type == "wealth-live")
+            {
+                var label = root.TryGetProperty("label", out var wealthLabel) ? wealthLabel.GetString() ?? "" : "";
+                BeginInvoke(() => _launcher?.SetWealth(label));
+                return;
+            }
             if (type == "overlay-rate")
             {
                 var chip = root.TryGetProperty("chip", out var chipEl) ? chipEl.GetString() ?? "" : "";
@@ -2581,7 +3454,76 @@ sealed class TrackerWindow : Form
                 int? qualityMin = null;
                 if (root.TryGetProperty("qualityMin", out var qualEl) && JsonInt(qualEl, out var qualN) && qualN is > 0 and <= 100)
                     qualityMin = qualN;
-                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets, category, ravenTouched, exchange, havePref, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin, rarityFilter);
+                var tradeGame = root.TryGetProperty("game", out var tradeGameEl) ? tradeGameEl.GetString() ?? "" : "";
+                int? links = null;
+                if (root.TryGetProperty("links", out var linksEl) && JsonInt(linksEl, out var linkN) && linkN is >= 0 and <= 6)
+                    links = linkN;
+                await FetchTradePrice(id ?? "", league, itemName, skipCache, thorough, typeLine, rolls, mapped, corrupted, rarity, runeSockets, category, ravenTouched, exchange, havePref, unidentified, unidentifiedTier, exactBase, ilvlMin, qualityMin, rarityFilter, tradeGame, links);
+                return;
+            }
+            if (type == "poe1-session" && id is not null)
+            {
+                var signedIn = ReadPoe1Account().Length >= 2 && ReadPoe1Session().Length >= 8;
+                Reply(id, true, 200, signedIn ? "{\"signedIn\":true}" : "{\"signedIn\":false}");
+                return;
+            }
+            if (type == "poe1-login" && id is not null)
+            {
+                try
+                {
+                    var ok = await ShowPoe1Login();
+                    Reply(id, ok, ok ? 200 : 400, ok ? "{\"ok\":true}" : "{\"error\":\"\"}");
+                }
+                catch (Exception ex)
+                {
+                    var message = ex.Message;
+                    if (string.IsNullOrWhiteSpace(message) || message.Length > 180) message = "Sign-in could not open.";
+                    Reply(id, false, 400, JsonSerializer.Serialize(new { error = message }));
+                }
+                return;
+            }
+            if (type == "wealth-stash" && id is not null)
+            {
+                var league = root.TryGetProperty("league", out var leagueEl) ? leagueEl.GetString() ?? "" : "";
+                var account = root.TryGetProperty("account", out var accountEl) ? accountEl.GetString() ?? "" : "";
+                var game = root.TryGetProperty("game", out var gameEl) ? gameEl.GetString() ?? "" : "";
+                try
+                {
+                    var body = game == "poe1"
+                        ? await LookupPoe1Wealth(league, Poe1TabPicks(root))
+                        : await LookupWealthTabs(league, account, WealthJobs(root));
+                    Reply(id, true, 200, body);
+                }
+                catch (Exception ex)
+                {
+                    Reply(id, false, 400, JsonSerializer.Serialize(new { error = ex.Message }));
+                }
+                return;
+            }
+            if (type == "wealth-snapshot")
+            {
+                BeginInvoke(CaptureWealthSnapshot);
+                return;
+            }
+            if (type == "wealth-auto-config")
+            {
+                _wealthTabDetector = root.TryGetProperty("config", out var config)
+                    ? WealthTabDetector.FromConfig(config) : null;
+                _nextWealthTabCheck = 0;
+                PushJson(new { type = "wealth-auto-status", active = _wealthTabDetector is not null });
+                return;
+            }
+            if (type == "wealth-ocr" && id is not null)
+            {
+                try
+                {
+                    var result = await WealthCapture.ReadCountsAsync(root.GetProperty("crops"));
+                    Reply(id, true, 200, result);
+                }
+                catch (Exception ex)
+                {
+                    Reply(id, false, 400, JsonSerializer.Serialize(new { error = ex.Message }));
+                }
                 return;
             }
             if (type == "backup-info")
@@ -2874,7 +3816,8 @@ sealed class TrackerWindow : Form
             "www.mobalytics.gg",
             "github.com",
             "www.github.com",
-            "craftofexile.com", "www.craftofexile.com", "poe2.re", "www.poe2.re",
+            "craftofexile.com", "www.craftofexile.com", "beta.craftofexile.com", "poe2.re", "www.poe2.re",
+            "poewiki.net", "www.poewiki.net", "poedb.tw", "www.poedb.tw", "poe.re", "www.poe.re",
             "youtube.com", "www.youtube.com", "youtu.be",
         };
         if (allowed.Contains(host)) return true;
@@ -2882,6 +3825,7 @@ sealed class TrackerWindow : Form
                  {
                      "maxroll.gg", "mobalytics.gg", "poe.ninja", "poe2wiki.net", "poe2db.tw",
                      "pathofbuilding.community", "pathofexile.com", "github.com", "craftofexile.com", "poe2.re",
+                     "poewiki.net", "poedb.tw", "poe.re",
                  })
         {
             if (host.EndsWith("." + root, StringComparison.OrdinalIgnoreCase)) return true;
@@ -3195,26 +4139,93 @@ sealed class TrackerWindow : Form
         }
         var artDir = Path.Combine(dir, "art");
         EnsureDirectory(artDir);
-        var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var name in asm.GetManifestResourceNames())
+        var artStampPath = Path.Combine(dir, ".art-stamp");
+        const string artStamp = "art-2026-11-13";
+        var artReady = false;
+        try
         {
-            const string prefix = "www.art.";
-            if (!name.StartsWith(prefix, StringComparison.Ordinal)) continue;
-            // Flat: "boss.png" or nested: "rank-elemental/crystalline-egg.png"
-            var rel = name[prefix.Length..].Replace('/', Path.DirectorySeparatorChar);
-            keep.Add(rel.Replace('\\', '/'));
-            var dest = Path.Combine(artDir, rel);
-            var parent = Path.GetDirectoryName(dest);
-            if (!string.IsNullOrEmpty(parent)) EnsureDirectory(parent);
-            WriteResource(asm, name, dest, skipUnchanged: true);
+            artReady = File.Exists(artStampPath)
+                && File.ReadAllText(artStampPath) == artStamp
+                && Directory.Exists(artDir)
+                && Directory.GetFiles(artDir, "*", SearchOption.AllDirectories).Length >= 40;
         }
-        foreach (var file in Directory.GetFiles(artDir, "*", SearchOption.AllDirectories))
+        catch { /* rewrite the art set */ }
+        if (!artReady)
         {
-            var rel = Path.GetRelativePath(artDir, file).Replace('\\', '/');
-            if (!keep.Contains(rel)) File.Delete(file);
+            var installArt = Path.Combine(InstallDir(), "art");
+            if (ArtFolderReady(installArt))
+                LinkInstalledArt(artDir, installArt, artStampPath, artStamp);
+            else
+            {
+                var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var name in asm.GetManifestResourceNames())
+                {
+                    const string prefix = "www.art.";
+                    if (!name.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                    var rel = name[prefix.Length..].Replace('/', Path.DirectorySeparatorChar);
+                    keep.Add(rel.Replace('\\', '/'));
+                    var dest = Path.Combine(artDir, rel);
+                    var parent = Path.GetDirectoryName(dest);
+                    if (!string.IsNullOrEmpty(parent)) EnsureDirectory(parent);
+                    WriteResource(asm, name, dest, skipUnchanged: true);
+                }
+                if (keep.Count > 0)
+                {
+                    foreach (var file in Directory.GetFiles(artDir, "*", SearchOption.AllDirectories))
+                    {
+                        var rel = Path.GetRelativePath(artDir, file).Replace('\\', '/');
+                        if (!keep.Contains(rel)) File.Delete(file);
+                    }
+                    File.WriteAllText(artStampPath, artStamp);
+                }
+            }
         }
         File.WriteAllText(stampPath, want);
         return index;
+    }
+
+    static bool ArtFolderReady(string dir)
+    {
+        try
+        {
+            return Directory.Exists(dir)
+                && Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Take(40).Count() >= 40;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    static void LinkInstalledArt(string artDir, string installArt, string stampPath, string stamp)
+    {
+        var ready = 0;
+        foreach (var src in Directory.EnumerateFiles(installArt, "*", SearchOption.AllDirectories))
+        {
+            var dest = Path.Combine(artDir, Path.GetRelativePath(installArt, src));
+            var parent = Path.GetDirectoryName(dest);
+            if (!string.IsNullOrEmpty(parent)) EnsureDirectory(parent);
+            if (File.Exists(dest))
+            {
+                ready++;
+                continue;
+            }
+            if (CreateHardLink(dest, src, IntPtr.Zero))
+            {
+                ready++;
+                continue;
+            }
+            try
+            {
+                File.Copy(src, dest, false);
+                ready++;
+            }
+            catch
+            {
+                /* try the rest of the set */
+            }
+        }
+        if (ready >= 40) File.WriteAllText(stampPath, stamp);
     }
 
     static readonly Regex IconWithName = new(
@@ -3592,20 +4603,20 @@ sealed class TrackerWindow : Form
     {
         using var stream = asm.GetManifestResourceStream(name)
             ?? throw new InvalidOperationException("Missing embedded file: " + name);
-        using var ms = new MemoryStream();
-        stream.CopyTo(ms);
-        var bytes = ms.ToArray();
-        if (skipUnchanged && File.Exists(path))
+        if (skipUnchanged && File.Exists(path) && stream.CanSeek)
         {
             try
             {
-                if (new FileInfo(path).Length == bytes.Length) return;
+                if (new FileInfo(path).Length == stream.Length) return;
             }
             catch
             {
                 /* rewrite */
             }
         }
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        var bytes = ms.ToArray();
         var parent = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(parent)) EnsureDirectory(parent);
         File.WriteAllBytes(path, bytes);

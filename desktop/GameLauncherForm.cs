@@ -9,6 +9,7 @@ sealed class GameLauncherForm : Form
 {
     const int IconSize = 52;
     readonly Func<bool> _gameFocused;
+    readonly Func<bool> _menuHidden;
     readonly Action<bool> _focusChanged;
     readonly string _settingsPath;
     readonly System.Windows.Forms.Timer _watch = new() { Interval = 200 };
@@ -20,16 +21,21 @@ sealed class GameLauncherForm : Form
     IntPtr _gameWindow;
     Point _pressCursor, _pressLocation;
     bool _pressed, _dragged;
-    bool _hiddenForGameMenu;
+    int _side = IconSize;
+    string _wealth = "";
+    readonly Action _openWealth;
 
     sealed record Preferences(double X = 0.98, double Y = 0.3, bool Locked = true);
 
-    public GameLauncherForm(Func<bool> gameFocused, Action<bool> focusChanged,
-        string settingsPath, string imagePath, Action dashboard, Action settings)
+    public GameLauncherForm(Func<bool> gameFocused, Func<bool> menuHidden, Action<bool> focusChanged,
+        string settingsPath, string imagePath, Action dashboard, Action settings, Action wealth)
     {
         _gameFocused = gameFocused;
+        _menuHidden = menuHidden;
         _focusChanged = focusChanged;
         _settingsPath = settingsPath;
+        _openWealth = wealth;
+        Font = new Font("Segoe UI", 10, FontStyle.Bold);
         try
         {
             var stored = JsonSerializer.Deserialize<Preferences>(File.ReadAllText(settingsPath));
@@ -45,7 +51,8 @@ sealed class GameLauncherForm : Form
         TopMost = true;
         DoubleBuffered = true;
         ClientSize = new Size(IconSize, IconSize);
-        BackColor = Color.FromArgb(19, 18, 14);
+        TransparencyKey = Color.Magenta;
+        BackColor = Color.Magenta;
         Cursor = Cursors.Hand;
         AccessibleName = "Still Sane, Exile? menu";
         _tip.SetToolTip(this, "SSE menu · Right-click to unlock and move");
@@ -95,10 +102,16 @@ sealed class GameLauncherForm : Form
             if (!_pressed || e.Button != MouseButtons.Left) return;
             _pressed = false;
             Capture = false;
-            if (!_dragged) { OpenMenu(); return; }
+            if (!_dragged)
+            {
+                if (HitWealth(e.Location)) _openWealth();
+                else OpenMenu();
+                return;
+            }
+            var iconLeft = Left + Width - _side;
             _preferences = _preferences with
             {
-                X = (double)(Left - _gameBounds.Left) / Math.Max(1, _gameBounds.Width - Width),
+                X = (double)(iconLeft - _gameBounds.Left) / Math.Max(1, _gameBounds.Width - _side),
                 Y = (double)(Top - _gameBounds.Top) / Math.Max(1, _gameBounds.Height - Height),
             };
             SavePosition();
@@ -110,7 +123,16 @@ sealed class GameLauncherForm : Form
 
     protected override bool ShowWithoutActivation => true;
     public bool GameRunning => _gameWindow != IntPtr.Zero && IsWindow(_gameWindow);
+    public IntPtr GameWindow => _gameWindow;
     public bool GameAvailable => GameRunning && !IsIconic(_gameWindow);
+    public static Rectangle GetVisibleClientBounds(IntPtr window)
+    {
+        var origin = new NativePoint();
+        if (window == IntPtr.Zero || IsIconic(window) || !GetClientRect(window, out var bounds) ||
+            !ClientToScreen(window, ref origin)) return Rectangle.Empty;
+        return new Rectangle(origin.X, origin.Y, bounds.Right, bounds.Bottom);
+    }
+
     public Rectangle GameClientBounds
     {
         get
@@ -154,54 +176,122 @@ sealed class GameLauncherForm : Form
         BeginInvoke(action);
     }
 
-    public void SetGameMenuHidden(bool hidden)
-    {
-        _hiddenForGameMenu = hidden;
-        if (!hidden) return;
-        _menu.Close();
-        _tip.Hide(this);
-        if (Visible) Hide();
-    }
-
     Point ClampLocation(Point point) => new(
         Math.Clamp(point.X, _gameBounds.Left, Math.Max(_gameBounds.Left, _gameBounds.Right - Width)),
         Math.Clamp(point.Y, _gameBounds.Top, Math.Max(_gameBounds.Top, _gameBounds.Bottom - Height)));
 
+    public void NoteGameWindow() => RememberGameWindow();
+
+    void RememberGameWindow()
+    {
+        if (!GameWindowAlive()) _gameWindow = FindPoeWindow();
+        var origin = new NativePoint();
+        if (_gameWindow == IntPtr.Zero || IsIconic(_gameWindow) ||
+            !GetClientRect(_gameWindow, out var bounds) || !ClientToScreen(_gameWindow, ref origin) ||
+            bounds.Right <= 0 || bounds.Bottom <= 0) return;
+        _gameBounds = new Rectangle(origin.X, origin.Y, bounds.Right, bounds.Bottom);
+    }
+
+    bool GameWindowAlive()
+    {
+        if (_gameWindow == IntPtr.Zero || !IsWindow(_gameWindow)) return false;
+        GetWindowThreadProcessId(_gameWindow, out var pid);
+        if ((int)pid == Environment.ProcessId) return false;
+        try
+        {
+            return System.Diagnostics.Process.GetProcessById((int)pid).ProcessName
+                .StartsWith("PathOfExile", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    IntPtr FindPoeWindow()
+    {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((window, _) =>
+        {
+            if (!IsWindowVisible(window) || IsIconic(window)) return true;
+            GetWindowThreadProcessId(window, out var pid);
+            if ((int)pid == Environment.ProcessId) return true;
+            try
+            {
+                var name = System.Diagnostics.Process.GetProcessById((int)pid).ProcessName;
+                if (!name.StartsWith("PathOfExile", StringComparison.OrdinalIgnoreCase)) return true;
+                var title = new System.Text.StringBuilder(32);
+                if (GetWindowText(window, title, title.Capacity) <= 0) return true;
+                found = window;
+                return false;
+            }
+            catch { return true; }
+        }, IntPtr.Zero);
+        return found;
+    }
+
     void RefreshVisibility()
     {
+        RememberGameWindow();
         var active = _gameFocused();
         _focusChanged(active);
         if (_pressed && Capture) return;
-        var game = GetForegroundWindow();
         if (_menu.Visible && !IsIconic(_gameWindow))
         {
-            GetWindowThreadProcessId(game, out var pid);
+            GetWindowThreadProcessId(GetForegroundWindow(), out var pid);
             if (pid == Environment.ProcessId) return;
         }
-        var origin = new NativePoint();
-        if (!active || IsIconic(game) || !GetClientRect(game, out var bounds) ||
-            !ClientToScreen(game, ref origin) || bounds.Right <= 0 || bounds.Bottom <= 0)
+        if (_gameWindow == IntPtr.Zero || _gameBounds.Width <= 0 || _gameBounds.Height <= 0)
         {
             _menu.Close();
             if (Visible) Hide();
             return;
         }
-        _gameBounds = new Rectangle(origin.X, origin.Y, bounds.Right, bounds.Bottom);
-        _gameWindow = game;
-        if (_hiddenForGameMenu)
+        if (!active)
         {
             _menu.Close();
             if (Visible) Hide();
             return;
         }
         if (_pressed) return;
-        var dpi = GetDpiForWindow(game);
-        var side = Math.Max(32, (int)Math.Round(IconSize * (dpi == 0 ? 96 : dpi) / 96.0));
-        if (Width != side || Height != side) Size = new Size(side, side);
-        Location = ClampLocation(new Point(
-            _gameBounds.Left + (int)Math.Round((_gameBounds.Width - Width) * _preferences.X),
-            _gameBounds.Top + (int)Math.Round((_gameBounds.Height - Height) * _preferences.Y)));
+        var dpi = GetDpiForWindow(_gameWindow);
+        _side = Math.Max(32, (int)Math.Round(IconSize * (dpi == 0 ? 96 : dpi) / 96.0));
+        LayoutChrome();
+        if (_menuHidden())
+        {
+            _menu.Close();
+            if (Visible) Hide();
+            return;
+        }
         if (!Visible) Show();
+    }
+
+    public void SetWealth(string text)
+    {
+        var next = (text ?? "").Trim();
+        if (next.Length > 48) next = next[..48];
+        if (next == _wealth) return;
+        _wealth = next;
+        if (_gameBounds.Width > 0) LayoutChrome();
+        else Invalidate();
+    }
+
+    int WealthExtra()
+    {
+        if (string.IsNullOrEmpty(_wealth)) return 0;
+        var measured = TextRenderer.MeasureText(_wealth, Font);
+        return measured.Width + 36;
+    }
+
+    bool HitWealth(Point point) => WealthExtra() > 0 && point.X < Width - _side;
+
+    void LayoutChrome()
+    {
+        var extra = WealthExtra();
+        var iconX = _gameBounds.Left + (int)Math.Round((_gameBounds.Width - _side) * _preferences.X);
+        var iconY = _gameBounds.Top + (int)Math.Round((_gameBounds.Height - _side) * _preferences.Y);
+        var size = new Size(_side + extra, _side);
+        if (Size != size) Size = size;
+        var point = ClampLocation(new Point(iconX - extra, iconY));
+        if (Location != point) Location = point;
+        Invalidate();
     }
 
     void SavePosition()
@@ -212,13 +302,39 @@ sealed class GameLauncherForm : Form
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        base.OnPaint(e);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        using var pen = new Pen(Color.FromArgb(185, 157, 94), 2);
-        e.Graphics.DrawEllipse(pen, 2, 2, Width - 5, Height - 5);
-        if (_image is not null) e.Graphics.DrawImage(_image, new Rectangle(5, 5, Width - 10, Height - 10));
-        else TextRenderer.DrawText(e.Graphics, "SSE", Font, ClientRectangle, Color.Wheat,
+        e.Graphics.Clear(Color.Magenta);
+        var icon = new Rectangle(Width - _side, 0, _side, _side);
+        if (!string.IsNullOrEmpty(_wealth))
+        {
+            var pill = new Rectangle(0, Math.Max(0, (_side - 34) / 2), Math.Max(0, Width - _side - 8), 34);
+            using var path = Rounded(pill, 17);
+            using var fill = new SolidBrush(Color.FromArgb(19, 18, 14));
+            using var pen = new Pen(Color.FromArgb(185, 157, 94), 1.5f);
+            e.Graphics.FillPath(fill, path);
+            e.Graphics.DrawPath(pen, path);
+            TextRenderer.DrawText(e.Graphics, _wealth, Font, pill, Color.FromArgb(238, 223, 190),
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+        }
+        using var ring = new Pen(Color.FromArgb(185, 157, 94), 2);
+        using var disc = new SolidBrush(Color.FromArgb(19, 18, 14));
+        e.Graphics.FillEllipse(disc, icon.X + 2, icon.Y + 2, icon.Width - 5, icon.Height - 5);
+        e.Graphics.DrawEllipse(ring, icon.X + 2, icon.Y + 2, icon.Width - 5, icon.Height - 5);
+        if (_image is not null) e.Graphics.DrawImage(_image, new Rectangle(icon.X + 5, icon.Y + 5, icon.Width - 10, icon.Height - 10));
+        else TextRenderer.DrawText(e.Graphics, "SSE", Font, icon, Color.Wheat,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+    }
+
+    static GraphicsPath Rounded(Rectangle bounds, int radius)
+    {
+        var path = new GraphicsPath();
+        var d = Math.Min(radius * 2, Math.Min(bounds.Width, bounds.Height));
+        path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
+        path.AddArc(bounds.Right - d, bounds.Y, d, d, 270, 90);
+        path.AddArc(bounds.Right - d, bounds.Bottom - d, d, d, 0, 90);
+        path.AddArc(bounds.X, bounds.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 
     protected override void Dispose(bool disposing)
@@ -270,6 +386,10 @@ sealed class GameLauncherForm : Form
     }
     [StructLayout(LayoutKind.Sequential)] struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] struct NativePoint { public int X, Y; }
+    delegate bool EnumProc(IntPtr window, IntPtr data);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr data);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr window, System.Text.StringBuilder text, int count);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
