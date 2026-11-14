@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.47";
+const APP_VERSION = "1.0.48";
 
 // Cultivated/Vaal unique identities, including copies without a Vaal property line.
 // Source: https://poe2db.tw/us/Unique_item#CultivatedUniques (2026-11-12).
@@ -195,6 +195,20 @@ const POE1_EXCHANGE = [
   "Resonator",
   "Essence",
 ];
+const POE1_UNIQUE_TABLES = [
+  "UniqueWeapon",
+  "UniqueArmour",
+  "UniqueAccessory",
+  "UniqueFlask",
+  "UniqueJewel",
+  "ForbiddenJewel",
+  "ClusterJewel",
+  "ShrineBelt",
+  "UniqueTincture",
+  "UniqueRelic",
+  "UniqueMap",
+];
+
 const POE1_ITEMS = [
   "Wombgift",
   "Corpse",
@@ -6228,6 +6242,20 @@ function ninjaUniqueType(className) {
   return "";
 }
 
+function poe1UniqueTablesFor(className) {
+  const t = String(className || "");
+  if (/jewel/i.test(t)) return ["UniqueJewel", "ClusterJewel", "ForbiddenJewel"];
+  if (/flask/i.test(t)) return ["UniqueFlask"];
+  if (/tincture/i.test(t)) return ["UniqueTincture"];
+  if (/map/i.test(t)) return ["UniqueMap"];
+  if (/relic/i.test(t)) return ["UniqueRelic"];
+  if (/belt/i.test(t)) return ["UniqueAccessory", "ShrineBelt"];
+  if (/amulet|ring|talisman|trinket/i.test(t)) return ["UniqueAccessory"];
+  if (/body|helmet|glove|boot|shield|buckler|quiver|armour|armor/i.test(t)) return ["UniqueArmour"];
+  if (/wand|mace|sword|axe|bow|staff|stave|spear|claw|dagger|sceptre|scepter|rod|flail/i.test(t)) return ["UniqueWeapon"];
+  return POE1_UNIQUE_TABLES;
+}
+
 function uniqueVariantsForBase(base, className) {
   const want = uniqueBaseKey(stripItemQualityPrefix(base));
   if (!want) return [];
@@ -6241,20 +6269,12 @@ function uniqueVariantsForBase(base, className) {
     seen.add(id);
     out.push({ name: n, icon: icon || lookupIcon(n) || "" });
   }
-  for (const name of UNIQUE_BY_BASE[want] || []) add(name);
   const poe1 = activeGame() === "poe1";
+  if (!poe1) for (const name of UNIQUE_BY_BASE[want] || []) add(name);
   const type = ninjaUniqueType(className);
-  const poe1Type = {
-    UniqueFlasks: "UniqueFlask",
-    UniqueArmours: "UniqueArmour",
-    UniqueAccessories: "UniqueAccessory",
-    UniqueWeapons: "UniqueWeapon",
-    UniqueJewels: "UniqueJewel",
-    UniqueSanctumRelics: "UniqueRelic",
-  }[type] || "";
   const bag = poe1 ? poe1Prices : prices;
-  const tableName = poe1 ? poe1Type : type;
-  const tables = tableName ? [bag.tables?.[tableName] || []] : poe1 ? [] : Object.values(bag.tables || {});
+  const tableNames = poe1 ? POE1_UNIQUE_TABLES : type ? [type] : [];
+  const tables = tableNames.length ? tableNames.map((name) => bag.tables?.[name] || []) : Object.values(bag.tables || {});
   for (const rows of tables) {
     for (const row of rows || []) {
       if (uniqueBaseKey(row.baseType || "") === want) add(row.name, row.icon);
@@ -6279,14 +6299,39 @@ function applyUniquePick(log, drop, name) {
   drop.name = name;
   drop.uniqueId = slug(name);
   drop.uniquePicked = true;
+  drop.pickUnid = false;
   drop.quoteTried = false;
   delete drop.quote;
   if (log?.id) save();
   paintPriceOverlay();
 }
 
+async function loadPoe1UniqueTables(tables) {
+  const start = Date.now();
+  while (poe1Prices.status === "loading" && Date.now() - start < 20000) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  const missing = (tables || []).filter((table) => !(poe1Prices.tables?.[table] || []).length);
+  await Promise.all(missing.map(async (table) => {
+    try {
+      const q = encodeURIComponent(econLeagueName());
+      const data = await ninjaFetch(`/poe1/api/economy/stash/current/item/overview?league=${q}&type=${table}`, true);
+      takePoe1Lines(data, table, true);
+    } catch {
+      /* keep the local unique list */
+    }
+  }));
+}
+
 async function ensureUniqueVariants(log, drop) {
   if (!unidentifiedUniqueNeedsPick(drop)) return;
+  if (activeGame() === "poe1") {
+    const preferred = poe1UniqueTablesFor(drop.className);
+    await loadPoe1UniqueTables(preferred);
+    if (uniqueVariantsForBase(drop.baseType || drop.name, drop.className).length) return;
+    await loadPoe1UniqueTables(POE1_UNIQUE_TABLES);
+    return;
+  }
   const type = ninjaUniqueType(drop.className);
   if (!type || (prices.tables[type] || []).length) return;
   try {
@@ -9533,7 +9578,11 @@ function overlayUniquePickHtml(log, drop) {
   if (!unidentifiedUniqueNeedsPick(drop)) return "";
   const base = drop.baseType || drop.name;
   const rows = uniqueVariantsForBase(base, drop.className);
-  if (!rows.length) return "";
+  if (!rows.length) {
+    return drop.uniqueListPending
+      ? `<div class="price-overlay-identify"><div class="price-overlay-identify-label">Which ${esc(base)}?</div></div>`
+      : "";
+  }
   if (rows.length === 1) {
     return drop.uniquePickTried ? "" : `<div class="price-overlay-identify"><div class="price-overlay-identify-label">Which ${esc(base)}?</div></div>`;
   }
@@ -9556,12 +9605,17 @@ function paintPriceOverlay(forceInApp = false, fresh = false) {
   if (pending && unidentifiedUniqueNeedsPick(pending.drop)) {
     const rows = uniqueVariantsForBase(pending.drop.baseType || pending.drop.name, pending.drop.className);
     if (rows.length === 1) {
+      pending.drop.uniqueListPending = false;
       applyUniquePick(pending.log, pending.drop, rows[0].name);
       return;
     }
-    if (rows.length < 2 && !pending.drop.uniquePickTried) {
-      pending.drop.uniquePickTried = true;
-      ensureUniqueVariants(pending.log, pending.drop).finally(() => paintPriceOverlay(forceInApp, fresh));
+    if (rows.length < 2 && !pending.drop.uniquePickTried && !pending.drop.uniqueListPending) {
+      pending.drop.uniqueListPending = true;
+      ensureUniqueVariants(pending.log, pending.drop).finally(() => {
+        pending.drop.uniqueListPending = false;
+        if (uniqueVariantsForBase(pending.drop.baseType || pending.drop.name, pending.drop.className).length < 2) pending.drop.uniquePickTried = true;
+        paintPriceOverlay(forceInApp, fresh);
+      });
     }
   }
   const root = document.getElementById("price-overlay");
@@ -10050,6 +10104,7 @@ async function quoteRolledDrop(log, drop, force = false) {
   if (drop?.uiPreview) return;
   if (isClipboardCurrency(drop)) { paintPriceOverlay(); return; }
   if (!window.chrome?.webview) return;
+  if (drop?.uniqueListPending) return;
   if (unidentifiedUniqueNeedsPick(drop) && uniqueVariantsForBase(drop.baseType || drop.name, drop.className).length > 1) return;
   if (!drop.id) drop.id = uid();
   drop.rolls = normalizeRolls(drop.rolls, drop);
