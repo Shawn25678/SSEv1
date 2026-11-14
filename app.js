@@ -1,6 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.41";
-const FEEDBACK_ISSUE_URL = "https://github.com/Shawn25678/SSEv1/issues/new";
+const APP_VERSION = "1.0.43";
 
 // Cultivated/Vaal unique identities, including copies without a Vaal property line.
 // Source: https://poe2db.tw/us/Unique_item#CultivatedUniques (2026-11-12).
@@ -381,7 +380,7 @@ function loadState() {
       convertView: parsed.convertView || parsed.convertMain || "divine",
       hotkeyLog: parsed.hotkeyLog || "F8",
       hotkeyNext: parsed.hotkeyNext || "F9",
-      hotkeyPrice: parsed.hotkeyPrice || "F7",
+      hotkeyPrice: parsed.hotkeyPrice || "Ctrl+D",
       hotkeyHideout: parsed.hotkeyHideout || "F6",
       overlayClickAway: parsed._clickAwaySet ? !!parsed.overlayClickAway : true,
       theme: migrateTheme(parsed.theme),
@@ -406,7 +405,7 @@ function defaultState() {
     convertView: "divine",
     hotkeyLog: "F8",
     hotkeyNext: "F9",
-    hotkeyPrice: "F7",
+    hotkeyPrice: "Ctrl+D",
     hotkeyHideout: "F6",
     overlayClickAway: true,
     overlayScale: 1,
@@ -1994,10 +1993,101 @@ function tradeCategory(className) {
   return "";
 }
 
+function poe1TradeCategory(className) {
+  const t = String(className || "").trim();
+  if (!t) return "";
+  const rows = [
+    [/talismans?/i, "accessory.amulet"],
+    [/amulets?/i, "accessory.amulet"],
+    [/belts?/i, "accessory.belt"],
+    [/rings?/i, "accessory.ring"],
+    [/trinkets?/i, "accessory.trinket"],
+    [/body\s*armours?/i, "armour.chest"],
+    [/helmets?/i, "armour.helmet"],
+    [/gloves/i, "armour.gloves"],
+    [/boots/i, "armour.boots"],
+    [/quivers?/i, "armour.quiver"],
+    [/shields?/i, "armour.shield"],
+    [/rune daggers?/i, "weapon.runedagger"],
+    [/daggers?/i, "weapon.dagger"],
+    [/rapiers?|thrusting/i, "weapon.rapier"],
+    [/warstaves|warstaff/i, "weapon.warstaff"],
+    [/staves|staff/i, "weapon.staff"],
+    [/bows?/i, "weapon.bow"],
+    [/wands?/i, "weapon.wand"],
+    [/sceptres?/i, "weapon.sceptre"],
+    [/fishing/i, "weapon.rod"],
+    [/two\s*-?\s*hand(?:ed)?\s*maces?/i, "weapon.twomace"],
+    [/one\s*-?\s*hand(?:ed)?\s*maces?/i, "weapon.onemace"],
+    [/two\s*-?\s*hand(?:ed)?\s*swords?/i, "weapon.twosword"],
+    [/one\s*-?\s*hand(?:ed)?\s*swords?/i, "weapon.onesword"],
+    [/two\s*-?\s*hand(?:ed)?\s*axes?/i, "weapon.twoaxe"],
+    [/one\s*-?\s*hand(?:ed)?\s*axes?/i, "weapon.oneaxe"],
+    [/claws?/i, "weapon.claw"],
+    [/abyss jewels?/i, "jewel.abyss"],
+    [/cluster jewels?/i, "jewel.cluster"],
+    [/jewels?/i, "jewel"],
+    [/awakened support/i, "gem.supportgemplus"],
+    [/support gems?/i, "gem.supportgem"],
+    [/skill gems?/i, "gem.activegem"],
+    [/gems?/i, "gem"],
+    [/flasks?/i, "flask"],
+    [/scarabs?/i, "map.scarab"],
+    [/map fragments?/i, "map.fragment"],
+    [/divination/i, "card"],
+    [/maps?/i, "map"],
+    [/heist brooches|heist rewards/i, "heistequipment.heistreward"],
+    [/heist tools/i, "heistequipment.heisttool"],
+    [/heist cloaks|heist utility/i, "heistequipment.heistutility"],
+    [/heist gear|heist weapons/i, "heistequipment.heistweapon"],
+    [/contracts?/i, "heistmission.contract"],
+    [/blueprints?/i, "heistmission.blueprint"],
+    [/logbooks?/i, "logbook"],
+    [/sanctum relics?|relics?/i, "sanctum.relic"],
+    [/tinctures?/i, "tincture"],
+    [/corpses?/i, "corpse"],
+    [/idols?/i, "idol"],
+    [/grafts?/i, "graft"],
+    [/wombgifts?/i, "wombgift"],
+    [/enshrouded/i, "enshrouded"],
+    [/charts?/i, "chart"],
+    [/viscera/i, "viscera"],
+    [/currency|omen|resonator|fossil|tattoo/i, "currency"],
+  ];
+  for (const [re, id] of rows) if (re.test(t)) return id;
+  return "";
+}
+
 function magicItemBase(name, className) {
   const title = " " + stripItemQualityPrefix(name).toLowerCase().replace(/\s+/g, " ") + " ";
   const bases = MAGIC_ITEM_BASES[tradeCategory(className)] || [];
   return bases.find((base) => title.includes(" " + base.toLowerCase() + " ")) || "";
+}
+
+const POE1_TALISMAN_BASES = [
+  "Plagued Arachnid Talisman", "Hybrid Arachnid Talisman", "Lone Antler Talisman", "Undying Flesh Talisman",
+  "Primal Skull Talisman", "Avian Twins Talisman", "Monkey Twins Talisman", "Carrion Queen Talisman",
+  "Savage Crab Talisman", "Spider Crab Talisman", "Flame Hellion Talisman", "Frost Hellion Talisman",
+  "Magma Hound Talisman", "Shield Crab Talisman", "Blood Viper Talisman", "Sand Spitter Talisman",
+  "Black Widow Talisman", "Wolf Alpha Talisman", "Black Maw Talisman", "Chrysalis Talisman",
+  "Writhing Talisman", "Bonespire Talisman", "Ashscale Talisman", "Deep One Talisman",
+  "Breakrib Talisman", "Deadhand Talisman", "Rot Head Talisman", "Hexclaw Talisman",
+  "Wereclaw Talisman", "Splitnewt Talisman", "Clutching Talisman", "Fangjaw Talisman",
+  "Horned Talisman", "Spinefuse Talisman", "Three Rat Talisman", "Longtooth Talisman",
+  "Rotfeather Talisman", "Monkey Paw Talisman", "Three Hands Talisman", "Greatwolf Talisman",
+  "Gargantuan Talisman", "Saqawine Talisman", "Craicic Talisman", "Fenumal Talisman",
+  "Farric Talisman", "Taurus Talisman", "Chieftain Talisman", "Devourer Talisman",
+  "Cobra Talisman", "Great Maw Talisman", "Croaker Talisman", "Goatman Talisman",
+  "Chimeral Talisman", "Retch Talisman", "Lynx Talisman", "Ape Talisman", "Octopus Talisman",
+  "Pitbull Talisman", "Rhex Talisman", "Rhoa Talisman", "Scrabbler Talisman", "Scorpion Talisman",
+  "Squid Talisman", "Goliath Talisman", "Watcher Talisman", "Tiger Talisman", "Ursa Talisman",
+  "Vulture Talisman", "Mandible Talisman",
+].sort((a, b) => b.length - a.length);
+
+function poe1TalismanBase(text) {
+  const title = " " + String(text || "").toLowerCase().replace(/\s+/g, " ").trim() + " ";
+  if (title === "  ") return "";
+  return POE1_TALISMAN_BASES.find((base) => title.includes(" " + base.toLowerCase() + " ")) || "";
 }
 
 function tradeBaseType(drop) {
@@ -2005,6 +2095,10 @@ function tradeBaseType(drop) {
   const name = isUnidentifiedLine(drop?.name) ? "" : stripItemQualityPrefix(drop?.name);
   const base = isUnidentifiedLine(drop?.baseType) ? "" : stripItemQualityPrefix(drop?.baseType);
   const className = drop?.className || "";
+  if (activeGame() === "poe1") {
+    const talisman = poe1TalismanBase(base) || poe1TalismanBase(name);
+    if (talisman) return talisman;
+  }
   if (/currency|gem|divination/i.test(rarity) || /currency|gem|divination/i.test(className)) return name || base;
   if (rarity === "magic") {
     if (base && base.toLowerCase() !== String(drop?.name || "").toLowerCase()) return base;
@@ -2055,7 +2149,9 @@ function pickTradeStat(list, kind) {
   if (!list?.length) return null;
   // Fractured rolls → fractured.stat_* (same as EE2 ModifierType.Fractured trade ids).
   const order =
-    kind === "fractured"
+    kind === "crafted"
+      ? ["crafted", "explicit", "implicit", "enchant", "rune"]
+      : kind === "fractured"
       ? ["fractured", "explicit", "implicit", "enchant", "rune"]
       : kind === "rune"
         ? ["rune", "enchant", "implicit", "explicit"]
@@ -2321,8 +2417,8 @@ function firstClipboardRoll(text, inverted) {
   return n;
 }
 
-let tradeStatIndex = null;
-let tradeStatsWait = null;
+const tradeStatIndexes = { poe1: null, poe2: null };
+const tradeStatWait = {};
 
 function buildTradeStatIndex(data) {
   const map = new Map();
@@ -2342,18 +2438,20 @@ function buildTradeStatIndex(data) {
 }
 
 async function ensureTradeStats() {
-  if (tradeStatIndex) return tradeStatIndex;
-  if (tradeStatsWait) return tradeStatsWait;
-  tradeStatsWait = (async () => {
-    try {
-      const data = await webviewJson({ type: "trade-stats" }, 25000, "trade stats timed out");
-      tradeStatIndex = buildTradeStatIndex(data);
-    } catch {
-      tradeStatIndex = new Map();
-    }
-    return tradeStatIndex;
-  })();
-  return tradeStatsWait;
+  const game = activeGame() === "poe1" ? "poe1" : "poe2";
+  if (tradeStatIndexes[game]) return tradeStatIndexes[game];
+  if (!tradeStatWait[game]) {
+    tradeStatWait[game] = (async () => {
+      try {
+        const data = await webviewJson({ type: "trade-stats", game }, 25000, "trade stats timed out");
+        tradeStatIndexes[game] = buildTradeStatIndex(data);
+      } catch {
+        tradeStatIndexes[game] = new Map();
+      }
+      return tradeStatIndexes[game];
+    })();
+  }
+  return tradeStatWait[game];
 }
 
 function isTradeableRoll(text, kind, extra) {
@@ -2985,7 +3083,11 @@ function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
     const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
     const text = stripAdvancedRanges(parseAffixStrings(raw));
     if (!isTradeableRoll(text, kind, roll)) continue;
-    const tradeKind = roll?.fractured && extra.fractured !== false ? "fractured" : kind;
+    const tradeKind = activeGame() === "poe1" && roll?.crafted
+      ? "crafted"
+      : roll?.fractured && extra.fractured !== false
+        ? "fractured"
+        : kind;
     const hit = findTradeStat(index, text, tradeKind, { preferLocal: localModApplies(foldTradeMatcher(text), extra) });
     if (!hit?.id) continue;
     const inverted = invertedTradeRoll(raw);
@@ -3038,7 +3140,7 @@ function fetchDbIcon(name) {
           reject(new Error("icon timed out"));
         }, 20000);
         ninjaWait.set(id, { resolve, reject, timer });
-        chrome.webview.postMessage({ type: "icon", id, name: canonicalName(name) || name });
+        chrome.webview.postMessage({ type: "icon", id, name: canonicalName(name) || name, game: activeGame() === "poe1" ? "poe1" : "poe2" });
       });
       if (data?.icon) rememberIcon(name, data.icon);
       if (data && (data.explicits || data.implicits || data.descr || data.flavour || data.icon || data.properties || data.variants)) rememberLore(name, data);
@@ -3362,6 +3464,33 @@ function ninjaIcon(src) {
   return "";
 }
 
+function poe2ArtFile(url) {
+  const text = String(url || "");
+  const db = text.match(/poe2db\.tw\/image\/(Art\/.+?)\.webp/i);
+  if (db) return db[1];
+  if (!/poe2|cG9lMi/i.test(text)) return "";
+  const gen = text.match(/\/gen\/image\/([^/?#]+)/);
+  if (!gen) return "";
+  try {
+    const b64 = gen[1].replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
+    const parsed = JSON.parse(raw);
+    const bag = Array.isArray(parsed) ? parsed.find((part) => part && part.f) : parsed;
+    if (!bag?.f) return "";
+    return "Art/" + String(bag.f).replace(/^\/+/, "");
+  } catch {
+    return "";
+  }
+}
+
+function gameIcon(url) {
+  if (!url || activeGame() !== "poe1") return url || "";
+  const file = poe2ArtFile(url);
+  if (file) return "https://web.poecdn.com/image/" + file + ".png";
+  if (/poe2|cG9lMi|poe2db\.tw/i.test(url)) return "";
+  return url;
+}
+
 function foldKey(name) {
   return priceKey(name)
     .normalize("NFD")
@@ -3571,19 +3700,39 @@ function iconFoldMap() {
   return iconFolds;
 }
 
+function listedNinjaIcon(name) {
+  const bag = activeGame() === "poe1" ? poe1Prices : prices;
+  const want = foldKey(name);
+  if (!want || !bag?.tables) return "";
+  for (const rows of Object.values(bag.tables)) {
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows) {
+      if (row?.icon && foldKey(row.name) === want) return row.icon;
+    }
+  }
+  return "";
+}
+
 function lookupIcon(name) {
   if (!name) return "";
-  const priced = lookupPrice(name);
-  if (priced?.icon) return priced.icon;
+  const listed = listedNinjaIcon(name);
+  if (listed) return listed;
+  const poe1 = activeGame() === "poe1";
+  if (!poe1) {
+    const priced = lookupPrice(name);
+    if (priced?.icon) return priced.icon;
+  }
   for (const key of lookupKeys(name)) {
-    if (iconCache.get(key)) return iconCache.get(key);
-    if (typeof ITEM_ICONS !== "undefined" && ITEM_ICONS[key]) return ITEM_ICONS[key];
+    if (iconCache.get(key)) return gameIcon(iconCache.get(key));
+    if (typeof ITEM_ICONS !== "undefined" && ITEM_ICONS[key]) return gameIcon(ITEM_ICONS[key]);
   }
   const folded = foldKey(canonicalName(name) || name);
   const byFold = iconFoldMap().get(folded);
-  if (byFold) return byFold;
-  for (const hit of prices.byName.values()) {
-    if (hit?.icon && foldKey(hit.name) === folded) return hit.icon;
+  if (byFold) return gameIcon(byFold);
+  if (!poe1) {
+    for (const hit of prices.byName.values()) {
+      if (hit?.icon && foldKey(hit.name) === folded) return hit.icon;
+    }
   }
   const bare = String(name).replace(/^(Superior|Exceptional|Advanced|Expert)\s+/i, "").trim();
   if (bare && bare !== name) return lookupIcon(bare);
@@ -4030,7 +4179,7 @@ function unitShort(unit) {
 }
 
 function allConvertUnits() {
-  return ["divine", "exalted", "chaos"];
+  return activeGame() === "poe1" ? ["divine", "chaos", "exalted"] : ["divine", "exalted", "chaos"];
 }
 
 function activeRates() {
@@ -4101,9 +4250,12 @@ function priceDisplay(divine) {
   let unit = main;
   let amount = amountFromDivine(divine, unit);
   if (unit === "divine" && divine > 0 && divine < 1) {
-    const ex = amountFromDivine(divine, "exalted");
     const chaos = amountFromDivine(divine, "chaos");
-    if (Number.isFinite(ex) && ex >= 1) {
+    const ex = amountFromDivine(divine, "exalted");
+    if (activeGame() === "poe1" && Number.isFinite(chaos)) {
+      unit = "chaos";
+      amount = chaos;
+    } else if (Number.isFinite(ex) && ex >= 1) {
       unit = "exalted";
       amount = ex;
     } else if (Number.isFinite(chaos) && chaos >= 1) {
@@ -4119,7 +4271,10 @@ function priceDisplay(divine) {
   }
   if (!Number.isFinite(amount)) {
     const rates = activeRates();
-    if (unit !== "exalted" && rates.exaltedPerDivine) {
+    if (activeGame() === "poe1" && unit !== "chaos" && rates.chaosPerDivine) {
+      unit = "chaos";
+      amount = amountFromDivine(divine, "chaos");
+    } else if (unit !== "exalted" && rates.exaltedPerDivine) {
       unit = "exalted";
       amount = amountFromDivine(divine, "exalted");
     } else if (unit !== "chaos" && rates.chaosPerDivine) {
@@ -4254,7 +4409,8 @@ function paintLivePrices() {
     if (el.outerHTML !== html) el.outerHTML = html;
   }
   paintPriceClock();
-  const n = Math.round(Number(activeRates().exaltedPerDivine) || 0);
+  const rate = activeGame() === "poe1" ? activeRates().chaosPerDivine : activeRates().exaltedPerDivine;
+  const n = Math.round(Number(rate) || 0);
   if (ui.inspect && n !== overlayRateShown) paintPriceOverlay();
 }
 
@@ -4373,7 +4529,7 @@ function overlayRateCardHtml() {
       rates.status === "loading" ? "Checking prices…" : "Check prices in the header to fill conversions."
     }</p></div>`;
   }
-  const cols = allConvertUnits();
+  const cols = convertUnits();
   const rows = convertSteps("divine")
     .map(
       (amount) =>
@@ -4386,10 +4542,12 @@ function overlayRateCardHtml() {
 }
 
 function overlayBarHtml(showTradeRate = false, preview = false) {
-  const n = Math.round(Number(activeRates().exaltedPerDivine) || 0);
+  const poe1 = activeGame() === "poe1";
+  const n = Math.round(Number(poe1 ? activeRates().chaosPerDivine : activeRates().exaltedPerDivine) || 0);
   overlayRateShown = n;
-  const title = n > 0 ? "1 divine → " + n + " exalted" : "Conversions";
-  const rate = `<span class="price-overlay-rate-wrap"><button type="button" class="price-overlay-rate${n > 0 ? "" : " is-empty"}" data-overlay-rate title="${esc(title)}" aria-label="${esc(title)}">${itemIconHtml("Divine Orb", "xs")}<span>1</span><svg class="price-overlay-swap" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 5h9.6L9.8 3.2 11 2l4 4-4 4-1.2-1.2L11.6 7H2V5zm12 6H4.4l1.8 1.8L5 14l-4-4 4-4 1.2 1.2L4.4 9H14v2z"/></svg><span>${n > 0 ? n : "—"}</span>${itemIconHtml("Exalted Orb", "xs")}</button>${overlayRateCardHtml()}</span>`;
+  const quote = poe1 ? "chaos" : "exalted";
+  const title = n > 0 ? "1 divine → " + n + " " + quote : "Conversions";
+  const rate = `<span class="price-overlay-rate-wrap"><button type="button" class="price-overlay-rate${n > 0 ? "" : " is-empty"}" data-overlay-rate title="${esc(title)}" aria-label="${esc(title)}">${itemIconHtml("Divine Orb", "xs")}<span>1</span><svg class="price-overlay-swap" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M2 5h9.6L9.8 3.2 11 2l4 4-4 4-1.2-1.2L11.6 7H2V5zm12 6H4.4l1.8 1.8L5 14l-4-4 4-4 1.2 1.2L4.4 9H14v2z"/></svg><span>${n > 0 ? n : "—"}</span>${itemIconHtml(poe1 ? "Chaos Orb" : "Exalted Orb", "xs")}</button>${overlayRateCardHtml()}</span>`;
   const close = preview || overlayClickAway() ? "" : '<button type="button" class="price-overlay-x" data-close-inspect aria-label="Close">×</button>';
   const league = leagueName();
   return `<div class="price-overlay-bar"><div class="price-overlay-bar-left">${rate}<span class="price-overlay-league" title="${esc(league)}" aria-label="${esc(league)}">${esc(league)}</span>${showTradeRate ? overlayTradeRateHtml() : ""}</div><div class="price-overlay-bar-actions">${close}</div></div>`;
@@ -5125,7 +5283,6 @@ function takePoe1Lines(data, type, items) {
       kind: items ? "item" : "exchange",
       type,
     });
-    if (!items && icon) rememberIcon(name, line.image || line.icon || icon);
   }
   if (type === "Currency" && !(bag.exaltedPerDivine > 0) && bag.chaosPerDivine > 0) {
     const exalt = rows.find((row) => /^exalted orb$/i.test(row.name));
@@ -5156,7 +5313,7 @@ async function refreshPoe1Prices(force = false) {
     poe1Prices.league = league;
     poe1Prices.fetchedAt = Date.now();
     paintPriceClock();
-    if (ui.view === "econ") render();
+    render();
     const rest = await Promise.all([
       ...POE1_EXCHANGE.filter((type) => type !== "Currency").map((type) =>
         ninjaFetch(`/poe1/api/economy/exchange/current/overview?league=${q}&type=${type}`, true)
@@ -5179,11 +5336,11 @@ async function refreshPoe1Prices(force = false) {
     poe1Prices.status = Object.keys(poe1Prices.tables).length ? "ready" : "error";
   }
   paintPriceClock();
-  if (ui.view === "econ") render();
+  render();
 }
 
 function maybeRefreshPoe1() {
-  if (activeGame() !== "poe1" || ui.view !== "econ") return;
+  if (activeGame() !== "poe1") return;
   if (poe1Prices.status === "loading" || poe1Prices.status === "error") return;
   const league = econLeagueName();
   const ready = poe1Prices.league === league && poe1Prices.fetchedAt && hourStamp(poe1Prices.fetchedAt) >= hourStamp() && Object.keys(poe1Prices.tables).length;
@@ -5622,11 +5779,21 @@ function farmPickItem(bossId, item) {
   farmLogDrop(bossId, { uniqueId: item.id || slug(item.name), name: item.name, qty: 1 });
 }
 
+function hotkeyMainKey(spec) {
+  const parts = String(normalizeHotkey(spec) || "").split("+").filter(Boolean);
+  return parts.find((part) => part !== "Ctrl" && part !== "Alt" && part !== "Shift" && part !== "Win") || "";
+}
+
+function lockedPriceHotkey(spec) {
+  const key = hotkeyMainKey(spec || "D");
+  return "Ctrl+" + (key && key !== "C" ? key : "D");
+}
+
 function hotkeys() {
   return {
     log: state.hotkeyLog || "F8",
     next: state.hotkeyNext || "F9",
-    price: state.hotkeyPrice || "F7",
+    price: lockedPriceHotkey(state.hotkeyPrice),
     hideout: state.hotkeyHideout || "F6",
   };
 }
@@ -5757,6 +5924,11 @@ function syncHotkeys() {
 }
 
 function assignHotkey(slot, spec) {
+  if (slot === "price") {
+    const key = hotkeyMainKey(spec);
+    if (!key || key === "C") return false;
+    spec = "Ctrl+" + key;
+  }
   const next = normalizeHotkey(spec);
   if (!next) return false;
   if (next === "Ctrl+C") return false;
@@ -5809,12 +5981,22 @@ function cleanItemTitleLine(line) {
     .trim();
 }
 
+function looksLikeModifierLine(line) {
+  const t = cleanItemTitleLine(line);
+  if (!t) return false;
+  if (/^[+\-\d]/.test(t)) return true;
+  if (/\((?:enchant|implicit|fractured|crafted|(?:added )?(?:rune|augment))\)/i.test(t)) return true;
+  if (/^(?:allocates|grants skill)\b/i.test(t)) return true;
+  return false;
+}
+
 function isItemTitleLine(line) {
   const t = cleanItemTitleLine(line);
   if (!t) return false;
   if (isItemJunkLine(t) || isUnidentifiedLine(t) || isCorruptedLine(t) || isRavenTouchedLine(t) || isSanctifiedLine(t)) return false;
   if (/^(mirrored|split|synthesised item|foil unique)$/i.test(t)) return false;
   if (isFracturedItemLine(t)) return false;
+  if (looksLikeModifierLine(t)) return false;
   if (/:/.test(t) && !/^[+\-\d({]/.test(t)) return false;
   return true;
 }
@@ -6031,7 +6213,7 @@ function identityFromBlocks(blocks, rarity) {
     if (!lines.length) continue;
     if (lines.some((line) => /^\{/.test(line) || /^(requirements|sockets|item level|quality)\b/i.test(line))) continue;
     if (isFlavourBlock(lines.join("\n"))) continue;
-    const clean = lines.map((line) => cleanItemTitleLine(line)).filter((line) => isItemTitleLine(line) && !/^\{/.test(line));
+    const clean = lines.map((line) => cleanItemTitleLine(line)).filter((line) => isItemTitleLine(line) && !looksLikeModifierLine(line) && !/^\{/.test(line));
     if (!clean.length) continue;
     if (/^(normal|magic|currency|gem|divination card)$/i.test(rarity)) return { name: clean[0], baseType: clean[0] };
     if (clean.length >= 2) return { name: clean[0], baseType: clean[1] };
@@ -6067,7 +6249,8 @@ function parsePoeItem(text) {
     }
     rest.push(line);
   }
-  const titleLines = rest.filter((line) => isItemTitleLine(line)).map((line) => cleanItemTitleLine(line));
+  const titleLines = rest.filter((line) => isItemTitleLine(line) && !looksLikeModifierLine(line)).map((line) => cleanItemTitleLine(line));
+  const headerMods = rest.filter((line) => looksLikeModifierLine(line));
   let name = titleLines[0] || "";
   let baseType = titleLines[1] || "";
   if (!name || (!baseType && /^(rare|unique)$/i.test(rarity))) {
@@ -6098,7 +6281,8 @@ function parsePoeItem(text) {
     /^\{[^}\n]*\bVaal Unique\b/im.test(raw)
   );
   const props = parseLocalProps(raw);
-  const parsedMods = parseClipboardMods(blocks.slice(1), rarity, corrupted, name, baseType, className, props);
+  const modBlocks = headerMods.length ? [headerMods.join("\n"), ...blocks.slice(1)] : blocks.slice(1);
+  const parsedMods = parseClipboardMods(modBlocks, rarity, corrupted, name, baseType, className, props);
   const mods = parsedMods.mods;
   const ravenTouched =
     parsedMods.ravenTouched || /raven-?touched/i.test(parseAffixStrings(raw).replace(/[\u2010-\u2015]/g, "-"));
@@ -6223,8 +6407,8 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       const rawLine = line.trim();
       if (!rawLine) continue;
       if (isItemJunkLine(rawLine)) continue;
-      if (itemName && namesMatch(rawLine, itemName)) continue;
-      if (itemBase && namesMatch(rawLine, itemBase)) continue;
+      if (itemName && namesMatch(rawLine, itemName) && !looksLikeModifierLine(rawLine)) continue;
+      if (itemBase && namesMatch(rawLine, itemBase) && !looksLikeModifierLine(rawLine)) continue;
       if (/^\{/.test(rawLine)) {
         if (isRavenTouchedLine(rawLine) || /raven-?touched/i.test(rawLine)) ravenTouched = true;
         const header = /\bmodifier\b/i.test(rawLine);
@@ -6897,165 +7081,9 @@ function openHttps(url) {
   else window.open(url, "_blank", "noopener");
 }
 
-function focusFeedback() {
-  const el = document.getElementById("feedback-title");
-  if (!el) return;
-  el.scrollIntoView({ block: "center", behavior: "smooth" });
-  el.focus();
-}
-
-let feedbackShot = null;
-
-const FEEDBACK_FEATURES = [
-  ["", "Pick one…"],
-  ["Dashboard", "Dashboard"],
-  ["Bosses", "Bosses"],
-  ["Loot log", "Loot log"],
-  ["Economy", "Economy"],
-  ["Guides", "Guides / resources"],
-  ["Price check", "Price check overlay"],
-  ["Trade", "Trade / filters"],
-  ["Ranks", "Ranks"],
-  ["Hotkeys", "Hotkeys"],
-  ["Settings", "Settings / look"],
-  ["Startup", "Startup / update"],
-  ["Other", "Other"],
-];
-
-function feedbackFeatureOptions(selected) {
-  const cur = String(selected || "");
-  return FEEDBACK_FEATURES.map(
-    ([value, label]) =>
-      `<option value="${esc(value)}"${value === cur ? " selected" : ""}>${esc(label)}</option>`
-  ).join("");
-}
-
-function paintFeedbackShot() {
-  const preview = document.getElementById("feedback-shot-preview");
-  const clearBtn = document.querySelector("[data-feedback-shot='clear']");
-  if (!preview) return;
-  if (!feedbackShot?.dataUrl) {
-    preview.hidden = true;
-    preview.innerHTML = "";
-    if (clearBtn) clearBtn.hidden = true;
-    return;
-  }
-  preview.hidden = false;
-  preview.innerHTML = `<img src="${feedbackShot.dataUrl}" alt="" />`;
-  if (clearBtn) clearBtn.hidden = false;
-}
-
-function setFeedbackShotFile(file) {
-  if (!file || !String(file.type || "").startsWith("image/")) return;
-  const url = URL.createObjectURL(file);
-  const img = new Image();
-  img.onload = () => {
-    const max = 1280;
-    let w = img.naturalWidth || 1;
-    let h = img.naturalHeight || 1;
-    const scale = Math.min(1, max / Math.max(w, h));
-    w = Math.max(1, Math.round(w * scale));
-    h = Math.max(1, Math.round(h * scale));
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      URL.revokeObjectURL(url);
-      return;
-    }
-    ctx.drawImage(img, 0, 0, w, h);
-    feedbackShot = {
-      dataUrl: canvas.toDataURL("image/jpeg", 0.72),
-      name: file.name || "screenshot.jpg",
-    };
-    URL.revokeObjectURL(url);
-    paintFeedbackShot();
-  };
-  img.onerror = () => URL.revokeObjectURL(url);
-  img.src = url;
-}
-
-function feedbackNote(form) {
-  const data = new FormData(form);
-  const title = String(data.get("title") || "").trim();
-  const feature = String(data.get("feature") || "").trim();
-  const details = String(data.get("body") || "").trim().slice(0, 1500);
-  if (!title) {
-    document.getElementById("feedback-title")?.focus();
-    return null;
-  }
-  if (!feature) {
-    form.querySelector("[name=feature]")?.focus();
-    showToast("Pick which menu or feature.");
-    return null;
-  }
-  const body = [
-    "Feature: " + feature,
-    "",
-    details || "(no details)",
-    "",
-    "---",
-    "App: Still Sane, Exile? " + APP_VERSION,
-    "League: " + leagueId(),
-    "Page: " + (ui.view || ""),
-  ].join("\n");
-  return {
-    title,
-    feature,
-    body,
-    text: title + "\n\n" + body,
-    screenshot: feedbackShot?.dataUrl || "",
-  };
-}
-
-function copyFeedbackText(text) {
+function copyText(text) {
   if (window.chrome?.webview) chrome.webview.postMessage({ type: "copy-text", text });
   if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(() => {});
-}
-
-function submitFeedback(form, via = "send") {
-  const note = feedbackNote(form);
-  if (!note) return;
-  if (via === "github") {
-    openHttps(FEEDBACK_ISSUE_URL + "?title=" + encodeURIComponent(note.title) + "&body=" + encodeURIComponent(note.body));
-    showToast("Opened GitHub. You can also send from this PC with Send.");
-    return;
-  }
-  if (via === "copy") {
-    copyFeedbackText(note.text);
-    showToast("Copied.");
-    return;
-  }
-  if (!window.chrome?.webview) {
-    copyFeedbackText(note.text);
-    showToast("Desktop app needed to send. Copied instead.");
-    return;
-  }
-  webviewJson(
-    {
-      type: "feedback-send",
-      title: note.title,
-      body: note.body,
-      feature: note.feature,
-      screenshot: note.screenshot,
-      version: APP_VERSION,
-      league: leagueId(),
-      page: ui.view || "",
-    },
-    20000,
-    "send timed out"
-  )
-    .then(() => {
-      form.reset();
-      feedbackShot = null;
-      paintFeedbackShot();
-      showToast("Sent.");
-    })
-    .catch(() => {
-      copyFeedbackText(note.text);
-      showToast("Could not send. Copied instead.");
-    });
 }
 
 function rollKindLabel(roll, tierOverride) {
@@ -8943,9 +8971,36 @@ async function tradeSiteUrl(drop) {
       filters: {},
     };
     const typeLine = tradeBaseType(drop);
-    if (drop?.name && drop.name !== typeLine) query.name = drop.name;
-    if (typeLine) query.type = typeLine;
+    const unique = /^unique$/i.test(drop?.rarity || "");
+    if (unique && drop?.name && drop.name !== typeLine && !isUnidentifiedLine(drop.name)) query.name = drop.name;
+    if (typeLine && searchExactBase(drop)) query.type = typeLine;
+    let statFilters = [];
+    try {
+      const index = await ensureTradeStats();
+      statFilters = mapRollsToTradeFilters(
+        pickedRolls(drop).filter((roll) => !isTabletUsesRoll(roll.text)),
+        index,
+        true,
+        { props: drop.props, className: drop.className, fractured: searchFractured(drop) }
+      ).filter((row) => row.id && !String(row.id).startsWith("item."));
+    } catch {
+      statFilters = [];
+    }
+    query.stats = [{
+      type: "and",
+      filters: statFilters.map((row) => {
+        const next = { id: row.id, disabled: false };
+        if (Number.isFinite(row.min) || Number.isFinite(row.max)) {
+          next.value = {};
+          if (Number.isFinite(row.min)) next.value.min = row.min;
+          if (Number.isFinite(row.max)) next.value.max = row.max;
+        }
+        return next;
+      }),
+    }];
     const typeBag = {};
+    const category = poe1TradeCategory(drop.className) || (poe1TalismanBase(typeLine) ? "accessory.amulet" : "");
+    if (category) typeBag.category = { option: category };
     if (/unique/i.test(drop?.rarity || "")) typeBag.rarity = { option: "unique" };
     else if (canPickRarity(drop)) typeBag.rarity = { option: searchRarityFilter(drop) };
     const ilvl = ilvlFilterState(drop);
@@ -9797,7 +9852,7 @@ async function quoteRolledDrop(log, drop, force = false) {
   try {
     const extra = {
       typeLine: tradeBaseType(drop),
-      category: poe1 ? "" : tradeCategory(drop.className),
+      category: poe1 ? poe1TradeCategory(drop.className) : tradeCategory(drop.className),
       rarity: drop.rarity || "",
       rarityFilter: searchRarityFilter(drop),
       game: poe1 ? "poe1" : "poe2",
@@ -9806,6 +9861,11 @@ async function quoteRolledDrop(log, drop, force = false) {
       extra.exchange = true;
       extra.have = exchangeHavePick(drop);
     } else if (poe1) {
+      const index = await ensureTradeStats();
+      const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
+      extra.filters = mapRollsToTradeFilters(pickedMods, index, true, { props: drop.props, className: drop.className, fractured: searchFractured(drop) })
+        .filter((row) => row.id && !String(row.id).startsWith("item."));
+      if (!extra.category && poe1TalismanBase(extra.typeLine)) extra.category = "accessory.amulet";
       extra.exactBase = searchExactBase(drop);
       const ilvl = ilvlFilterState(drop);
       if (ilvl?.on) extra.ilvlMin = ilvl.min;
@@ -10306,8 +10366,9 @@ function econRowHtml(row, type) {
     .filter(Boolean)
     .join(" · ");
   const priced = Number.isFinite(row.amount) || Number.isFinite(row.divine);
+  const art = gameIcon(row.icon);
   return `<button class="econ-row${open ? " is-open" : ""}" type="button" aria-label="${esc(row.name + ', ' + extra)}" data-econ-open="${esc(row.name)}" data-econ-id="${esc(String(row.ninjaId ?? ""))}" data-econ-kind="${esc(row.kind || "")}" data-econ-type="${esc(cat)}">
-    <span class="econ-art" ${itemHoverAttr(row.name)}>${row.icon ? `<img class="item-icon" src="${esc(row.icon)}" alt="" draggable="false" onerror="this.remove()" />` : itemIconHtml(row.name, "", true)}</span>
+    <span class="econ-art" ${itemHoverAttr(row.name)}>${art ? `<img class="item-icon" src="${esc(art)}" alt="" draggable="false" onerror="this.remove()" />` : itemIconHtml(row.name, "", true)}</span>
     <span class="econ-copy">
       <span class="${econItemTypes().includes(cat) ? "unique-name" : "econ-name"}">${esc(row.name)}</span>${row.links > 0 ? `<span class="econ-links">${esc(String(row.links))}L</span>` : ""}${econItemTypes().includes(cat) && row.baseType ? `<span class="econ-base">, ${esc(row.baseType)}${row.corrupted ? " · corrupted" : ""}</span>` : ""}
     </span>
@@ -10648,7 +10709,7 @@ function importData(file) {
 
 function convertMainChecks() {
   const main = convertMain();
-  return allConvertUnits()
+  return convertUnits()
     .map(
       (unit) =>
         `<label class="rate-check${unit === main ? " is-on" : ""}" data-convert-main="${esc(unit)}">
@@ -10681,13 +10742,15 @@ function renderDivineTape() {
       }</p>`;
     return;
   }
-  const oneView = amountFromDivine(amountInDivine(1, main), quote);
+  const shownQuote = activeGame() === "poe1" && main === "divine" ? "chaos" : quote;
+  const oneView = amountFromDivine(amountInDivine(1, main), shownQuote);
   btn.innerHTML = `${itemIconHtml(currencyNameForUnit(main), "xs")}1${unitShort(main)} = ${itemIconHtml(
-    currencyNameForUnit(quote),
+    currencyNameForUnit(shownQuote),
     "xs"
-  )}${esc(formatAmount(oneView, quote))}`;
-  const cols = allConvertUnits();
-  const summary = `<div class="rate-line">${itemIconHtml(currencyNameForUnit("divine"), "xs")}<b>1d</b>${["exalted", "chaos"]
+  )}${esc(formatAmount(oneView, shownQuote))}`;
+  const cols = convertUnits();
+  const summary = `<div class="rate-line">${itemIconHtml(currencyNameForUnit("divine"), "xs")}<b>1d</b>${allConvertUnits()
+    .filter((unit) => unit !== "divine")
     .map(
       (to) =>
         `<span>=</span>${itemIconHtml(currencyNameForUnit(to), "xs")}<b>${esc(
@@ -11008,9 +11071,9 @@ function wealthDraft() {
 function wealthShown(divine) {
   if (activeGame() !== "poe1") return valueHtml(divine);
   if (!Number.isFinite(divine) || !(divine > 0)) return `<span class="muted">unpriced</span>`;
-  const exRate = Number(poe1Currency.exaltedPerDivine) || 0;
-  if (divine >= 1 || !(exRate > 0)) return valueFromAmount(divine, "divine");
-  return valueFromAmount(divine * exRate, "exalted");
+  const chaosRate = Number(poe1Currency.chaosPerDivine) || Number(poe1Prices.chaosPerDivine) || 0;
+  if (divine >= 1 || !(chaosRate > 0)) return valueFromAmount(divine, "divine");
+  return valueFromAmount(divine * chaosRate, "chaos");
 }
 
 function wealthUnit(name) {
@@ -11396,15 +11459,15 @@ function wealthPerHour(points) {
 
 function wealthPlotUnit(values) {
   const peak = Math.max(0, ...values.filter(value => Number.isFinite(value)));
-  const exRate = Number(poe1Currency.exaltedPerDivine) || 0;
-  if (activeGame() === "poe1" && peak < 1 && exRate > 0) return "exalted";
+  const chaosRate = Number(poe1Currency.chaosPerDivine) || Number(poe1Prices.chaosPerDivine) || 0;
+  if (activeGame() === "poe1" && peak < 1 && chaosRate > 0) return "chaos";
   return "divine";
 }
 
 function wealthPlotAmount(divine, unit) {
-  if (unit !== "exalted") return divine;
-  const exRate = Number(poe1Currency.exaltedPerDivine) || 0;
-  return exRate > 0 ? divine * exRate : divine;
+  if (unit !== "chaos") return divine;
+  const chaosRate = Number(poe1Currency.chaosPerDivine) || Number(poe1Prices.chaosPerDivine) || 0;
+  return chaosRate > 0 ? divine * chaosRate : divine;
 }
 
 function wealthRateText(total, perHour) {
@@ -12130,9 +12193,13 @@ function renderSettings() {
           </div>`}
           <div class="hotkey-row">
             <span>Price overlay</span>
-            <button class="hotkey-btn${ui.hotkeyCapture === "price" ? " is-listening" : ""}" data-hotkey-bind="price" type="button">${
-              ui.hotkeyCapture === "price" ? "Press a key…" : esc(hotkeys().price)
-            }</button>
+            <span class="hotkey-combo">
+              <span class="hotkey-lock">Ctrl</span>
+              <span class="hotkey-plus">+</span>
+              <button class="hotkey-btn${ui.hotkeyCapture === "price" ? " is-listening" : ""}" data-hotkey-bind="price" type="button">${
+                ui.hotkeyCapture === "price" ? "Press a key…" : esc(hotkeyMainKey(hotkeys().price))
+              }</button>
+            </span>
           </div>
           ${activeGame() === "poe1" ? "" : `<div class="hotkey-row">
             <span>Next kill</span>
@@ -12141,7 +12208,7 @@ function renderSettings() {
             }</button>
           </div>`}
         </div>
-        <p class="muted">Click a key to change it. Esc cancels.</p>
+        <p class="muted">Click a key to change it. Price check stays on Ctrl. Esc cancels.</p>
         <label class="settings-check" style="margin-top:14px">
           <input type="checkbox" data-overlay-click-away ${overlayClickAway() ? "checked" : ""} />
           <span>Click outside to close price check</span>
@@ -12667,7 +12734,7 @@ function render() {
     .map((boss) => `<option value="${esc(boss.id)}" ${boss.id === farmBossId() ? "selected" : ""}>${esc(boss.name)}</option>`)
     .join("");
   syncLeagueChooser();
-  if (ui.view === "econ") maybeRefreshPoe1();
+  if (activeGame() === "poe1") maybeRefreshPoe1();
   document.querySelectorAll("[data-view]").forEach((tab) => {
     tab.classList.toggle("is-active", tab.dataset.view === ui.view);
     if (tab.dataset.view === ui.view) tab.setAttribute("aria-current", "page");
@@ -12727,7 +12794,7 @@ function onClick(event) {
   if (event.target.closest("[data-wealth-copy]")) {
     const stash = WEALTH_STASHES.find(row => row.id === event.target.closest("[data-wealth-copy]").dataset.wealthCopy);
     if (!stash) return;
-    copyFeedbackText(wealthTabName(stash));
+    copyText(wealthTabName(stash));
     const button = event.target.closest("button");
     if (button) {
       const previous = button.textContent;
@@ -12790,26 +12857,6 @@ function onClick(event) {
     if (window.chrome?.webview) chrome.webview.postMessage({ type: "window-hide" });
     else quitApp();
     return;
-  }
-  const feedbackSend = event.target.closest("[data-feedback-send]");
-  if (feedbackSend) {
-    event.preventDefault();
-    const form = feedbackSend.closest("#feedback-form") || document.getElementById("feedback-form");
-    if (form) submitFeedback(form, feedbackSend.dataset.feedbackSend);
-    return;
-  }
-  const feedbackShotBtn = event.target.closest("[data-feedback-shot]");
-  if (feedbackShotBtn) {
-    const act = feedbackShotBtn.dataset.feedbackShot;
-    if (act === "clear") {
-      feedbackShot = null;
-      paintFeedbackShot();
-      return;
-    }
-    if (act === "pick") {
-      document.getElementById("feedback-shot-file")?.click();
-      return;
-    }
   }
   const toastAct = event.target.closest("[data-toast]");
   if (toastAct) {
@@ -13200,7 +13247,6 @@ function onClick(event) {
     ui.view = activeGame() === "poe1" && tab.dataset.view === "dash" ? "econ" : tab.dataset.view;
     render();
     document.querySelector(".shell")?.scrollTo({ top: 0, left: 0 });
-    if (tab.hasAttribute("data-feedback")) focusFeedback();
     return;
   }
   const close = event.target.closest("[data-close]");
@@ -13215,7 +13261,8 @@ function onClick(event) {
   }
   const bind = event.target.closest("[data-hotkey-bind]");
   if (bind) {
-    const slot = bind.dataset.hotkeyBind === "next" ? "next" : bind.dataset.hotkeyBind === "price" ? "price" : "log";
+    const asked = bind.dataset.hotkeyBind;
+    const slot = asked === "next" || asked === "price" || asked === "hideout" ? asked : "log";
     if (ui.hotkeyCapture === slot) {
       ui.hotkeyCapture = "";
       syncHotkeys();
@@ -13309,12 +13356,6 @@ function onChange(event) {
     save();
     return;
   }
-  if (event.target?.id === "feedback-shot-file") {
-    const file = event.target.files?.[0];
-    if (file) setFeedbackShotFile(file);
-    event.target.value = "";
-    return;
-  }
   const span = event.target.closest("[data-span-rid]");
   if (span) {
     if ((span.dataset.spanRid === "runes" || span.dataset.spanRid === "links") && event.type === "change") return;
@@ -13403,21 +13444,6 @@ document.addEventListener("change", onChange);
 document.addEventListener("focusout", (event) => {
   if (event.target.matches('input[data-span-rid="runes"]') ||
       event.target.matches('.price-overlay-q-input[data-span-rid]') && event.target.value.trim() === "") onChange(event);
-});
-document.addEventListener("paste", (event) => {
-  if (ui.view !== "settings") return;
-  if (!document.getElementById("feedback-form")) return;
-  const items = event.clipboardData?.items;
-  if (!items) return;
-  for (const item of items) {
-    if (!String(item.type || "").startsWith("image/")) continue;
-    const file = item.getAsFile();
-    if (!file) continue;
-    event.preventDefault();
-    setFeedbackShotFile(file);
-    showToast("Screenshot attached.");
-    return;
-  }
 });
 document.addEventListener("input", (event) => {
   if (event.target.id === "wealth-find") {
@@ -13519,10 +13545,6 @@ document.addEventListener("submit", (event) => {
     document.getElementById("log-dialog").close();
     return;
   }
-  if (event.target.id === "feedback-form") {
-    event.preventDefault();
-    submitFeedback(event.target, "send");
-  }
 });
 
 document.getElementById("wealth-screenshot-file").addEventListener("change", async event => {
@@ -13567,9 +13589,23 @@ document.addEventListener("keydown", (event) => {
       render();
       return;
     }
-    const spec = formatHotkey(event);
-    if (!spec) return;
-    if (!assignHotkey(ui.hotkeyCapture, spec)) return;
+    if (ui.hotkeyCapture === "price") {
+      if (["Control", "Shift", "Alt", "Meta"].includes(event.key) || event.repeat) return;
+      let name = event.key;
+      if (/^F([1-9]|1[0-2])$/i.test(name)) name = name.toUpperCase();
+      else if (name === " ") name = "Space";
+      else if (name.length === 1) name = name.toUpperCase();
+      else return;
+      if (name === "C") {
+        showToast("Ctrl+C copies the item.");
+        return;
+      }
+      if (!assignHotkey("price", "Ctrl+" + name)) return;
+    } else {
+      const spec = formatHotkey(event);
+      if (!spec) return;
+      if (!assignHotkey(ui.hotkeyCapture, spec)) return;
+    }
     ui.hotkeyCapture = "";
     save();
     syncHotkeys();

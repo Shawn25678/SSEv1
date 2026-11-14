@@ -47,6 +47,7 @@ tools/build-file-tests/obj/
 /tools/test-server.cjs
 
 # Secrets / local-only
+/local-data/
 .cursor/
 desktop/supabase.json
 desktop/supabase.public.json

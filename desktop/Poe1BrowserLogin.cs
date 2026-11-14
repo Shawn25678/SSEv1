@@ -15,6 +15,13 @@ static class Poe1BrowserLogin
 
     public static string ProfileDir()
     {
+        var over = Environment.GetEnvironmentVariable("SSE_APPDATA");
+        if (!string.IsNullOrWhiteSpace(over))
+        {
+            var dev = Path.Combine(Environment.ExpandEnvironmentVariables(over.Trim().Trim('"')), "poe1-browser");
+            Directory.CreateDirectory(dev);
+            return dev;
+        }
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "StillSane");
         var dir = Path.Combine(root, "poe1-browser");
         var old = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ExileLedger", "poe1-browser");

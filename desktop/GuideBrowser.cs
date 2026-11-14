@@ -87,6 +87,14 @@ sealed class GuideBrowserHost : Panel
     };
     WebView2 _web = CreateWebView();
 
+    static Image? WindowIcon(string name)
+    {
+        var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream($"www.art.window-{name}.png");
+        if (stream is not null) return Image.FromStream(stream);
+        var path = Path.Combine(AppContext.BaseDirectory, "art", $"window-{name}.png");
+        return File.Exists(path) ? Image.FromFile(path) : null;
+    }
+
     static WebView2 CreateWebView() => new()
     {
         Dock = DockStyle.Fill,
@@ -200,11 +208,10 @@ sealed class GuideBrowserHost : Panel
         btn.FlatAppearance.MouseDownBackColor = Color.FromArgb(76, 67, 47);
         if (tip is "Minimize" or "Maximize" or "Close app")
         {
-            btn.Text = "";
             var iconName = tip == "Minimize" ? "minimize" : tip == "Maximize" ? "maximize" : "close";
-            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream($"www.art.window-{iconName}.png")
-                ?? throw new InvalidOperationException("Window icon is missing.");
-            using var source = Image.FromStream(stream);
+            using var source = WindowIcon(iconName);
+            if (source is null) return btn;
+            btn.Text = "";
             var icon = new Bitmap(source);
             btn.Disposed += (_, _) => icon.Dispose();
             btn.Paint += (_, e) =>

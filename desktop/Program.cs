@@ -1356,18 +1356,18 @@ sealed class TrackerWindow : Form
     static Dictionary<string, List<(string id, string type)>>? FoldedStats;
     static readonly SemaphoreSlim StatBuild = new(1, 1);
 
-    async Task FetchTradeStats(string id)
+    async Task FetchTradeStats(string id, string game = "")
     {
-        var body = await GetTradeStatsBody();
+        var body = await GetTradeStatsBody(string.Equals(game, "poe1", StringComparison.Ordinal));
         Reply(id, body is not null, body is null ? 0 : 200, body ?? "{\"error\":\"trade stats failed\"}");
     }
 
-    async Task<string?> GetTradeStatsBody()
+    async Task<string?> GetTradeStatsBody(bool poe1 = false)
     {
-        const string cacheKey = "trade-stats-v1";
+        var cacheKey = poe1 ? "trade-stats-poe1-v1" : "trade-stats-v1";
         if (Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < TimeSpan.FromHours(12) && hit.status is >= 200 and < 300)
             return hit.body;
-        var disk = Path.Combine(AppDataDir(), "trade-stats.json");
+        var disk = Path.Combine(AppDataDir(), poe1 ? "trade-stats-poe1.json" : "trade-stats.json");
         try
         {
             if (File.Exists(disk) && DateTime.UtcNow - File.GetLastWriteTimeUtc(disk) < TimeSpan.FromHours(12))
@@ -1390,7 +1390,7 @@ sealed class TrackerWindow : Form
             if (Cache.TryGetValue(cacheKey, out hit) && DateTime.UtcNow - hit.at < TimeSpan.FromHours(12) && hit.status is >= 200 and < 300)
                 return hit.body;
             if (!await WaitForSlot(SearchLimit)) return null;
-            using var res = await TradeHttp.GetAsync("https://www.pathofexile.com/api/trade2/data/stats");
+            using var res = await TradeHttp.GetAsync(poe1 ? "https://www.pathofexile.com/api/trade/data/stats" : "https://www.pathofexile.com/api/trade2/data/stats");
             NoteRate(res, SearchLimit);
             var body = await res.Content.ReadAsStringAsync();
             var status = (int)res.StatusCode;
@@ -1425,7 +1425,7 @@ sealed class TrackerWindow : Form
         if (name.Length is < 2 or > 80) name = typeLine.Length > 0 ? typeLine : name;
         var poe1 = string.Equals(game, "poe1", StringComparison.Ordinal);
         var rollList = (rolls ?? Array.Empty<string>()).Where(r => !string.IsNullOrWhiteSpace(r)).Take(12).ToArray();
-        IReadOnlyList<RollFilter> mapped = poe1 ? Array.Empty<RollFilter>() : preMapped is { Count: > 0 } ? preMapped : Array.Empty<RollFilter>();
+        IReadOnlyList<RollFilter> mapped = preMapped is { Count: > 0 } ? preMapped : Array.Empty<RollFilter>();
         if (!poe1 && mapped.Count == 0 && rollList.Length > 0)
             mapped = await MapRollsToFilters(rollList, category);
         var useExchange = (exchange || WantsExchange(rarity, category)) && mapped.Count == 0 && rollList.Length == 0;
@@ -1469,7 +1469,7 @@ sealed class TrackerWindow : Form
             }
             TradeLookup? payload = null;
             if (poe1)
-                payload = await LookupPoe1Price(league, name, typeLine, rarity, corrupted, ilvlMin, qualityMin, rarityFilter, useExchange, havePref, runeSockets, links, unidentified);
+                payload = await LookupPoe1Price(league, name, typeLine, rarity, corrupted, ilvlMin, qualityMin, rarityFilter, useExchange, havePref, runeSockets, links, unidentified, exactBase, category, mapped);
             else
             {
                 if (useExchange)
@@ -1981,24 +1981,43 @@ sealed class TrackerWindow : Form
             yield return Body(false, false).ToJsonString();
     }
 
-    async Task<TradeLookup> LookupPoe1Price(string league, string name, string typeLine, string rarity, bool? corrupted, int? ilvlMin, int? qualityMin, string rarityFilter, bool exchange, string havePref, int? sockets = null, int? links = null, bool? unidentified = null)
+    async Task<TradeLookup> LookupPoe1Price(string league, string name, string typeLine, string rarity, bool? corrupted, int? ilvlMin, int? qualityMin, string rarityFilter, bool exchange, string havePref, int? sockets = null, int? links = null, bool? unidentified = null, bool exactBase = true, string category = "", IReadOnlyList<RollFilter>? mods = null)
     {
         if (exchange)
         {
             var bulk = await LookupPoe1Exchange(league, name, typeLine, havePref);
             if (bulk.Json is not null || bulk.RateLimited || bulk.Forbidden) return bulk;
         }
+        var statRows = new JsonArray();
+        var mappedCount = 0;
+        foreach (var filter in mods ?? Array.Empty<RollFilter>())
+        {
+            if (string.IsNullOrWhiteSpace(filter.Id) || filter.Id.StartsWith("item.", StringComparison.OrdinalIgnoreCase)) continue;
+            var obj = new JsonObject { ["id"] = filter.Id, ["disabled"] = false };
+            JsonObject? value = null;
+            if (filter.Min is double min) value = new JsonObject { ["min"] = min };
+            if (filter.Max is double max)
+            {
+                value ??= new JsonObject();
+                value["max"] = max;
+            }
+            if (value is not null) obj["value"] = value;
+            statRows.Add(obj);
+            mappedCount++;
+        }
         var query = new JsonObject
         {
             ["status"] = new JsonObject { ["option"] = TradeLive },
-            ["stats"] = new JsonArray { new JsonObject { ["type"] = "and", ["filters"] = new JsonArray() } },
+            ["stats"] = new JsonArray { new JsonObject { ["type"] = "and", ["filters"] = statRows } },
         };
-        if (!string.IsNullOrWhiteSpace(name) && !name.Equals(typeLine, StringComparison.OrdinalIgnoreCase))
+        var unique = rarity.Equals("Unique", StringComparison.OrdinalIgnoreCase);
+        if (unique && !string.IsNullOrWhiteSpace(name) && !name.Equals(typeLine, StringComparison.OrdinalIgnoreCase))
             query["name"] = name;
-        if (!string.IsNullOrWhiteSpace(typeLine)) query["type"] = typeLine;
+        if (exactBase && !string.IsNullOrWhiteSpace(typeLine)) query["type"] = typeLine;
         var filters = new JsonObject();
         var typeBag = new JsonObject();
-        var unique = rarity.Equals("Unique", StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(category))
+            typeBag["category"] = new JsonObject { ["option"] = category };
         if (unique) typeBag["rarity"] = new JsonObject { ["option"] = "unique" };
         else if (rarity.Equals("Rare", StringComparison.OrdinalIgnoreCase) ||
                  rarity.Equals("Magic", StringComparison.OrdinalIgnoreCase) ||
@@ -2041,7 +2060,7 @@ sealed class TrackerWindow : Form
                 {
                     name,
                     listings = total,
-                    mapped = 0,
+                    mapped = mappedCount,
                     league,
                     url = string.IsNullOrWhiteSpace(queryId) ? "" : "https://www.pathofexile.com/trade/search/" + Uri.EscapeDataString(league) + "/" + Uri.EscapeDataString(queryId),
                 }, JsonOut));
@@ -2051,7 +2070,7 @@ sealed class TrackerWindow : Form
             if (fetched.Rate) return new TradeLookup(RateLimited: true);
             if (fetched.Forbidden) return new TradeLookup(Forbidden: true);
             if (fetched.Offers is null || fetched.Offers.Count == 0) return new TradeLookup();
-            return new TradeLookup(ListingPayload(name, fetched.Offers, total, league, queryId, 0).Replace(
+            return new TradeLookup(ListingPayload(name, fetched.Offers, total, league, queryId, mappedCount).Replace(
                 "https://www.pathofexile.com/trade2/search/poe2/",
                 "https://www.pathofexile.com/trade/search/",
                 StringComparison.Ordinal));
@@ -3087,10 +3106,7 @@ sealed class TrackerWindow : Form
 
     async Task StartWebAsync()
     {
-        var userData = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ExileLedger");
-        Directory.CreateDirectory(userData);
+        var userData = AppDataDir();
         var options = new CoreWebView2EnvironmentOptions("--disable-features=msSmartScreenProtection,CalculateNativeWinOcclusion --disable-background-networking --disable-sync --disable-backgrounding-occluded-windows");
         _web.DefaultBackgroundColor = Color.FromArgb(12, 10, 8);
         try
@@ -3226,7 +3242,11 @@ sealed class TrackerWindow : Form
             if (type == "icon")
             {
                 var itemName = root.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
-                await FetchPoe2DbIcon(id ?? "", itemName);
+                var iconGame = root.TryGetProperty("game", out var iconGameEl) ? iconGameEl.GetString() ?? "" : "";
+                if (string.Equals(iconGame, "poe1", StringComparison.Ordinal))
+                    await FetchPoedbIcon(id ?? "", itemName);
+                else
+                    await FetchPoe2DbIcon(id ?? "", itemName);
                 return;
             }
             if (type == "scout")
@@ -3261,48 +3281,6 @@ sealed class TrackerWindow : Form
                     try { Clipboard.SetText(text); }
                     catch { /* ignore clipboard lock */ }
                 });
-                return;
-            }
-            if (type == "feedback-send")
-            {
-                var title = root.TryGetProperty("title", out var titleEl) ? titleEl.GetString() ?? "" : "";
-                var body = root.TryGetProperty("body", out var bodyEl) ? bodyEl.GetString() ?? "" : "";
-                var version = root.TryGetProperty("version", out var verEl) ? verEl.GetString() ?? "" : "";
-                var league = root.TryGetProperty("league", out var leagueEl) ? leagueEl.GetString() ?? "" : "";
-                var page = root.TryGetProperty("page", out var pageEl) ? pageEl.GetString() ?? "" : "";
-                var feature = root.TryGetProperty("feature", out var featureEl) ? featureEl.GetString() ?? "" : "";
-                var shotB64 = root.TryGetProperty("screenshot", out var shotEl) ? shotEl.GetString() ?? "" : "";
-                title = title.Trim();
-                body = body.Trim();
-                feature = feature.Trim();
-                if (title.Length is < 1 or > 80)
-                {
-                    Reply(id ?? "", false, 400, "{\"error\":\"need a title\"}");
-                    return;
-                }
-                if (body.Length > 4000) body = body[..4000];
-                byte[]? shot = null;
-                if (shotB64.Length > 0)
-                {
-                    try
-                    {
-                        var comma = shotB64.IndexOf(',');
-                        if (shotB64.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && comma > 0)
-                            shotB64 = shotB64[(comma + 1)..];
-                        shot = Convert.FromBase64String(shotB64);
-                    }
-                    catch
-                    {
-                        shot = null;
-                    }
-                }
-                var item = FeedbackStore.Save(title, body, version, league, page, feature, shot);
-                _ = Task.Run(async () =>
-                {
-                    await FeedbackStore.NotifyCloudAsync(item);
-                    await FeedbackStore.NotifyHookAsync(item);
-                });
-                Reply(id ?? "", true, 200, "{\"ok\":true}");
                 return;
             }
             if (type == "update-check")
@@ -3383,7 +3361,8 @@ sealed class TrackerWindow : Form
             }
             if (type == "trade-stats")
             {
-                await FetchTradeStats(id ?? "");
+                var statsGame = root.TryGetProperty("game", out var statsGameEl) ? statsGameEl.GetString() ?? "" : "";
+                await FetchTradeStats(id ?? "", statsGame);
                 return;
             }
             if (type == "trade")
@@ -3850,9 +3829,11 @@ sealed class TrackerWindow : Form
 
     static string AppDataDir()
     {
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ExileLedger");
+        // start.bat sets this so test runs do not write the folder an install uses.
+        var over = Environment.GetEnvironmentVariable("SSE_APPDATA");
+        var dir = string.IsNullOrWhiteSpace(over)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ExileLedger")
+            : Environment.ExpandEnvironmentVariables(over.Trim().Trim('"'));
         EnsureDirectory(dir);
         return dir;
     }
@@ -4313,6 +4294,56 @@ sealed class TrackerWindow : Form
         static string Fold(string value) =>
             Regex.Replace(value.ToLowerInvariant(), @"['’`\d]", "");
         return Fold(a) == Fold(b);
+    }
+
+    static readonly Regex PoedbItemIcon = new(
+        "class=\"itemboximage\"[\\s\\S]{0,600}?src=\"(https://cdn\\.poedb\\.tw/image/Art/2DItems/[^\"]+)\"",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    async Task FetchPoedbIcon(string id, string name)
+    {
+        var slugs = ItemSlugs(name)
+            .Where(s => s.Length is >= 2 and <= 80)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (string.IsNullOrWhiteSpace(id) || slugs.Count == 0)
+        {
+            Reply(id ?? "", false, 400, "{\"icon\":\"\"}");
+            return;
+        }
+        var cacheKey = "poedb-item-v1:" + ItemSlug(name).ToLowerInvariant();
+        if (Cache.TryGetValue(cacheKey, out var hit) && DateTime.UtcNow - hit.at < TimeSpan.FromHours(12))
+        {
+            Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
+            return;
+        }
+        await Gate.WaitAsync();
+        try
+        {
+            if (Cache.TryGetValue(cacheKey, out hit) && DateTime.UtcNow - hit.at < TimeSpan.FromHours(12))
+            {
+                Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
+                return;
+            }
+            foreach (var slug in slugs)
+            {
+                if (!Uri.TryCreate("https://poedb.tw/us/" + slug, UriKind.Absolute, out var uri)) continue;
+                using var res = await Http.GetAsync(uri);
+                if (!res.IsSuccessStatusCode) continue;
+                var html = await res.Content.ReadAsStringAsync();
+                var icon = PoedbItemIcon.Match(html);
+                if (!icon.Success) continue;
+                var body = JsonSerializer.Serialize(new { icon = icon.Groups[1].Value }, JsonOut);
+                Cache[cacheKey] = (DateTime.UtcNow, 200, body);
+                Reply(id, true, 200, body);
+                return;
+            }
+            Reply(id, false, 404, "{\"icon\":\"\"}");
+        }
+        finally
+        {
+            Gate.Release();
+        }
     }
 
     async Task FetchPoe2DbIcon(string id, string name)
