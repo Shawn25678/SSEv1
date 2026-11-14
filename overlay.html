@@ -12,6 +12,7 @@
       let drag = null;
       let skipClick = 0;
       let sizedItem = "";
+      let sizedPicking = false;
       let itemHeight = 0;
       let itemContentScale = 1;
       let availableHeight = window.screen.availHeight * 0.9;
@@ -65,10 +66,12 @@
         if (bodyEl) bodyEl.scrollTop = scrollTop;
         if (modsEl) modsEl.scrollTop = modsScrollTop;
         const nextW = Math.max(280, Math.ceil(w) + 4);
+        const picking = !!card.querySelector(".price-overlay-identify");
         const itemKey = card.querySelector("[data-pick-drop]")?.dataset.pickDrop
           || card.querySelector(".item-tip-name")?.textContent || "";
-        if (!itemKey || itemKey !== sizedItem || !itemHeight) {
+        if (!itemKey || itemKey !== sizedItem || !itemHeight || picking !== sizedPicking) {
           sizedItem = itemKey;
+          sizedPicking = picking;
           // Keep the frame and toolbar full width. Scale only item content on tall items.
           const fixedH = bannerH + barH + footH + 24;
           const contentH = h - bannerH - barH - footH;
@@ -227,6 +230,7 @@
         }
         if (msg?.type === "notice") {
           sizedItem = "";
+          sizedPicking = false;
           itemHeight = 0;
           document.body.classList.toggle("click-away", !!msg.clickAway);
           if (msg.vars) document.documentElement.style.cssText = msg.vars;

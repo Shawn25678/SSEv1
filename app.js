@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.49";
+const APP_VERSION = "1.0.50";
 
 // Cultivated/Vaal unique identities, including copies without a Vaal property line.
 // Source: https://poe2db.tw/us/Unique_item#CultivatedUniques (2026-11-12).
