@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.43";
+const APP_VERSION = "1.0.44";
 
 // Cultivated/Vaal unique identities, including copies without a Vaal property line.
 // Source: https://poe2db.tw/us/Unique_item#CultivatedUniques (2026-11-12).
@@ -5850,19 +5850,17 @@ function syncSizeSettings() {
 
 function tradePreviewDrop() {
   return {
-    id: "settings-vile-robe-preview", uiPreview: true, name: "Pain Jack", baseType: "Vile Robe",
-    className: "Body Armours", rarity: "Rare", fractured: true, corrupted: true, runeSockets: 3,
-    props: { ilvl: 82, quality: 30, es: 966 },
+    id: "settings-coral-ring-preview", uiPreview: true, name: "Coral Ring", baseType: "Coral Ring",
+    className: "Rings", rarity: "Rare", corrupted: false,
+    props: { ilvl: 9 },
     rolls: [
-      { text: "12% increased Rarity of Items found", kind: "rune" },
-      { text: "+40% to Cold Resistance", kind: "rune" },
-      { text: "110% increased Energy Shield", kind: "explicit", fractured: true, affix: 1, tier: 1, slot: "prefix", value: 110, lo: 15, hi: 110 },
-      { text: "+30 to maximum Energy Shield", kind: "explicit", affix: 2, tier: 1, slot: "prefix", hybrid: true, value: 30, lo: 4, hi: 30 },
-      { text: "42% increased Energy Shield", kind: "explicit", affix: 2, tier: 1, slot: "prefix", hybrid: true, value: 42, lo: 6, hi: 42 },
-      { text: "+94 to maximum Energy Shield", kind: "explicit", affix: 3, tier: 1, slot: "prefix", value: 94, lo: 10, hi: 96 },
-      { text: "+45% to Fire Resistance", kind: "explicit", affix: 4, tier: 1, slot: "suffix", value: 45, lo: 6, hi: 45 },
-      { text: "+44% to Lightning Resistance", kind: "explicit", affix: 5, tier: 1, slot: "suffix", value: 44, lo: 6, hi: 45 },
-      { text: "+45% to Cold Resistance", kind: "explicit", affix: 6, tier: 1, slot: "suffix", desecrated: true, value: 45, lo: 6, hi: 45 },
+      { text: "+29 to maximum Life", kind: "implicit", value: 29 },
+      { text: "+5 to maximum Life", kind: "explicit", affix: 1, tier: 8, slot: "prefix", value: 5, lo: 3, hi: 5 },
+      { text: "Adds 2 to 2 Fire Damage to Attacks", kind: "explicit", affix: 2, tier: 9, slot: "prefix", value: 2, lo: 1, hi: 2 },
+      { text: "+1 to maximum Energy Shield", kind: "explicit", affix: 3, tier: 11, slot: "prefix", value: 1, lo: 1, hi: 3 },
+      { text: "Gain 2 Life per Enemy Hit with Attacks", kind: "explicit", affix: 4, tier: 1, slot: "suffix", value: 2, lo: 1, hi: 2 },
+      { text: "9% increased Global Accuracy Rating", kind: "explicit", affix: 5, tier: 3, slot: "suffix", hybrid: true, value: 9, lo: 5, hi: 9 },
+      { text: "15% increased Light Radius", kind: "explicit", affix: 5, tier: 3, slot: "suffix", hybrid: true, value: 15, lo: 5, hi: 15 },
     ],
   };
 }

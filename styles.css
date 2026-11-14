@@ -5224,7 +5224,7 @@ button.roll-chip:hover {
 }
 
 .price-overlay-properties:has(.is-board) {
-  align-items: center;
+  align-items: start;
 }
 
 .price-overlay-properties:not(:has(.price-overlay-sockets-column)) {
