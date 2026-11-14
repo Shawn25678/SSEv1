@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.46";
+const APP_VERSION = "1.0.47";
 
 // Cultivated/Vaal unique identities, including copies without a Vaal property line.
 // Source: https://poe2db.tw/us/Unique_item#CultivatedUniques (2026-11-12).
@@ -6083,6 +6083,16 @@ function isFlaskBaseEffectLine(line) {
   return false;
 }
 
+function stripReminderText(text) {
+  let t = String(text || "").trim();
+  let prev = "";
+  while (t && t !== prev) {
+    prev = t;
+    t = t.replace(/\s*\([^()]{8,}\)\s*$/, "").trim();
+  }
+  return t;
+}
+
 function isItemTitleLine(line) {
   const t = cleanItemTitleLine(line);
   if (!t) return false;
@@ -6680,8 +6690,9 @@ function stripAdvancedRanges(text) {
 }
 
 function isUsefulRoll(text, kind, extra) {
-  const t = stripAdvancedRanges(parseAffixStrings(String(text || ""))).trim();
+  const t = stripReminderText(stripAdvancedRanges(parseAffixStrings(String(text || ""))).trim());
   if (!t || t.length > 160) return false;
+  if (/^\([^()]{8,}\)$/.test(t)) return false;
   if (isFlavourLine(t, extra)) return false;
   if (isRavenTouchedLine(t)) return false;
   if (/^you cannot use this item/i.test(t)) return false;
@@ -6781,12 +6792,12 @@ function cleanClipboardRolls(mods, ctx) {
     const kind = canonicalRollKind(mod && typeof mod === "object" ? mod.kind : "");
     const slot = rollSlot(mod);
     const raw = rollLineText(mod) || String(mod || "");
-    const text = stripAdvancedRanges(
+    const text = stripReminderText(stripAdvancedRanges(
       parseAffixStrings(raw)
         .replace(/\s*\((?:augmented|unmet|implicit|enchant|fractured|(?:added )?(?:rune|augment))\)/gi, "")
         .replace(/\s+/g, " ")
         .trim()
-    );
+    ));
     if (!isUsefulRoll(text, kind, { charm: mod?.charm, unique: mod?.unique, viscera: !!ctx?.viscera, className: ctx?.className })) continue;
     const row = keepRollMeta(mod, text, kind, slot, (ctx?.viscera || poe1VisceraItem(ctx)) && kind === "implicit" && !mod?.pickedOff);
     if (isWeaponEleFlatRoll(row, ctx)) row.pick = false;
@@ -6844,7 +6855,7 @@ function normalizeRolls(rolls, ctx) {
     const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
     const slot = rollSlot(roll);
     const raw = rollLineText(roll);
-    const text = stripAdvancedRanges(parseAffixStrings(raw));
+    const text = stripReminderText(stripAdvancedRanges(parseAffixStrings(raw)));
     if (!isUsefulRoll(text, kind, ctx?.viscera || poe1VisceraItem(ctx) ? { ...roll, viscera: true } : roll)) continue;
     const visceraOn = (ctx?.viscera || poe1VisceraItem(ctx)) && kind === "implicit" && !roll?.pickedOff;
     const row = keepRollMeta(roll, text, kind, slot, visceraOn || !!(roll && typeof roll === "object" && roll.pick));
