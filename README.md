@@ -1,5 +1,6 @@
 # Still Sane, Exile?
 boss tracking, loot logging, economy prices, and trade overlay
+
 PoE 2 WIP (Needs alot more Test)
 PoE 1 WIP (Mostly Working)
 
