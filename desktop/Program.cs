@@ -3375,17 +3375,17 @@ sealed class TrackerWindow : Form
 
     void OnLoad(object? sender, EventArgs e)
     {
-        Poe1BrowserLogin.ProfileDir();
-        DropUnusedJsonFolder();
         string index;
         try
         {
+            Poe1BrowserLogin.ProfileDir();
+            DropUnusedJsonFolder();
             index = ExtractWebFiles();
         }
         catch (Exception ex)
         {
             MessageBox.Show(
-                "Still Sane could not unpack its files to:\n" + Path.Combine(AppDataDir(), "www") + "\n\n" + ex.Message,
+                "Still Sane could not open its local data:\n\n" + ex.Message,
                 "Still Sane, Exile?",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
@@ -4225,16 +4225,7 @@ sealed class TrackerWindow : Form
         Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
     }
 
-    static string AppDataDir()
-    {
-        // start.bat sets this so test runs do not write the folder an install uses.
-        var over = Environment.GetEnvironmentVariable("SSE_APPDATA");
-        var dir = string.IsNullOrWhiteSpace(over)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ExileLedger")
-            : Environment.ExpandEnvironmentVariables(over.Trim().Trim('"'));
-        EnsureDirectory(dir);
-        return dir;
-    }
+    static string AppDataDir() => AppDataProfile.DataPath();
 
     static void EnsureDirectory(string dir)
     {

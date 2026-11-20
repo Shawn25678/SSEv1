@@ -13,32 +13,7 @@ static class Poe1BrowserLogin
 {
     public static string Account { get; private set; } = "";
 
-    public static string ProfileDir()
-    {
-        var over = Environment.GetEnvironmentVariable("SSE_APPDATA");
-        if (!string.IsNullOrWhiteSpace(over))
-        {
-            var dev = Path.Combine(Environment.ExpandEnvironmentVariables(over.Trim().Trim('"')), "poe1-browser");
-            Directory.CreateDirectory(dev);
-            return dev;
-        }
-        var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "StillSane");
-        var dir = Path.Combine(root, "poe1-browser");
-        var old = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ExileLedger", "poe1-browser");
-        try
-        {
-            if (!Directory.Exists(dir) && Directory.Exists(old))
-            {
-                Directory.CreateDirectory(root);
-                Directory.Move(old, dir);
-            }
-        }
-        catch
-        {
-            if (Directory.Exists(old)) return old;
-        }
-        return dir;
-    }
+    public static string ProfileDir() => AppDataProfile.Poe1BrowserPath();
 
     public static async Task<string> Capture()
     {
