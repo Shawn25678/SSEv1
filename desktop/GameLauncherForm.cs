@@ -9,14 +9,14 @@ namespace ExileLedger;
 sealed class GameLauncherForm : Form
 {
     const int IconSize = 52;
-    const int TesterShineDuration = 650;
-    const int TesterShinePause = 4500;
+    const int TesterWavePeriod = 3400;
+    const uint GetClientAreaAnimation = 0x1042;
     readonly Func<bool> _gameFocused;
     readonly Func<bool> _menuHidden;
     readonly Action<bool> _focusChanged;
     readonly string _settingsPath;
     readonly System.Windows.Forms.Timer _watch = new() { Interval = 200 };
-    readonly System.Windows.Forms.Timer _testerShine = new();
+    readonly System.Windows.Forms.Timer _testerWave = new() { Interval = 33 };
     readonly ContextMenuStrip _menu = new() { ShowImageMargin = false, ShowCheckMargin = true };
     readonly ToolStripMenuItem _redeemTesterCode = new("Redeem tester code…");
     readonly MenuMouseProc _menuMouseProc;
@@ -31,8 +31,6 @@ sealed class GameLauncherForm : Form
     int _side = IconSize;
     int _wealthWidth;
     bool _useGoldIcon;
-    long? _testerShineStartedAt;
-    float _testerShineProgress = -1;
     string _wealth = "";
     readonly Action _openWealth;
 
@@ -135,8 +133,8 @@ sealed class GameLauncherForm : Form
             SavePosition();
         };
         MouseCaptureChanged += (_, _) => { if (!Capture) _pressed = false; };
-        VisibleChanged += (_, _) => ResetTesterShine();
-        _testerShine.Tick += (_, _) => AdvanceTesterShine();
+        VisibleChanged += (_, _) => UpdateTesterWave();
+        _testerWave.Tick += (_, _) => Invalidate(new Rectangle(_wealthWidth, 0, _side, _side));
         _watch.Tick += (_, _) => RefreshVisibility();
         _watch.Start();
     }
@@ -174,6 +172,7 @@ sealed class GameLauncherForm : Form
             return;
         }
         base.WndProc(ref m);
+        if (m.Msg == 0x001A && _useGoldIcon && Visible) UpdateTesterWave(); // WM_SETTINGCHANGE
     }
     protected override CreateParams CreateParams
     {
@@ -317,40 +316,15 @@ sealed class GameLauncherForm : Form
         if (_useGoldIcon) return;
         _useGoldIcon = true;
         _redeemTesterCode.Available = false;
-        ResetTesterShine();
-        Invalidate(new Rectangle(_wealthWidth, 0, _side, _side));
+        UpdateTesterWave();
     }
 
-    void ResetTesterShine()
+    void UpdateTesterWave()
     {
         if (Disposing || IsDisposed) return;
-        _testerShine.Stop();
-        _testerShineStartedAt = null;
-        _testerShineProgress = -1;
-        if (Visible && _useGoldIcon)
-        {
-            _testerShine.Interval = 1000;
-            _testerShine.Start();
-        }
-    }
-
-    void AdvanceTesterShine()
-    {
-        var now = Environment.TickCount64;
-        if (_testerShineStartedAt is null)
-        {
-            _testerShineStartedAt = now;
-            _testerShine.Interval = 33;
-        }
-
-        _testerShineProgress = (now - _testerShineStartedAt.Value) / (float)TesterShineDuration;
-        if (_testerShineProgress >= 1f)
-        {
-            _testerShineStartedAt = null;
-            _testerShineProgress = -1;
-            _testerShine.Interval = TesterShinePause;
-        }
-        Invalidate(new Rectangle(_wealthWidth, 0, _side, _side));
+        var visible = Visible && _useGoldIcon;
+        _testerWave.Enabled = visible && SystemParametersInfoW(GetClientAreaAnimation, 0, out var enabled, 0) && enabled != 0;
+        if (visible) Invalidate(new Rectangle(_wealthWidth, 0, _side, _side));
     }
 
     int WealthExtra()
@@ -385,10 +359,12 @@ sealed class GameLauncherForm : Form
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        e.Graphics.SmoothingMode = SmoothingMode.None;
+        using var transparent = new SolidBrush(Color.Magenta);
+        e.Graphics.FillRectangle(transparent, e.ClipRectangle);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        e.Graphics.Clear(Color.Magenta);
         var icon = new Rectangle(_wealthWidth, 0, _side, _side);
-        if (_wealthWidth > 0)
+        if (_wealthWidth > 0 && e.ClipRectangle.Left < _wealthWidth)
         {
             var pill = new Rectangle(0, Math.Max(0, (_side - 34) / 2), _wealthWidth - 8, 34);
             using var path = Rounded(pill, 17);
@@ -399,6 +375,7 @@ sealed class GameLauncherForm : Form
             TextRenderer.DrawText(e.Graphics, _wealth, Font, pill, Color.FromArgb(238, 223, 190),
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }
+        if (!e.ClipRectangle.IntersectsWith(icon)) return;
         if (_useGoldIcon)
         {
             PaintTesterIcon(e.Graphics, icon);
@@ -418,17 +395,21 @@ sealed class GameLauncherForm : Form
         var frame = Rectangle.Inflate(icon, -3, -3);
         var portrait = Rectangle.Inflate(icon, -6, -6);
         using var background = new SolidBrush(Color.FromArgb(36, 25, 12));
-        graphics.FillEllipse(background, frame);
+        // Give the antialiased gold rim a dark backing inside the color-keyed window.
+        var smoothing = graphics.SmoothingMode;
+        graphics.SmoothingMode = SmoothingMode.None;
+        graphics.FillEllipse(background, icon);
+        graphics.SmoothingMode = smoothing;
 
         if (_image is not null)
         {
             using var circle = new GraphicsPath();
             circle.AddEllipse(portrait);
-            var saved = graphics.Save();
+            var portraitClip = graphics.Save();
             graphics.SetClip(circle, CombineMode.Intersect);
             graphics.DrawImage(_image, portrait, 0, 0, _image.Width, _image.Height, GraphicsUnit.Pixel,
                 _testerIconTint ??= CreateTesterIconTint());
-            graphics.Restore(saved);
+            graphics.Restore(portraitClip);
         }
         else
         {
@@ -454,29 +435,26 @@ sealed class GameLauncherForm : Form
         using var innerRim = new Pen(Color.FromArgb(202, 135, 31));
         graphics.DrawEllipse(innerRim, portrait);
 
-        if (_testerShineProgress >= 0) PaintTesterShine(graphics, frame, _testerShineProgress);
+        if (_testerWave.Enabled)
+        {
+            var angle = (Environment.TickCount64 % TesterWavePeriod) * 360f / TesterWavePeriod;
+            PaintTesterWave(graphics, frame, angle);
+        }
     }
 
-    static void PaintTesterShine(Graphics graphics, Rectangle frame, float progress)
+    static void PaintTesterWave(Graphics graphics, Rectangle frame, float angle)
     {
-        using var circle = new GraphicsPath();
-        circle.AddEllipse(Rectangle.Inflate(frame, 1, 1));
-        var saved = graphics.Save();
-        graphics.SetClip(circle, CombineMode.Intersect);
-        graphics.TranslateTransform(frame.Left + frame.Width / 2f, frame.Top + frame.Height / 2f);
-        graphics.RotateTransform(25f);
-        var bandWidth = frame.Width * .38f;
-        var offset = frame.Width * (1.5f * progress - .75f);
-        var band = new RectangleF(offset - bandWidth / 2, -frame.Height, bandWidth, frame.Height * 2);
-        var tint = Color.FromArgb(0, 255, 213, 116);
-        using var light = new LinearGradientBrush(band, tint, tint, 0f);
-        light.InterpolationColors = new ColorBlend
+        using var wave = new Pen(Color.FromArgb(36, 255, 197, 78), 2.5f);
+        graphics.DrawArc(wave, frame, angle - 150, 76);
+        wave.Color = Color.FromArgb(65, 255, 224, 154);
+        graphics.DrawArc(wave, frame, angle - 134, 44);
+
+        for (var step = 0; step < 6; step++)
         {
-            Colors = new[] { tint, Color.FromArgb(62, 255, 208, 100), Color.FromArgb(160, 255, 251, 222), tint },
-            Positions = new[] { 0f, .38f, .58f, 1f },
-        };
-        graphics.FillRectangle(light, band);
-        graphics.Restore(saved);
+            var spread = 72 - step * 11;
+            wave.Color = Color.FromArgb(28 + step * 7, 255, 205 + step * 9, 105 + step * 27);
+            graphics.DrawArc(wave, frame, angle - spread, spread * 2);
+        }
     }
 
     static ImageAttributes CreateTesterIconTint()
@@ -511,7 +489,7 @@ sealed class GameLauncherForm : Form
         if (disposing)
         {
             _watch.Dispose();
-            _testerShine.Dispose();
+            _testerWave.Dispose();
             StopMenuMouseHook();
             _menu.Dispose();
             _testerIconTint?.Dispose();
@@ -579,4 +557,5 @@ sealed class GameLauncherForm : Form
     [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr window, ref NativePoint point);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr window);
+    [DllImport("user32.dll", ExactSpelling = true)] static extern bool SystemParametersInfoW(uint action, uint parameter, out int value, uint flags);
 }

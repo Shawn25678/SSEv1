@@ -3475,6 +3475,9 @@ sealed class TrackerWindow : Form
         _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _web.CoreWebView2.Settings.IsWebMessageEnabled = true;
+        if (_testerAccess?.Unlocked == true)
+            await _web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
+                "if (window === window.top) window.sseTesterUnlocked = true;");
         _web.CoreWebView2.WebMessageReceived += OnWebMessage;
         _web.CoreWebView2.NavigationCompleted += (_, ev) =>
         {
@@ -4478,6 +4481,8 @@ sealed class TrackerWindow : Form
         if (File.Exists(leftoverSigil)) File.Delete(leftoverSigil);
         var stampPath = Path.Combine(dir, ".stamp");
         var want = ExtractStamp();
+        string[] testerBanners = ["sse-tester-banner.webp", "sse-tester-banner-static.webp"];
+        var artDir = Path.Combine(dir, "art");
         var needed = new[]
         {
             "index.html", "overlay.html", "overlay.css", "styles.css", "app.js", "affix-ladders.js",
@@ -4485,7 +4490,7 @@ sealed class TrackerWindow : Form
         };
         if (File.Exists(stampPath)
             && needed.All(name => File.Exists(Path.Combine(dir, name)))
-            && Directory.Exists(Path.Combine(dir, "art"))
+            && testerBanners.All(name => File.Exists(Path.Combine(artDir, name)))
             && File.ReadAllText(stampPath) == want)
             return index;
 
@@ -4509,8 +4514,10 @@ sealed class TrackerWindow : Form
             var path = Path.Combine(dir, stale);
             if (File.Exists(path)) File.Delete(path);
         }
-        var artDir = Path.Combine(dir, "art");
         EnsureDirectory(artDir);
+        // Ship the tester banners even when the general art cache is already current.
+        foreach (var banner in testerBanners)
+            WriteResource(asm, "www.art." + banner, Path.Combine(artDir, banner), skipUnchanged: true);
         var artStampPath = Path.Combine(dir, ".art-stamp");
         const string artStamp = "art-2026-11-13";
         var artReady = false;

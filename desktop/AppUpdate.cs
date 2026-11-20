@@ -107,9 +107,18 @@ static class AppUpdate
             header[0] != (byte)'M' || header[1] != (byte)'Z') throw new InvalidDataException();
         await using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
         await output.WriteAsync(header, token);
-        await input.CopyToAsync(output, token);
-        if (output.Length is < MinInstallerBytes or > MaxInstallerBytes ||
-            length.HasValue && output.Length != length.Value) throw new InvalidDataException();
+        var limit = length ?? MaxInstallerBytes;
+        long written = header.Length;
+        var buffer = new byte[81920];
+        while (true)
+        {
+            var read = await input.ReadAsync(buffer, token);
+            if (read == 0) break;
+            if (read > limit - written) throw new InvalidDataException();
+            await output.WriteAsync(buffer.AsMemory(0, read), token);
+            written += read;
+        }
+        if (written < MinInstallerBytes || length.HasValue && written != length.Value) throw new InvalidDataException();
     }
 
     static async Task<(Version ver, Uri url)?> LatestAsync(CancellationToken token = default)

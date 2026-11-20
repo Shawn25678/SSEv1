@@ -30,7 +30,7 @@ const context = vm.createContext({
 });
 
 for (const name of ['foldTradeMatcher', 'invertedTradeRoll', 'firstClipboardRoll', 'pickTradeStat',
-  'isClusterGrantEnchant', 'clusterGrantTradeKey', 'tradeStatVariable', 'mapRollsToTradeFilters']) {
+  'isClusterGrantEnchant', 'clusterGrantTradeKey', 'tradeStatVariable', 'isPoe1Map', 'isPoe1MapRuleLine', 'mapRollsToTradeFilters']) {
   vm.runInContext(fn(name), context);
 }
 
