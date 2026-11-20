@@ -576,6 +576,7 @@ window.__bossArtFail = function (img) {
 };
 
 let updateCache = { at: 0, newer: false, latest: "" };
+let updateCheckPending = null;
 let updateInstalling = false;
 let affixTried = false;
 let affixLoading = null;
@@ -638,18 +639,29 @@ function paintUpdatePanel() {
 function checkAppUpdate(force) {
   if (!window.chrome?.webview) return Promise.resolve(updateCache);
   paintUpdatePanel();
-  if (updateInstalling || (!force && updateCache.at && Date.now() - updateCache.at < 5 * 60 * 1000)) return Promise.resolve(updateCache);
-  return webviewJson({ type: "update-check" }, 15000, "update check timed out")
-    .then((data) => {
-      updateCache = { at: Date.now(), newer: !!data?.newer, latest: String(data?.latest || "") };
-      paintUpdatePanel();
-      return updateCache;
-    })
-    .catch(() => {
-      updateCache.at = Date.now();
-      paintUpdatePanel();
-      return updateCache;
-    });
+  if (updateInstalling) return Promise.resolve(updateCache);
+  if (!updateCheckPending) {
+    if (!force && updateCache.at && Date.now() - updateCache.at < 5 * 60 * 1000) return Promise.resolve(updateCache);
+    updateCheckPending = webviewJson({ type: "update-check" }, 15000, "update check timed out")
+      .then((data) => {
+        if (!data?.latest) throw new Error("No release information received");
+        updateCache = { at: Date.now(), newer: !!data.newer, latest: String(data.latest) };
+        paintUpdatePanel();
+        return updateCache;
+      })
+      .catch(() => {
+        updateCache.at = Date.now();
+        return null;
+      })
+      .finally(() => { updateCheckPending = null; });
+  }
+  return updateCheckPending.then(result => {
+    if (force) {
+      if (!result) showToast("Couldn’t check for updates. Try again.");
+      else if (!result.newer) showToast("SSE is up to date.");
+    }
+    return result || updateCache;
+  });
 }
 
 async function startAppUpdate() {
@@ -3297,7 +3309,9 @@ function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
     const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
     const text = stripAdvancedRanges(parseAffixStrings(raw));
     const viscera = poe1VisceraItem(extra);
-    if (!isTradeableRoll(text, kind, viscera ? { ...roll, viscera: true } : roll)) continue;
+    const mapRule = isPoe1MapRuleLine(text, extra.className);
+    const context = mapRule || viscera ? { ...roll, className: extra.className, viscera } : roll;
+    if (!isTradeableRoll(text, kind, context)) continue;
     const tradeKind = viscera
       ? "implicit"
       : activeGame() === "poe1" && roll?.crafted
@@ -3315,6 +3329,11 @@ function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
     const inverted = invertedTradeRoll(raw);
     const row = grouped.get(hit.id) || { id: hit.id, text, n: 0, option: String(hit.id).includes("|") };
     row.n += 1;
+    if (mapRule && !hit.text.includes("#")) {
+      grouped.set(hit.id, row);
+      if (grouped.size >= 12) break;
+      continue;
+    }
     const variable = tradeStatVariable(raw, hit.text);
     let amount = variable != null
       ? (inverted && variable > 0 ? -variable : variable)
@@ -3422,7 +3441,23 @@ function fillSuggestIcons(matches, redraw) {
   });
 }
 
+function mountTesterBanner() {
+  const banner = document.getElementById("tester-title-banner");
+  if (!banner) return;
+  const root = document.documentElement;
+  const image = banner.content.querySelector("img");
+  const updateBanner = () => {
+    const loaded = image.naturalWidth > 0;
+    root.classList.toggle("tester-banner-ready", loaded);
+    root.classList.toggle("tester-banner-failed", !loaded);
+  };
+  image.addEventListener("load", updateBanner);
+  image.addEventListener("error", updateBanner);
+  banner.replaceWith(banner.content);
+}
+
 if (window.chrome?.webview) {
+  if (document.documentElement.classList.contains("tester-unlocked")) mountTesterBanner();
   chrome.webview.addEventListener("message", (event) => {
     let msg = event.data;
     if (typeof msg === "string") {
@@ -3438,6 +3473,7 @@ if (window.chrome?.webview) {
     }
     if (msg?.type === "founding-tester-unlocked") {
       document.documentElement.classList.add("tester-unlocked");
+      mountTesterBanner();
       return;
     }
     if (msg?.type === "active-game" && (msg.game === "poe1" || msg.game === "poe2") && state.activeGame !== msg.game) {
@@ -6515,10 +6551,19 @@ function isOriginatorMemoryLine(line) {
   return /area is influenced by the originator.?s memories/i.test(String(line || "").replace(/[\u2018\u2019]/g, "'"));
 }
 
+function isPoe1Map(className) {
+  return activeGame() === "poe1" && /^maps?$/i.test(className || "");
+}
+
+function isPoe1MapRuleLine(text, className) {
+  return isPoe1Map(className) && /^(?:area (?:contains|has|is)|monsters|players)\b/i.test(text);
+}
+
 function isFlavourLine(raw, extra) {
   const t = stripAdvancedRanges(parseAffixStrings(String(raw || ""))).trim();
   if (!t) return false;
   if (isOriginatorMemoryLine(t)) return false;
+  if (isPoe1MapRuleLine(t, extra?.className)) return false;
   if (activeGame() === "poe1" && /^Corrupted Blood cannot be inflicted on you(?: \(implicit\))?$/i.test(t)) return false;
   if (/[.!?]/.test(t) && !/[\d%]/.test(t)) return true;
   if (/[\d%+]/.test(t) || /^allocates /i.test(t) || /^grants skill/i.test(t)) return false;
@@ -6811,7 +6856,8 @@ function isFlavourBlock(block, extra) {
       !/^(mirrored|split|synthesised item)$/i.test(line)
   );
   if (!body.length) return false;
-  if (body.some((line) => /[\d%+]/.test(line) || /^allocates /i.test(line))) return false;
+  if (body.some((line) => /[\d%+]/.test(line) || /^allocates /i.test(line) ||
+    isPoe1MapRuleLine(stripAdvancedRanges(parseAffixStrings(line)), extra?.className))) return false;
   return body.some((line) => isFlavourLine(line, extra));
 }
 
@@ -6874,9 +6920,10 @@ function parsePoeItem(text) {
     rest.push(line);
   }
   const blueprint = activeGame() === "poe1" && /^blueprints?$/i.test(className);
+  const looksLikeMod = (line) => looksLikeModifierLine(line) || isPoe1MapRuleLine(parseAffixStrings(line), className);
   const titleLines = rest.filter((line) => (isItemTitleLine(line) || (blueprint && poe1BlueprintBase(line))) &&
-    !looksLikeModifierLine(line)).map((line) => cleanItemTitleLine(line));
-  const headerMods = rest.filter((line) => looksLikeModifierLine(line));
+    !looksLikeMod(line)).map((line) => cleanItemTitleLine(line));
+  const headerMods = rest.filter(looksLikeMod);
   let name = titleLines[0] || "";
   let baseType = titleLines[1] || "";
   const { unidentified, unidentifiedTier } = parseUnidentifiedFlag(raw);
@@ -7065,6 +7112,8 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
   const uniqueItem = /unique/i.test(String(rarity || ""));
   const corruptedJewel = activeGame() === "poe1" && corrupted && /\bjewels?\b/i.test(className);
   const viscera = clipboardHasViscera(blocks, className);
+  const poe1Map = isPoe1Map(className);
+  const context = { className, viscera };
   const groups = [];
   const influences = new Set();
   let affix = 0;
@@ -7073,7 +7122,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
   let itemFractured = false;
   for (const block of blocks || []) {
     if (afterFooter) break;
-    if (isFlavourBlock(block, { viscera })) continue;
+    if (isFlavourBlock(block, context)) continue;
     let sectionKind = "explicit";
     let sectionSlot = "";
     let sectionTier = 0;
@@ -7153,7 +7202,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         if (isCorruptedLine(rawLine) || isMirroredLine(rawLine)) afterFooter = true;
         continue;
       }
-      if (isFlavourLine(rawLine, { viscera })) continue;
+      if (isFlavourLine(rawLine, context)) continue;
       const influence = poe1InfluenceName(rawLine);
       if (influence) { influences.add(influence); continue; }
       if (poe1VisceraCategory(rawLine)) continue;
@@ -7181,7 +7230,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
     for (const mod of collected) {
       if (rollSlot(mod)) seenSlot = true;
       else if (
-        !corruptedJewel &&
+        !poe1Map && !corruptedJewel &&
         !seenSlot &&
         !mod.unique &&
         !mod.crafted &&
@@ -7206,7 +7255,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
   const runeAt = groups.findIndex((group) => group.some((mod) => canonicalRollKind(mod.kind) === "rune"));
   const affixAt = groups.findIndex((group) => group.some((mod) => rollSlot(mod)));
   const cut = [runeAt, affixAt].filter((n) => n > 0).sort((a, b) => a - b)[0];
-  if (!corruptedJewel && cut > 0) {
+  if (!poe1Map && !corruptedJewel && cut > 0) {
     for (let i = 0; i < cut; i++) {
       for (const mod of groups[i]) {
         if (uniqueItem || mod.unique || canonicalRollKind(mod.kind) !== "explicit" || rollSlot(mod)) continue;
@@ -7225,7 +7274,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         if (mod.kind === "explicit" && !mod.affix && !rollSlot(mod)) mod.kind = "corrupt";
       }
     }
-  } else if (!groups.some(group => group.some(mod => isBaseModKind(mod.kind) || rollSlot(mod)))) {
+  } else if (!poe1Map && !groups.some(group => group.some(mod => isBaseModKind(mod.kind) || rollSlot(mod)))) {
     const modGroups = groups.filter(group => group.some(mod => isUsefulRoll(mod.text, mod.kind, mod) || /[\d%+]/.test(mod.text)));
     const last = modGroups[modGroups.length - 1];
     for (const group of modGroups) {
@@ -7277,6 +7326,7 @@ function isUsefulRoll(text, kind, extra) {
   if (/^\([^()]{8,}\)$/.test(t)) return false;
   if (isFlavourLine(t, extra)) return false;
   if (isOriginatorMemoryLine(t)) return true;
+  if (isPoe1MapRuleLine(t, extra?.className)) return true;
   if (extra?.viscera && !/[\d%+]/.test(t)) return false;
   if (isRavenTouchedLine(t)) return false;
   if (/^you cannot use this item/i.test(t)) return false;
@@ -7442,7 +7492,9 @@ function normalizeRolls(rolls, ctx) {
     const slot = rollSlot(roll);
     const raw = rollLineText(roll);
     const text = stripReminderText(stripAdvancedRanges(parseAffixStrings(raw)));
-    if (!isUsefulRoll(text, kind, ctx?.viscera || poe1VisceraItem(ctx) ? { ...roll, viscera: true } : roll)) continue;
+    const viscera = ctx?.viscera || poe1VisceraItem(ctx);
+    const context = viscera || isPoe1Map(ctx?.className) ? { ...roll, className: ctx?.className, viscera } : roll;
+    if (!isUsefulRoll(text, kind, context)) continue;
     const visceraOn = (ctx?.viscera || poe1VisceraItem(ctx)) && kind === "implicit" && !roll?.pickedOff;
     const row = keepRollMeta(roll, text, kind, slot, visceraOn || !!(roll && typeof roll === "object" && roll.pick));
     if (isWeaponEleFlatRoll(row, ctx)) row.pick = false;
@@ -7583,11 +7635,9 @@ function overlayLogDrop(logId, dropId) {
     target?.log ||
     liveLog() ||
     (target ? { id: target.log?.id || "", drops: [target.drop] } : null);
-  const drop =
-    (dropId && (log?.drops || []).find((item) => item.id === dropId)) ||
-    (dropId && target?.drop?.id === dropId ? target.drop : null) ||
-    target?.drop ||
-    null;
+  const drop = dropId
+    ? (log?.drops || []).find(item => item.id === dropId) || (target?.drop?.id === dropId ? target.drop : null)
+    : target?.drop || null;
   return { log, drop };
 }
 
@@ -10861,12 +10911,6 @@ function rollChipsHtml(drop, logId) {
     .join("")}</div>`;
 }
 
-function findLoggedDrop(logId, dropId) {
-  if (!logId || !dropId) return null;
-  const log = state.logs.find((item) => item.id === logId);
-  return (log?.drops || []).find((item) => item.id === dropId) || null;
-}
-
 function tradeWaiting() {
   return Number.isFinite(tradeRate.readyAt) && tradeRate.readyAt > Date.now();
 }
@@ -10876,7 +10920,9 @@ async function quoteRolledDrop(log, drop, force = true) {
   if (!drop?.manualQuoteRequested) return;
   delete drop.manualQuoteRequested;
   if (drop?.uiPreview) return;
-  if (activeGame() === "poe1" ? poe1GeneralPriceItem(drop) : isClipboardCurrency(drop)) { paintPriceOverlay(); return; }
+  const game = activeGame();
+  const poe1 = game === "poe1";
+  if (poe1 ? poe1GeneralPriceItem(drop) : isClipboardCurrency(drop)) { paintPriceOverlay(); return; }
   if (!window.chrome?.webview) return;
   if (drop?.uniqueListPending) return;
   if (unidentifiedUniqueNeedsPick(drop) && uniqueVariantsForBase(drop.baseType || drop.name, drop.className).length) return;
@@ -10888,17 +10934,21 @@ async function quoteRolledDrop(log, drop, force = true) {
   if (drop.quoteTried) return;
   // Reserve this item before waiting for a rate-limit slot so duplicate click
   // messages cannot queue a second search while the first one is waiting.
-  drop.quoting = true;
+  const request = Symbol();
+  const league = poe1 ? econLeagueName() : leagueId();
+  drop.quoting = request;
   drop.quoteTried = true;
   paintPriceOverlay();
-  if (activeGame() !== "poe1" && tradeWaiting()) {
-    const wait = Math.min(120000, Math.max(0, tradeRate.readyAt - Date.now()));
-    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-  }
-  const poe1 = activeGame() === "poe1";
-  const league = poe1 ? econLeagueName() : leagueId();
+  const current = () => drop.quoting === request && drop.quoteTried && activeGame() === game &&
+    (poe1 ? econLeagueName() : leagueId()) === league;
   try {
+    if (!poe1 && tradeWaiting()) {
+      const wait = Math.min(120000, Math.max(0, tradeRate.readyAt - Date.now()));
+      if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    }
+    if (!current()) return;
     const identity = poe1 ? await poe1TradeIdentity(drop) : null;
+    if (!current()) return;
     const extra = {
       typeLine: identity?.type || tradeBaseType(drop),
       category: poe1 ? poe1SearchCategory(drop) : tradeCategory(drop.className),
@@ -10912,6 +10962,7 @@ async function quoteRolledDrop(log, drop, force = true) {
     } else if (poe1) {
       const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
       const index = pickedMods.length ? await ensureTradeStats() : null;
+      if (!current()) return;
       const markFilters = poe1MarkFilters(drop);
       extra.filters = markFilters.filter(row => row.id.startsWith("ultimatum.")).concat(
         mapRollsToTradeFilters(pickedMods, index, true, { props: drop.props, className: drop.className, visceraSlot: drop.visceraSlot, fractured: searchFractured(drop) })
@@ -10932,6 +10983,7 @@ async function quoteRolledDrop(log, drop, force = true) {
       if (links !== null) extra.links = links;
     } else {
       const index = await ensureTradeStats();
+      if (!current()) return;
       const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
       const mappedMods = mapRollsToTradeFilters(pickedMods, index, true, { props: drop.props, className: drop.className, fractured: searchFractured(drop) });
       const filters = mergeTabletUseFilter(drop, index, mappedMods);
@@ -10956,11 +11008,11 @@ async function quoteRolledDrop(log, drop, force = true) {
       if (sockets !== null) extra.runeSockets = sockets;
     }
     const row = await tradeFetch(poe1 && /^unique$/i.test(drop?.rarity || "") ? identity?.name || poe1TradeName(drop) : drop.name, league, !!force, false, extra);
-    const target = findLoggedDrop(log?.id, drop.id) || drop;
+    if (!current()) return;
     const unit = tradeUnit(row?.currency);
     const amount = Number(row?.amount);
     const priced = Number.isFinite(amount) && amount > 0;
-    target.quote = {
+    drop.quote = {
       amount: priced ? amount : null,
       unit,
       listings: row.listings || 0,
@@ -10974,17 +11026,19 @@ async function quoteRolledDrop(log, drop, force = true) {
       at: Date.now(),
     };
   } catch (err) {
-    const target = findLoggedDrop(log?.id, drop.id) || drop;
+    if (!current()) return;
     const raw = String(err?.message || err || "");
     const error = /element of type|target element has type|json/i.test(raw) ? "trade search failed" : raw;
-    target.quote = target.quote || { listings: 0, league, at: Date.now(), error };
-    if (/rate limited/i.test(raw)) target.quoteTried = false;
+    drop.quote = drop.quote || { listings: 0, league, at: Date.now(), error };
+    if (/rate limited/i.test(raw)) drop.quoteTried = false;
   } finally {
-    const target = findLoggedDrop(log?.id, drop.id) || drop;
-    delete target.quoting;
-    save();
-    paintPriceOverlay();
-    paintLivePrices();
+    if (drop.quoting === request) {
+      if (!current()) drop.quoteTried = false;
+      delete drop.quoting;
+      save();
+      paintPriceOverlay();
+      paintLivePrices();
+    }
   }
 }
 

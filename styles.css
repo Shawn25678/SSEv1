@@ -6305,12 +6305,32 @@ body.fx-quality-mid .rank-embers {
 }
 :root.tester-unlocked .win-chrome {
   position: relative;
+  height: 76px;
   background:
+    radial-gradient(ellipse 230px 120% at center, #140d07bf, transparent),
     radial-gradient(ellipse at 12% 0%, #e6ae4a60, transparent 58%),
     repeating-linear-gradient(100deg, #ffe7aa07 0 1px, transparent 1px 5px),
     linear-gradient(180deg, #624622 0%, #493215 48%, #2c2116 51%, #392710 100%);
   border-image: linear-gradient(90deg, #c58938, #ffe1a1 14%, #ba8739 42%, #6f4d24 76%, #c69349) 1;
   box-shadow: inset 0 1px #fae0a85c, inset 0 -1px #231606;
+}
+.win-tester-banner {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  visibility: hidden;
+}
+:root.tester-banner-ready .win-tester-banner { visibility: visible; }
+:root.tester-unlocked:not(.tester-banner-failed) .win-drag .win-sigil,
+:root.tester-unlocked:not(.tester-banner-failed) .win-drag strong { display: none; }
+.win-tester-banner img {
+  width: min(210px, 36vw);
+  height: auto;
+  filter: brightness(1.35) contrast(1.08);
 }
 :root.tester-unlocked .win-drag strong { color: #ffedc3; text-shadow: 0 1px 2px #1f1309; }
 :root.tester-unlocked .win-sigil {
@@ -6330,16 +6350,51 @@ body.fx-quality-mid .rank-embers {
   box-shadow: none;
   filter: grayscale(1) sepia(1) saturate(1.8) brightness(1.33);
 }
+.win-gold-confetti { display: none; }
 @media (prefers-reduced-motion: no-preference) {
-  :root.tester-unlocked .win-chrome::before {
+  :root.tester-unlocked .win-chrome::after {
+    --ripple-spacing: clamp(240px, 42vw, 540px);
     content: "";
+    position: absolute;
+    inset: auto 0 -1px;
+    height: 7px;
+    pointer-events: none;
+    background-image:
+      radial-gradient(ellipse 40% 100% at 52% 100%, #fff5cf 4%, #ffe2a0ed 23%, #f2bc596e 46%, transparent 73%),
+      radial-gradient(ellipse 19% 100% at 30% 100%, #ffe4a4c7 5%, #eeb86168 31%, transparent 75%);
+    background-size: var(--ripple-spacing) 100%, var(--ripple-spacing) 70%;
+    background-repeat: repeat-x;
+    background-position: 0 100%;
+    animation: tester-gold-ripple 3.4s linear infinite;
+  }
+  :root.tester-unlocked .win-gold-confetti {
+    display: block;
     position: absolute;
     inset: 0;
     z-index: -1;
+    overflow: hidden;
     pointer-events: none;
-    background: linear-gradient(106deg, transparent 5%, #efb65020 30%, #ffcf7552 43%, #fff0bd82 51%, #ffc76d44 60%, transparent 91%) no-repeat;
-    background-size: 40% 100%;
-    animation: tester-bar-shimmer 5.6s ease-in-out infinite;
+    mask-image: linear-gradient(90deg, transparent 140px, #000 230px, #000 calc(100% - 76px), transparent calc(100% - 42px));
+  }
+  .win-gold-confetti i {
+    position: absolute;
+    top: -8px;
+    left: var(--lane);
+    width: 3px;
+    height: 5px;
+    border-radius: 1px;
+    background: linear-gradient(125deg, #fff4c0, #e1ae4c 53%, #a56b29);
+    box-shadow: 0 0 4px #facc6f70;
+    animation: tester-gold-fall var(--fall-time) linear var(--phase) infinite;
+  }
+  .win-gold-confetti i:nth-child(3n) {
+    width: 4px;
+    height: 6px;
+  }
+  .win-gold-confetti i:nth-child(3n + 1) {
+    width: 2px;
+    height: 3px;
+    background: #ffe3a0;
   }
   :root.tester-unlocked .win-sigil::after {
     content: "";
@@ -6351,10 +6406,16 @@ body.fx-quality-mid .rank-embers {
     animation: tester-sigil-shimmer 5.6s ease-in-out infinite;
   }
 }
-@keyframes tester-bar-shimmer {
-  0%, 9% { background-position: -85% 0; opacity: 0; }
-  15%, 28% { opacity: .95; }
-  36%, 100% { background-position: 185% 0; opacity: 0; }
+@keyframes tester-gold-ripple {
+  to { background-position-x: var(--ripple-spacing); }
+}
+@keyframes tester-gold-fall {
+  0% { transform: translate(0, 0) rotate(-25deg) scaleX(.45); opacity: 0; }
+  21% { opacity: .45; }
+  34% { transform: translate(calc(var(--drift) * .5), 34px) rotate(70deg) scaleX(1); opacity: .98; }
+  54% { transform: translate(calc(var(--drift) * .35), 52px) rotate(112deg) scaleX(.28); opacity: .28; }
+  76% { transform: translate(calc(var(--drift) * .8), 70px) rotate(178deg) scaleX(.9); opacity: .85; }
+  100% { transform: translate(var(--drift), 88px) rotate(249deg) scaleX(.5); opacity: 0; }
 }
 @keyframes tester-sigil-shimmer {
   0%, 8% { transform: translateX(-145%) skewX(-24deg); opacity: 0; }
@@ -6612,6 +6673,34 @@ body.top-navigation:has(.app-menu) {
   bottom: -1px;
   width: auto;
   height: 2px;
+}
+.menu-ripple { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  :root.tester-unlocked body.top-navigation .menu-link.is-active .menu-ripple {
+    --ripple-spacing: 112px;
+    display: block;
+    position: absolute;
+    inset: auto 10px -1px;
+    height: 6px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .menu-ripple::after {
+    content: "";
+    position: absolute;
+    inset: 0 0 0 calc(-1 * var(--ripple-spacing));
+    background-image:
+      radial-gradient(ellipse 40% 100% at 52% 100%, #fff5cf 4%, #ffe2a0ed 23%, #f2bc596e 46%, transparent 73%),
+      radial-gradient(ellipse 19% 100% at 30% 100%, #ffe4a4c7 5%, #eeb86168 31%, transparent 75%);
+    background-size: var(--ripple-spacing) 100%, var(--ripple-spacing) 70%;
+    background-repeat: repeat-x;
+    background-position: 0 100%;
+    animation: tester-tab-ripple 2.8s linear infinite;
+  }
+  @keyframes tester-tab-ripple {
+    from { transform: translateX(0); }
+    to { transform: translateX(var(--ripple-spacing)); }
+  }
 }
 body.top-navigation:has(.app-menu) .shell {
   grid-column: 1;

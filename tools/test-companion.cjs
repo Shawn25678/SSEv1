@@ -1,9 +1,13 @@
 const fs = require('fs'), vm=require('vm'), assert=require('node:assert/strict');
 const source=fs.readFileSync('app.js','utf8');
-function fn(name) { const start=source.indexOf('function '+name+'('); if(start<0)throw Error(name); const end=source.indexOf('\nfunction ',start+1); return source.slice(start,end<0?undefined:end); }
-const priceContext=vm.createContext({prices:{league:'Test',tables:{Currency:[{name:'Exalted Orb',divine:.01}]},fetchedAt:1},NINJA_EXCHANGE:['Currency'],leagueId:()=> 'Test', namesMatch:(a,b)=>a.toLowerCase()===b.toLowerCase(), esc:String,formatWhen:()=> 'now',overlayBarHtml:()=>'<header></header>',dropIconHtml:()=>'',valueHtml:x=>String(x)});
+function fn(name) {
+  const start = source.indexOf(`function ${name}(`);
+  assert.ok(start >= 0, name);
+  return source.slice(start, source.indexOf('\n}', start) + 2);
+}
+const priceContext=vm.createContext({activeGame:()=>'poe2',prices:{league:'Test',tables:{Currency:[{name:'Exalted Orb',divine:.01}]},fetchedAt:1},NINJA_EXCHANGE:['Currency'],leagueId:()=> 'Test', namesMatch:(a,b)=>a.toLowerCase()===b.toLowerCase(), esc:String,formatWhen:()=> 'now',overlayBarHtml:()=>'<header></header>',dropIconHtml:()=>'',valueHtml:x=>String(x)});
 vm.runInContext(fn('ninjaCurrencyPrice'),priceContext);
-vm.runInContext(fn('currencyOverlayHtml').split('\nwindow.chrome')[0],priceContext);
+vm.runInContext(fn('currencyOverlayHtml'),priceContext);
 assert.equal(priceContext.ninjaCurrencyPrice('Exalted Orb'),.01);
 assert.equal(priceContext.ninjaCurrencyPrice('Missing'),null);
 const html=priceContext.currencyOverlayHtml({name:'Exalted Orb',qty:20});
@@ -33,10 +37,11 @@ hover.placeItemTip(anchor,tooltip);
 assert.equal(tooltip.style.left,'8px');assert.equal(tooltip.style.top,'76px');
 console.log('Economy duplicates/variant separation and currency/artwork hover checks passed.');
 
-const hotkeyContext=vm.createContext({state:{hotkeyLog:'F8',hotkeyNext:'F9',hotkeyPrice:'F7',hotkeyHideout:'F6'}});
-for (const name of ['hotkeys','normalizeHotkey','assignHotkey']) vm.runInContext(fn(name),hotkeyContext);
-assert.equal(hotkeyContext.assignHotkey('hideout','F7'),true);
-assert.equal(hotkeyContext.state.hotkeyHideout,'F7');
-assert.equal(hotkeyContext.state.hotkeyPrice,'F6');
+const hotkeyContext=vm.createContext({activeGame:()=>'poe2',state:{hotkeyLog:'F8',hotkeyNext:'F9',hotkeyPrice:'Ctrl+F7',hotkeyHideout:'F6'}});
+for (const name of ['hotkeys','hotkeyMainKey','lockedPriceHotkey','normalizeHotkey','assignHotkey']) vm.runInContext(fn(name),hotkeyContext);
+assert.equal(hotkeyContext.assignHotkey('hideout','F8'),true);
+assert.equal(hotkeyContext.state.hotkeyHideout,'F8');
+assert.equal(hotkeyContext.state.hotkeyLog,'F6');
+assert.equal(hotkeyContext.state.hotkeyPrice,'Ctrl+F7');
 assert.equal(hotkeyContext.assignHotkey('hideout','Ctrl+C'),false);
 console.log('Hideout hotkey rebinding and conflict swap passed.');

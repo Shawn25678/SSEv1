@@ -4,11 +4,40 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Still Sane, Exile?</title>
+    <script>
+      if (window.sseTesterUnlocked === true) document.documentElement.classList.add("tester-unlocked");
+    </script>
     <link rel="icon" href="still-sane-sigil.png" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body class="top-navigation">
     <div class="win-chrome">
+      <span class="win-gold-confetti" aria-hidden="true">
+        <i style="--lane:16%;--drift:13px;--fall-time:3.9s;--phase:-2.7s"></i>
+        <i style="--lane:20%;--drift:-17px;--fall-time:4.6s;--phase:-.8s"></i>
+        <i style="--lane:25%;--drift:24px;--fall-time:3.4s;--phase:-1.5s"></i>
+        <i style="--lane:30%;--drift:15px;--fall-time:4.4s;--phase:-3.5s"></i>
+        <i style="--lane:34%;--drift:-11px;--fall-time:3.8s;--phase:-1.2s"></i>
+        <i style="--lane:39%;--drift:22px;--fall-time:5.2s;--phase:-4.1s"></i>
+        <i style="--lane:43%;--drift:-14px;--fall-time:3.6s;--phase:-2.3s"></i>
+        <i style="--lane:48%;--drift:25px;--fall-time:4.5s;--phase:-.4s"></i>
+        <i style="--lane:52%;--drift:-19px;--fall-time:3.3s;--phase:-1.8s"></i>
+        <i style="--lane:56%;--drift:16px;--fall-time:4.7s;--phase:-3.2s"></i>
+        <i style="--lane:61%;--drift:-12px;--fall-time:3.7s;--phase:-1.1s"></i>
+        <i style="--lane:65%;--drift:22px;--fall-time:5s;--phase:-2.6s"></i>
+        <i style="--lane:69%;--drift:-21px;--fall-time:3.6s;--phase:-3s"></i>
+        <i style="--lane:74%;--drift:14px;--fall-time:4.2s;--phase:-.6s"></i>
+        <i style="--lane:78%;--drift:-16px;--fall-time:4.9s;--phase:-3.6s"></i>
+        <i style="--lane:82%;--drift:25px;--fall-time:3.8s;--phase:-1.6s"></i>
+        <i style="--lane:87%;--drift:-24px;--fall-time:4.5s;--phase:-2.2s"></i>
+        <i style="--lane:92%;--drift:-11px;--fall-time:3.5s;--phase:-2.8s"></i>
+      </span>
+      <template id="tester-title-banner">
+        <picture class="win-tester-banner" aria-hidden="true">
+          <source media="(prefers-reduced-motion: reduce)" srcset="art/sse-tester-banner-static.webp" />
+          <img src="art/sse-tester-banner.webp" width="540" height="180" alt="" draggable="false" />
+        </picture>
+      </template>
       <div class="win-drag" data-win-drag title="Still Sane, Exile?">
         <span class="win-sigil"><img class="sigil tiny" src="still-sane-sigil.png" alt="" /></span>
         <strong>Still Sane, Exile?</strong>
@@ -22,21 +51,26 @@
         <button class="menu-link is-active" data-view="dash" type="button">
           <span class="nav-symbol" aria-hidden="true">◈</span>
           <span class="menu-link-title">Dashboard</span>
+          <span class="menu-ripple" aria-hidden="true"></span>
         </button>
         <button class="menu-link" data-view="econ" type="button">
           <span class="nav-symbol" aria-hidden="true">↗</span>
           <span class="menu-link-title">Economy</span>
+          <span class="menu-ripple" aria-hidden="true"></span>
         </button>
         <button class="menu-link" data-view="wealth" type="button">
           <span class="menu-link-title">Wealth</span>
+          <span class="menu-ripple" aria-hidden="true"></span>
         </button>
         <button class="menu-link" data-view="guides" type="button">
           <span class="nav-symbol" aria-hidden="true">▤</span>
           <span class="menu-link-title">Tools &amp; Wiki</span>
+          <span class="menu-ripple" aria-hidden="true"></span>
         </button>
         <button class="menu-link" data-view="settings" type="button">
           <span class="nav-symbol" aria-hidden="true">⚙</span>
           <span class="menu-link-title">Settings</span>
+          <span class="menu-ripple" aria-hidden="true"></span>
         </button>
       </nav>
     </header>

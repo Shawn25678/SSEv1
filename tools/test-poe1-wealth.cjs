@@ -511,6 +511,41 @@ run('window.chrome={webview:{postMessage(){throw Error("Unexpected trade request
   assert.ok(!(await queryFor(timeless)).stats[0].filters.some(row=>row.id===seedId));
   const pickedTimeless = {...timeless,rolls:[{...seedRoll,pick:true}]};
   assert.deepEqual((await queryFor(pickedTimeless)).stats[0].filters.find(row=>row.id===seedId)?.value,{min:14671,max:14671});
+  const mapHeader = 'Item Class: Maps\nRarity: Rare\nMind Nexus\nMap (Tier 16)\n--------\nMonster Level: 83\n--------\nItem Level: 83\n--------\n';
+  const mirageMap = c.parsePoeItem(mapHeader + [
+    'Area contains a Breach (implicit)',
+    '{ Prefix Modifier "Inhabited" (Tier: 1) }\nArea has increased monster variety',
+    '{ Suffix Modifier "of the Mirage" (Tier: 1) }\nArea contains a Mirage',
+    '{ Suffix Modifier "of Frogs" (Tier: 1) }\nArea contains 3 additional packs of Frog',
+  ].join('\n--------\n'));
+  const mapStats = c.buildTradeStatIndex({result:[
+    {id:'explicit',entries:[
+      {id:'explicit.stat_2436559047',text:'Area contains a Mirage'},
+      {id:'explicit.stat_3561450806',text:'Area has increased monster variety'},
+      {id:'explicit.stat_2752993899',text:'Area contains # additional packs of Frog'},
+    ]},
+    {id:'implicit',entries:[{id:'implicit.stat_392469782',text:'Area contains a Breach'}]},
+    {id:'enchant',entries:[{id:'enchant.stat_2436559047',text:'Area contains a Mirage'}]},
+  ]});
+  c.ensureTradeStats = async () => mapStats;
+  assert.deepEqual((await queryFor({...mirageMap,rolls:mirageMap.mods})).stats[0].filters,[]);
+  const pickedMap = {...mirageMap,rolls:mirageMap.mods.map(roll=>({...roll,pick:true}))};
+  const mapFilters = [
+    {id:'implicit.stat_392469782',disabled:false},
+    {id:'explicit.stat_3561450806',disabled:false},
+    {id:'explicit.stat_2436559047',disabled:false},
+    {id:'explicit.stat_2752993899',disabled:false,value:{min:3}},
+  ];
+  assert.deepEqual((await queryFor(pickedMap)).stats[0].filters,mapFilters);
+  for (const [text,id] of [['Area contains a Mirage','explicit.stat_2436559047'],
+    ['Area contains a Mirage (enchant)','enchant.stat_2436559047']]) {
+    const map = c.parsePoeItem(mapHeader + text);
+    const rolls = map.mods.map(roll=>({...roll,pick:true}));
+    assert.deepEqual((await queryFor({...map,rolls})).stats[0].filters,[{id,disabled:false}]);
+  }
+  run('state.activeGame="poe2";');
+  assert.equal(c.parsePoeItem(mapHeader + 'Area contains a Mirage').mods[0]?.kind,'implicit');
+  run('state.activeGame="poe1";');
   c.ensureTradeStats = async () => new Map();
   c.webviewJson = originalWebviewJson;
   console.log('Passed: Ultimatum variants and market confidence, Economy cache, transfigured gems, and unique map filters.');
@@ -559,6 +594,16 @@ run('window.chrome={webview:{postMessage(){throw Error("Unexpected trade request
   await c.quoteRolledDrop(null, {...pickedTimeless,id:'timeless-seed-test',manualQuoteRequested:true});
   const seedRequest = requests.at(-1)[4].filters.find(row=>row.id===seedId);
   assert.deepEqual({...seedRequest},{id:seedId,min:14671,max:14671});
+  c.ensureTradeStats = async () => mapStats;
+  await c.quoteRolledDrop(null, {...pickedMap,id:'mirage-map-test',manualQuoteRequested:true});
+  const mapRequest = requests.at(-1)[4];
+  assert.equal(mapRequest.game,'poe1');
+  assert.deepEqual(Array.from(mapRequest.filters.filter(row=>/^(explicit|implicit)\./.test(row.id)),row=>({...row})),[
+    {id:'implicit.stat_392469782'},
+    {id:'explicit.stat_3561450806'},
+    {id:'explicit.stat_2436559047'},
+    {id:'explicit.stat_2752993899',min:3},
+  ]);
   c.exaltedFeed = {
     core: {primary:'chaos',rates:{divine:0.004408}},
     items: [{id:'exalted',name:'Exalted Orb',detailsId:'exalted-orb'}],
