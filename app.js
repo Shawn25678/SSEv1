@@ -1,5 +1,5 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
-const APP_VERSION = "1.0.69";
+const APP_VERSION = window.sseStartup?.version || "";
 
 // Cultivated/Vaal unique identities, including copies without a Vaal property line.
 // Source: https://poe2db.tw/us/Unique_item#CultivatedUniques (2026-11-12).
@@ -621,13 +621,17 @@ function ensureIcons() {
   return iconsLoading;
 }
 
+function updateVersionLabel() {
+  if (!APP_VERSION) return "";
+  return updateCache.newer ? `v${APP_VERSION} → v${updateCache.latest}` : `v${APP_VERSION}`;
+}
+
 function paintUpdatePanel() {
   const status = document.getElementById("update-status");
   const btn = document.getElementById("settings-update-btn");
   const check = document.getElementById("settings-check-btn");
   if (status) {
-    const version = updateCache.newer ? "v" + APP_VERSION + " → v" + updateCache.latest : "v" + APP_VERSION;
-    status.textContent = updateInstalling ? "Downloading update…" : version;
+    status.textContent = updateInstalling ? "Downloading update…" : updateVersionLabel();
   }
   if (btn) {
     btn.hidden = !updateCache.newer;
@@ -13901,7 +13905,7 @@ function renderSettings() {
       </article>`}
       <article class="panel settings-app-panel">
         <h3>App</h3>
-        <p class="muted" id="update-status" style="margin-top:8px">v${esc(APP_VERSION)}</p>
+        <p class="muted" id="update-status" style="margin-top:8px"${APP_VERSION ? "" : " hidden"}>${esc(updateVersionLabel())}</p>
         <div class="row-actions">
           <button class="btn ghost" id="settings-check-btn" type="button"${window.chrome?.webview ? "" : " hidden"}>Check</button>
           <button class="btn gold" id="settings-update-btn" type="button" hidden>Update</button>

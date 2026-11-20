@@ -3448,6 +3448,12 @@ sealed class TrackerWindow : Form
         return _webReady ??= StartWebAsync();
     }
 
+    static string CompanionStartupScript(bool testerUnlocked)
+    {
+        var startup = JsonSerializer.Serialize(new { version = AppUpdate.CurrentLabel(), testerUnlocked });
+        return $"if (window === window.top) window.sseStartup = {startup};";
+    }
+
     async Task StartWebAsync()
     {
         var userData = AppDataDir();
@@ -3475,9 +3481,7 @@ sealed class TrackerWindow : Form
         _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _web.CoreWebView2.Settings.IsWebMessageEnabled = true;
-        if (_testerAccess?.Unlocked == true)
-            await _web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
-                "if (window === window.top) window.sseTesterUnlocked = true;");
+        await _web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(CompanionStartupScript(_testerAccess?.Unlocked == true));
         _web.CoreWebView2.WebMessageReceived += OnWebMessage;
         _web.CoreWebView2.NavigationCompleted += (_, ev) =>
         {
