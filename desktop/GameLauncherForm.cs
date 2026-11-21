@@ -353,9 +353,10 @@ sealed class GameLauncherForm : Form
         previous.Dispose();
     }
 
+    bool HasWealth() => !string.IsNullOrEmpty(_wealth);
     int WealthExtra()
     {
-        if (string.IsNullOrEmpty(_wealth)) return Hud(8);
+        if (!HasWealth()) return 0;
         var measured = TextRenderer.MeasureText(_wealth, Font);
         return measured.Width + Hud(16);
     }
@@ -406,18 +407,20 @@ sealed class GameLauncherForm : Form
         using var transparent = new SolidBrush(Color.Magenta);
         e.Graphics.FillRectangle(transparent, e.ClipRectangle);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        var frame = BoxBounds();
-        var border = _useGoldIcon ? Color.FromArgb(242, 196, 78) : Color.FromArgb(90, 82, 68);
-        using (var path = Rounded(frame, Math.Max(3, Hud(4))))
-        using (var fill = new SolidBrush(Color.FromArgb(19, 18, 14)))
-        using (var pen = new Pen(border, _useGoldIcon ? HudF(2f) : HudF(1.25f)))
-        {
-            e.Graphics.FillPath(fill, path);
-            e.Graphics.DrawPath(pen, path);
-        }
         var icon = IconBounds();
-        if (!string.IsNullOrEmpty(_wealth))
+        Rectangle? bar = null;
+        if (HasWealth())
         {
+            var frame = BoxBounds();
+            bar = frame;
+            var border = _useGoldIcon ? Color.FromArgb(242, 196, 78) : Color.FromArgb(90, 82, 68);
+            using (var path = Rounded(frame, Math.Max(3, Hud(4))))
+            using (var fill = new SolidBrush(Color.FromArgb(19, 18, 14)))
+            using (var pen = new Pen(border, _useGoldIcon ? HudF(2f) : HudF(1.25f)))
+            {
+                e.Graphics.FillPath(fill, path);
+                e.Graphics.DrawPath(pen, path);
+            }
             var text = new Rectangle(Hud(10), frame.Y, Math.Max(1, _wealthWidth - Hud(8)), frame.Height);
             TextRenderer.DrawText(e.Graphics, _wealth, Font, text, Color.FromArgb(238, 223, 190),
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
@@ -439,6 +442,27 @@ sealed class GameLauncherForm : Form
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
         }
+        PunchToKey(e.Graphics, icon, bar);
+    }
+
+    void PunchToKey(Graphics graphics, Rectangle icon, Rectangle? bar)
+    {
+        var smoothing = graphics.SmoothingMode;
+        graphics.SmoothingMode = SmoothingMode.None;
+        using var outside = new Region(ClientRectangle);
+        using (var circle = new GraphicsPath())
+        {
+            circle.AddEllipse(icon);
+            outside.Exclude(circle);
+        }
+        if (bar is Rectangle frame && frame.Width > 0 && frame.Height > 0)
+        {
+            using var path = Rounded(frame, Math.Max(3, Hud(4)));
+            outside.Exclude(path);
+        }
+        using var key = new SolidBrush(Color.Magenta);
+        graphics.FillRegion(key, outside);
+        graphics.SmoothingMode = smoothing;
     }
 
     void PaintTesterIcon(Graphics graphics, Rectangle icon)
