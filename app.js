@@ -12473,8 +12473,8 @@ function poe1WealthSidebar(draft, tabs, totals) {
       <button type="button" class="btn ghost" data-poe1-stash-all="0" ${draft.busy || !shown.length ? "disabled" : ""}>Deselect all</button>
     </div>
     ${tracked > 24 ? '<p class="muted">A stash read covers up to 24 tabs. Choose which tabs to include.</p>' : ""}
+    <button type="button" class="wealth-all-tabs" data-wealth-select-tab="" aria-pressed="${!draft.stashFilter}">All tabs</button>
     <nav class="wealth-stash-nav" aria-label="Filter items by stash tab">
-      <button type="button" data-wealth-select-tab="" aria-pressed="${!draft.stashFilter}">All tabs</button>
       ${shown.map(stashRow).join("")}
     </nav>
     <div class="wealth-hidden-tabs">
@@ -14630,7 +14630,25 @@ function onClick(event) {
     if (category) {
       const draft = wealthDraft();
       const key = category.dataset.wealthCategory;
-      draft.categoryFilter = key === draft.categoryFilter ? "" : key;
+      const next = key === draft.categoryFilter ? "" : key;
+      draft.categoryFilter = next;
+      if (next && draft.stashFilter) {
+        const priced = slot => {
+          const unit = wealthUnit(slot.name, slot);
+          const count = Number(slot.count);
+          return unit != null && count > 0 ? unit * count : 0;
+        };
+        const rows = trackedWealthSlots(draft).filter(slot => poe1WealthCategory(slot) === next && priced(slot) > 0);
+        if (!rows.some(slot => slot.stash === draft.stashFilter)) {
+          const totals = new Map();
+          for (const slot of rows) totals.set(slot.stash, (totals.get(slot.stash) || 0) + priced(slot));
+          let best = "";
+          let bestValue = 0;
+          for (const [stash, value] of totals) if (value > bestValue) { best = stash; bestValue = value; }
+          if (best) draft.stashFilter = best;
+        }
+        if (draft.itemFilter === "card-volume" && !poe1WealthCardStash(draft)) draft.itemFilter = "all";
+      }
       draft.limit = 100;
       repaintWealth();
       return;

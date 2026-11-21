@@ -6991,6 +6991,34 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
 .poe1-wealth .wealth-items-layout > * { min-width: 0; }
 .poe1-wealth .wealth-stash-sidebar { display: grid; gap: 10px; padding: 12px; }
 .poe1-wealth .wealth-stash-sidebar h3 { margin: 0; font-size: .92rem; }
+.poe1-wealth .wealth-all-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.poe1-wealth .wealth-all-tabs:hover {
+  background: color-mix(in srgb, var(--panel-2) 78%, var(--gold) 22%);
+}
+.poe1-wealth .wealth-all-tabs[aria-pressed="true"] {
+  border-color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 24%, var(--bg));
+  color: var(--gold-2);
+}
+.poe1-wealth .wealth-all-tabs[aria-pressed="true"]:hover {
+  border-color: var(--gold-2);
+  background: color-mix(in srgb, var(--gold) 32%, var(--bg));
+}
 .poe1-wealth .wealth-stash-nav { display: grid; gap: 4px; max-height: 420px; overflow-x: hidden; overflow-y: auto; padding: 2px 4px 2px 8px; }
 .poe1-wealth .wealth-stash-nav button {
   display: flex;
