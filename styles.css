@@ -6919,7 +6919,7 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
   box-sizing: border-box;
 }
 .poe1-wealth .wealth-chart { width: 100%; min-width: 0; }
-.poe1-wealth { --wealth-sidebar-width: clamp(148px, 17%, 204px); }
+.poe1-wealth { --wealth-sidebar-width: clamp(196px, 22%, 240px); }
 .poe1-wealth .wealth-overview {
   display: grid;
   grid-template-columns: var(--wealth-sidebar-width) minmax(0, 1.45fr) minmax(0, 1fr);
@@ -6991,7 +6991,7 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
 .poe1-wealth .wealth-items-layout > * { min-width: 0; }
 .poe1-wealth .wealth-stash-sidebar { display: grid; gap: 10px; padding: 12px; }
 .poe1-wealth .wealth-stash-sidebar h3 { margin: 0; font-size: .92rem; }
-.poe1-wealth .wealth-stash-nav { display: grid; gap: 4px; }
+.poe1-wealth .wealth-stash-nav { display: grid; gap: 4px; max-height: 420px; overflow-x: hidden; overflow-y: auto; padding: 2px 4px 2px 8px; }
 .poe1-wealth .wealth-stash-nav button {
   display: flex;
   align-items: center;
@@ -7008,10 +7008,45 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
   cursor: pointer;
 }
 .poe1-wealth .wealth-stash-nav button[style],
+.poe1-wealth .wealth-stash-row[style],
 .poe1-wealth .wealth-poe1-tabs label[style] {
   box-shadow: inset 3px 0 var(--stash-accent);
   background: color-mix(in srgb, var(--stash-accent) 15%, transparent);
 }
+.poe1-wealth .wealth-stash-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.poe1-wealth .wealth-stash-row input {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
+.poe1-wealth .wealth-stash-row button { flex: 1 1 auto; min-width: 0; }
+.poe1-wealth .wealth-hidden-tabs { display: grid; gap: 4px; }
+.poe1-wealth .wealth-hidden-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.poe1-wealth .wealth-hidden-toggle[aria-expanded="true"] { border-color: var(--line-strong); }
+.poe1-wealth .wealth-hidden-toggle:disabled { opacity: .45; cursor: default; }
+.poe1-wealth .wealth-hidden-list { max-height: 220px; }
 .poe1-wealth .wealth-stash-nav button:hover { background: var(--bg-2); }
 .poe1-wealth .wealth-stash-nav button[aria-pressed="true"] {
   border-color: var(--line-strong);
@@ -7075,6 +7110,11 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
   padding-top: 10px;
   border-top: 1px solid var(--line);
 }
+.poe1-wealth .wealth-track-actions {
+  display: flex;
+  gap: 6px;
+}
+.poe1-wealth .wealth-track-actions .btn { flex: 1 1 0; }
 .poe1-wealth .wealth-poe1-tabs {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -7087,7 +7127,7 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
 .poe1-wealth .wealth-poe1-tabs label:has(input:checked) { border-color: var(--line-strong); }
 .poe1-wealth .wealth-poe1-tabs span { min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 890px) {
-  .poe1-wealth { --wealth-sidebar-width: clamp(148px, 23%, 190px); }
+  .poe1-wealth { --wealth-sidebar-width: clamp(196px, 28%, 230px); }
   .poe1-wealth .wealth-overview { grid-template-columns: var(--wealth-sidebar-width) minmax(0, 1fr); }
   .poe1-wealth .wealth-overview .wealth-top { grid-row: span 2; align-self: start; }
   .poe1-wealth .wealth-overview .wealth-breakdown-panel { grid-column: 2; }

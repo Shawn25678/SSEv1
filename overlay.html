@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css?v=74" />
-    <link rel="stylesheet" href="overlay.css?v=74" />
+    <link rel="stylesheet" href="overlay.css?v=76" />
   </head>
   <body>
     <div id="root"></div>
@@ -54,7 +54,10 @@
         let w = card.classList.contains("has-offers") ? 766 : 466;
         if (card.classList.contains("is-currency")) {
           const row = card.querySelector(".currency-rate-n");
-          if (row) w = Math.max(320, Math.ceil(row.scrollWidth) + 56);
+          const note = card.querySelector(".currency-summary > p:not(.muted)");
+          const who = card.querySelector(".currency-rate-who");
+          const textW = Math.max(row?.scrollWidth || 0, note?.scrollWidth || 0, who?.scrollWidth || 0);
+          if (textW) w = Math.max(360, Math.ceil(textW) + 72);
         }
         const extra = card.querySelector(".price-overlay-rate-card");
         if (extra && getComputedStyle(extra).display !== "none") {

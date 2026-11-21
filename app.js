@@ -2118,6 +2118,7 @@ function poe1VisceraCategory(slot) {
 }
 
 function poe1SearchCategory(drop) {
+  if (drop?.beast) return "monster.beast";
   if (/^Inscribed Ultimatum$/i.test(drop?.name || "")) return "";
   return poe1VisceraCategory(drop?.visceraSlot) || poe1TradeCategory(drop?.className);
 }
@@ -3459,6 +3460,15 @@ if (window.chrome?.webview) {
       } catch {
         return;
       }
+    }
+    if (msg?.type === "app-scaled") {
+      const next = Math.max(0.7, Math.min(1.65, Math.round(Number(msg.scale) * 100) / 100));
+      if (Number.isFinite(next) && next !== appScaleValue()) {
+        state.appScale = next;
+        try { save(); } catch { /* the size still shows */ }
+        syncSizeSettings();
+      }
+      return;
     }
     if (msg?.type === "hotkey") {
       handleAppHotkey(msg);
@@ -5648,6 +5658,7 @@ async function loadPoe1Watch(league, force = false) {
 
 function mergePoe1Watch(data) {
   poe1Prices.wealthIndex = null;
+  poe1Prices.beastNames = null;
   poe1EconRowsCache.clear();
   const primary = new Map();
   const exchangeNames = new Map();
@@ -5675,6 +5686,7 @@ function mergePoe1Watch(data) {
 function takePoe1Lines(data, type, items) {
   const bag = poe1Prices;
   bag.wealthIndex = null;
+  bag.beastNames = null;
   const rates = data?.core?.rates || {};
   if (type === "Currency" && data?.core?.primary) {
     bag.primary = data.core.primary;
@@ -5773,6 +5785,7 @@ async function refreshPoe1PricesNow(force = false) {
   if (poe1Prices.league !== league) {
     poe1Prices.tables = {};
     poe1Prices.wealthIndex = null;
+    poe1Prices.beastNames = null;
     poe1Prices.exchangeValues = new Map();
     poe1Prices.cardChaosPerHour.clear();
     poe1Prices.chaosPerDivine = 0;
@@ -6320,7 +6333,7 @@ function setOverlayScale(value) {
 
 function appScaleValue() {
   const value = Number(state.appScale);
-  return Number.isFinite(value) ? Math.max(0.75, Math.min(1.25, Math.round(value * 20) / 20)) : 1;
+  return Number.isFinite(value) ? Math.max(0.7, Math.min(1.65, Math.round(value * 100) / 100)) : 1;
 }
 
 function syncAppScale() {
@@ -6332,7 +6345,7 @@ function syncAppScale() {
 function setAppScale(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return;
-  const next = Math.max(0.75, Math.min(1.25, Math.round(n * 20) / 20));
+  const next = Math.max(0.7, Math.min(1.65, Math.round(n * 100) / 100));
   if (next === appScaleValue()) return;
   state.appScale = next;
   save();
@@ -6341,7 +6354,9 @@ function setAppScale(value) {
 }
 
 function uiSizeSettingHtml(kind, label, scale) {
-  return `<div class="ui-size-row" data-ui-size-row="${kind}"><span>${label}</span><div class="ui-size-actions" role="group" aria-label="${label} size"><button type="button" class="btn ghost" data-ui-size="${kind}" data-size-value="${(scale - 0.05).toFixed(2)}" aria-label="Make ${label.toLowerCase()} smaller" ${scale <= 0.75 ? "disabled" : ""}>−</button><output aria-live="polite">${Math.round(scale * 100)}%</output><button type="button" class="btn ghost" data-ui-size="${kind}" data-size-value="${(scale + 0.05).toFixed(2)}" aria-label="Make ${label.toLowerCase()} bigger" ${scale >= 1.25 ? "disabled" : ""}>+</button><button type="button" class="btn ghost" data-ui-size="${kind}" data-size-value="1" ${scale === 1 ? "disabled" : ""}>Reset</button></div></div>`;
+  const min = kind === "app" ? 0.7 : 0.75;
+  const max = kind === "app" ? 1.65 : 1.25;
+  return `<div class="ui-size-row" data-ui-size-row="${kind}"><span>${label}</span><div class="ui-size-actions" role="group" aria-label="${label} size"><button type="button" class="btn ghost" data-ui-size="${kind}" data-size-value="${(scale - 0.05).toFixed(2)}" aria-label="Make ${label.toLowerCase()} smaller" ${scale <= min ? "disabled" : ""}>−</button><output aria-live="polite">${Math.round(scale * 100)}%</output><button type="button" class="btn ghost" data-ui-size="${kind}" data-size-value="${(scale + 0.05).toFixed(2)}" aria-label="Make ${label.toLowerCase()} bigger" ${scale >= max ? "disabled" : ""}>+</button><button type="button" class="btn ghost" data-ui-size="${kind}" data-size-value="1" ${scale === 1 ? "disabled" : ""}>Reset</button></div></div>`;
 }
 
 function syncSizeSettings() {
@@ -6974,6 +6989,7 @@ function parsePoeItem(text) {
     /^\{[^}\n]*\bVaal Unique\b/im.test(raw)
   );
   const props = parseLocalProps(raw);
+  const beast = /right-click to add this to your bestiary/i.test(raw) || /^Genus:/im.test(raw);
   if (activeGame() === "poe1" && /^Inscribed Ultimatum$/i.test(name)) {
     const challenge = raw.match(/^[\t ]*Challenge:[\t ]*([^\n]+)/im)?.[1]?.trim();
     const sacrificeLine = raw.match(/^[\t ]*Requires Sacrifice:[\t ]*([^\n]+)/im)?.[1]?.trim();
@@ -7023,7 +7039,7 @@ function parsePoeItem(text) {
       if (lines.length === 1 && poe1VisceraCategory(lines[0])) { visceraSlot = lines[0]; break; }
     }
   }
-  return { name, baseType, rarity, className, qty, stackMax, corrupted: isCorrupted, mirrored, sanctified, foil, vaalUnique, desecrated, unidentified, unidentifiedTier, ravenTouched, fractured, mods, influences: parsedMods.influences || [], usesRemaining, runeSockets, links: sockets.links, socketColors: sockets.colors, charmSlots, props, visceraSlot };
+  return { name, baseType, rarity, className, qty, stackMax, corrupted: isCorrupted, mirrored, sanctified, foil, vaalUnique, desecrated, unidentified, unidentifiedTier, ravenTouched, fractured, mods, influences: parsedMods.influences || [], usesRemaining, runeSockets, links: sockets.links, socketColors: sockets.colors, charmSlots, props, visceraSlot, beast };
 }
 
 function readSocketLine(raw) {
@@ -9894,7 +9910,9 @@ function overlayPropsHtml(log, drop) {
 
 function poe1GeneralPriceItem(drop) {
   if (activeGame() !== "poe1" || drop?.viscera || poe1VisceraItem(drop)) return false;
+  if (drop?.beast) return !!poe1BeastPriceName(drop);
   if (isClipboardCurrency(drop)) return true;
+  if (poe1BeastPriceName(drop)) return true;
   if (/invitations?$/i.test(drop?.className || "") || /invitation$/i.test(drop?.name || "")) return true;
   return /^(?:wombgifts?|corpses?|incubators?|runegrafts?|allflame embers?|tattoos?|omens?|djinn coins?|ducats?|enshrouding crystals?|artifacts?|oils?|fossils?|resonators?|essences?|delirium orbs?|astrolabes?)$/i.test(drop?.className || "");
 }
@@ -10999,9 +11017,10 @@ function tradeWaiting() {
 }
 
 async function quoteRolledDrop(log, drop, force = true, auto = false) {
-  // Automatically check only known PoE 1 uniques opened from the game.
+  const poe1BeastTrade = activeGame() === "poe1" && drop?.beast && !poe1BeastPriceName(drop);
+  // Automatically check PoE 1 uniques, and captured beasts that poe.ninja does not list.
   if (!drop?.manualQuoteRequested && !(auto && activeGame() === "poe1" &&
-      /^unique$/i.test(drop?.rarity || "") && !unidentifiedUniqueNeedsPick(drop))) return;
+      ((/^unique$/i.test(drop?.rarity || "") && !unidentifiedUniqueNeedsPick(drop)) || poe1BeastTrade))) return;
   delete drop.manualQuoteRequested;
   if (auto && inspectTarget()?.drop !== drop) return;
   if (drop?.uiPreview) return;
@@ -11041,16 +11060,20 @@ async function quoteRolledDrop(log, drop, force = true, auto = false) {
     if (!current()) return;
     const identity = poe1 ? await poe1TradeIdentity(drop) : null;
     if (!current()) return;
+    const beastName = poe1 && drop.beast ? (poe1BeastPriceName(drop) || drop.baseType || drop.name) : "";
     const extra = {
-      typeLine: identity?.type || tradeBaseType(drop),
+      typeLine: beastName || identity?.type || tradeBaseType(drop),
       category: poe1 ? poe1SearchCategory(drop) : tradeCategory(drop.className),
-      rarity: drop.rarity || "",
+      rarity: beastName ? "" : (drop.rarity || ""),
       rarityFilter: searchRarityFilter(drop),
       game: poe1 ? "poe1" : "poe2",
     };
     if (overlayUsesExchange(drop)) {
       extra.exchange = true;
       extra.have = exchangeHavePick(drop);
+    } else if (poe1 && beastName) {
+      extra.filters = [];
+      extra.exactBase = true;
     } else if (poe1) {
       const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
       const index = pickedMods.length ? await ensureTradeStats() : null;
@@ -11099,7 +11122,7 @@ async function quoteRolledDrop(log, drop, force = true, auto = false) {
       const sockets = socketSearchCount(drop);
       if (sockets !== null) extra.runeSockets = sockets;
     }
-    const row = await tradeFetch(poe1 && /^unique$/i.test(drop?.rarity || "") ? identity?.name || poe1TradeName(drop) : drop.name, league, !!force, false, extra);
+    const row = await tradeFetch(beastName || (poe1 && /^unique$/i.test(drop?.rarity || "") ? identity?.name || poe1TradeName(drop) : drop.name), league, !!force, false, extra);
     const replaced = drop.quoting && drop.quoting !== request;
     if (replaced || activeGame() !== game || (poe1 ? econLeagueName() : leagueId()) !== league || (auto && inspectTarget()?.drop !== drop)) return;
     const unit = tradeUnit(row?.currency);
@@ -11160,7 +11183,7 @@ function catalogOwners(name) {
 
 function isClipboardCurrency(parsed) {
   if (activeGame() === "poe1") {
-    if (parsed?.viscera || poe1VisceraItem(parsed)) return false;
+    if (parsed?.beast || parsed?.viscera || poe1VisceraItem(parsed)) return false;
     if (/Inscribed Ultimatum/i.test(parsed?.className || "") || parsed?.name === "Inscribed Ultimatum") return false;
     if (/map fragments?|scarabs?|divination cards?|invitations?/i.test(parsed?.className || "") || / Thread$/i.test(parsed?.name || "") || /invitation$/i.test(parsed?.name || "")) return true;
   }
@@ -11248,6 +11271,7 @@ function ingestClipboardItem(text, mode) {
     }
     if (parsed.charmSlots > 0) drop.charmSlots = parsed.charmSlots;
     if (parsed.visceraSlot) drop.visceraSlot = parsed.visceraSlot;
+    if (parsed.beast) drop.beast = true;
     if (!isClipboardCurrency(parsed) && parsed.mods?.length) drop.rolls = parsed.mods.slice(0, 24);
     const log = { id: "", drops: [drop] };
     openInspect(log, drop);
@@ -12333,12 +12357,17 @@ function wealthOn(id) {
   return !!flags[id];
 }
 
+function poe1TabName(name) {
+  const text = String(name ?? "");
+  return /^currancy$/i.test(text.trim()) ? "Currency" : text;
+}
+
 function savedPoe1Tabs(league) {
   const rows = state.poe1StashTabs?.[league];
   if (!Array.isArray(rows)) return [];
   return rows
     .filter((tab) => Number.isInteger(Number(tab?.index)) && tab?.name)
-    .map(tab => ({ index: Number(tab.index), name: String(tab.name), type: String(tab.type || ""), colour: String(tab.colour || "") }));
+    .map(tab => ({ index: Number(tab.index), name: poe1TabName(tab.name), type: String(tab.type || ""), colour: String(tab.colour || ""), hidden: !!tab.hidden }));
 }
 
 function rememberPoe1Tabs(league, tabs) {
@@ -12349,7 +12378,7 @@ function rememberPoe1Tabs(league, tabs) {
 function applyPoe1StashTabs(draft, tabs) {
   if (!Array.isArray(tabs)) return;
   const next = tabs.filter(tab => Number.isInteger(tab?.index) && tab.index >= 0 && tab.index <= 500 && tab.name)
-    .map(tab => ({ index: tab.index, name: String(tab.name), type: String(tab.type || ""), colour: String(tab.colour || "") }));
+    .map(tab => ({ index: tab.index, name: poe1TabName(tab.name), type: String(tab.type || ""), colour: String(tab.colour || ""), hidden: !!tab.hidden }));
   draft.poe1Tabs = next;
   draft.tabsAsked = true;
   const names = new Map(next.map(tab => [String(tab.index), tab.name]));
@@ -12364,8 +12393,9 @@ function applyPoe1StashTabs(draft, tabs) {
 function poe1StashOn(index) {
   const bag = state.poe1StashOn?.[wealthLeague()];
   const key = String(index);
-  if (!bag || !Object.prototype.hasOwnProperty.call(bag, key)) return true;
-  return !!bag[key];
+  if (bag && Object.prototype.hasOwnProperty.call(bag, key)) return !!bag[key];
+  const rows = ui.wealth?.poe1Tabs?.length ? ui.wealth.poe1Tabs : savedPoe1Tabs(wealthLeague());
+  return !rows.find(tab => String(tab.index) === key)?.hidden;
 }
 
 function queuePoe1Tabs(draft) {
@@ -12416,36 +12446,43 @@ function poe1StashAccent(tab) {
   return /^[0-9a-f]{6}$/i.test(tab.colour || "") ? ` style="--stash-accent:#${tab.colour}"` : "";
 }
 
-function poe1StashPicker(draft) {
-  const tabs = Array.isArray(draft.poe1Tabs) ? draft.poe1Tabs : [];
-  const tracked = tabs.filter(tab => poe1StashOn(tab.index)).length;
-  if (!draft.manageTabs) return "";
-  return `<div class="wealth-track-panel">
-    ${tracked > 24 ? '<p class="muted">A stash read covers up to 24 tabs. Choose which tabs to include.</p>' : ""}
-    ${!tabs.length ? `<p class="muted">${poe1SignedIn ? "No stash tabs loaded." : "Sign in to load your personal stash tabs."}</p>` : ""}
-    <div class="wealth-poe1-tabs">${tabs.map(tab =>
-    `<label${poe1StashAccent(tab)}><input type="checkbox" data-poe1-stash="${esc(tab.index)}" ${poe1StashOn(tab.index) ? "checked" : ""} ${draft.busy ? "disabled" : ""}>${poe1StashTabIcon(tab)}<span>${esc(tab.name)}</span></label>`
-  ).join("")}</div></div>`;
-}
-
 function poe1WealthSidebar(draft, tabs, totals) {
+  const all = Array.isArray(draft.poe1Tabs) && draft.poe1Tabs.length ? draft.poe1Tabs : tabs;
+  const shown = all.filter(tab => poe1StashOn(tab.index ?? tab.id));
+  const hidden = all.filter(tab => !poe1StashOn(tab.index ?? tab.id));
+  const tracked = shown.length;
+  const hiddenOpen = !!draft.hiddenOpen && hidden.length > 0;
+  const stashRow = tab => {
+    const id = String(tab.index ?? tab.id);
+    const value = totals.get(id);
+    return `<div class="wealth-stash-row"${poe1StashAccent(tab)}>
+      <input type="checkbox" data-poe1-stash="${esc(id)}" ${poe1StashOn(id) ? "checked" : ""} ${draft.busy ? "disabled" : ""} aria-label="${poe1StashOn(id) ? "Hide" : "Show"} ${esc(tab.name)}">
+      <button type="button" data-wealth-select-tab="${esc(id)}" aria-pressed="${draft.stashFilter === id}">
+        <span class="wealth-tab-name">${poe1StashTabIcon(tab)}<span>${esc(tab.name)}</span></span>${value > 0 ? `<small>${esc(wealthAmountText(value, "divine"))}</small>` : ""}
+      </button>
+    </div>`;
+  };
   return `<aside class="panel wealth-stash-sidebar">
     <h3>Stash tabs</h3>
     <div class="wealth-price-options">
       <label for="wealth-min-chaos" title="Uses the total value of each row in the item table">Minimum stack value</label>
       <span><input type="number" id="wealth-min-chaos" min="0" max="1000000000" step="1" value="${esc(poe1WealthMinChaos())}" ${draft.busy ? "disabled" : ""}> Chaos</span>
     </div>
+    <div class="wealth-track-actions">
+      <button type="button" class="btn ghost" data-poe1-stash-all="1" ${draft.busy || !all.length || !hidden.length ? "disabled" : ""}>Select all</button>
+      <button type="button" class="btn ghost" data-poe1-stash-all="0" ${draft.busy || !shown.length ? "disabled" : ""}>Deselect all</button>
+    </div>
+    ${tracked > 24 ? '<p class="muted">A stash read covers up to 24 tabs. Choose which tabs to include.</p>' : ""}
     <nav class="wealth-stash-nav" aria-label="Filter items by stash tab">
       <button type="button" data-wealth-select-tab="" aria-pressed="${!draft.stashFilter}">All tabs</button>
-      ${tabs.map(tab => {
-        const value = totals.get(tab.id);
-        return `<button type="button" data-wealth-select-tab="${esc(tab.id)}" aria-pressed="${draft.stashFilter === tab.id}"${poe1StashAccent(tab)}>
-          <span class="wealth-tab-name">${poe1StashTabIcon(tab)}<span>${esc(tab.name)}</span></span>${value > 0 ? `<small>${esc(wealthAmountText(value, "divine"))}</small>` : ""}
-        </button>`;
-      }).join("")}
+      ${shown.map(stashRow).join("")}
     </nav>
-    <button type="button" class="btn ghost" data-wealth-manage-tabs aria-expanded="${!!draft.manageTabs}">${draft.manageTabs ? "Done editing" : "Edit tracked tabs"}</button>
-    ${poe1StashPicker(draft)}
+    <div class="wealth-hidden-tabs">
+      <button type="button" class="wealth-hidden-toggle" data-poe1-hidden-toggle aria-expanded="${hiddenOpen}" ${draft.busy || !hidden.length ? "disabled" : ""}>
+        <span>Hidden tabs</span><span aria-hidden="true">${hiddenOpen ? "▴" : "▾"}</span>
+      </button>
+      ${hiddenOpen ? `<div class="wealth-stash-nav wealth-hidden-list">${hidden.map(stashRow).join("")}</div>` : ""}
+    </div>
   </aside>`;
 }
 
@@ -12483,15 +12520,34 @@ function wealthShown(divine) {
   return valueFromAmount(divine * chaosRate, "chaos");
 }
 
+function poe1BeastNames() {
+  if (poe1Prices.beastNames) return poe1Prices.beastNames;
+  poe1Prices.beastNames = new Set((poe1Prices.tables?.Beast || []).map(row => priceKey(row.name)).filter(Boolean));
+  return poe1Prices.beastNames;
+}
+
+function poe1BeastPriceName(slot) {
+  const known = poe1BeastNames();
+  const base = String(slot?.baseType || "");
+  const name = String(slot?.name || "");
+  if (base && known.has(priceKey(base))) return base;
+  if (name && known.has(priceKey(name))) return name;
+  return "";
+}
+
+function poe1SlotBeast(slot) {
+  return !!slot?.beast || /bestiary/i.test(slot?.icon || "") || !!poe1BeastPriceName(slot);
+}
+
 function poe1WealthQuote(slot) {
   if (poe1Prices.league !== wealthLeague()) return null;
   const ultimatum = /^Inscribed Ultimatum$/i.test(slot.name);
-  const lookupKey = ultimatum ? poe1UltimatumKey(slot.ultimatum) : priceKey(slot.name);
+  const lookupKey = ultimatum ? poe1UltimatumKey(slot.ultimatum) : priceKey(poe1BeastPriceName(slot) || slot.name);
   if (!lookupKey) return null;
   if (!poe1Prices.wealthIndex) {
     const index = new Map();
     for (const [type, rows] of Object.entries(poe1Prices.tables)) {
-      if (!POE1_GENERAL_PRICES.has(type) && type !== "SkillGem" && type !== "InscribedUltimatum") continue;
+      if (!POE1_GENERAL_PRICES.has(type) && type !== "SkillGem" && type !== "InscribedUltimatum" && type !== "Beast") continue;
       for (const row of rows) {
         if (row.lowConfidence || !(row.divine > 0) || !Number.isFinite(row.divine)) continue;
         const key = type === "InscribedUltimatum" ? poe1UltimatumKey(row.ultimatum) : priceKey(row.name);
@@ -12509,6 +12565,7 @@ function poe1WealthQuote(slot) {
       return slot.frameType === 4 && Number(row.gemLevel) === Number(slot.gemLevel)
         && Number(row.gemQuality || 0) === Number(slot.gemQuality || 0) && !!row.corrupted === !!slot.corrupted;
     }
+    if (row.type === "Beast") return true;
     if (slot.frameType == null) return true;
     if (row.type === "DivinationCard") return slot.frameType === 6;
     return slot.frameType === 0 || slot.frameType === 5;
@@ -12617,7 +12674,7 @@ function trackedWealthSlots(draft) {
 }
 
 function wealthSlotMatches(slot, stash, query) {
-  return (!stash || slot.stash === stash) && priceKey(slot.name).includes(query);
+  return (!stash || slot.stash === stash) && (priceKey(slot.name).includes(query) || priceKey(slot.baseType).includes(query));
 }
 
 function poe1WealthScope() {
@@ -13094,9 +13151,9 @@ function wealthStashTotals(slots) {
     if (!id) continue;
     const count = Number(slot.count);
     const price = excludedWealthSlot(slot) ? 0 : wealthUnit(slot.name, slot);
-    const row = byStash.get(id) || { id, name: slot.stashName || "Stash", total: 0 };
+    const row = byStash.get(id) || { id, name: poe1TabName(slot.stashName || "Stash"), total: 0 };
     if (count > 0 && price != null && !belowWealthMinimum(price, count)) row.total += count * price;
-    if (slot.stashName) row.name = slot.stashName;
+    if (slot.stashName) row.name = poe1TabName(slot.stashName);
     byStash.set(id, row);
   }
   return [...byStash.values()];
@@ -13174,10 +13231,10 @@ function wealthChart(points) {
   for (const point of points) {
     for (const stash of point.stashes || []) {
       if (!stash?.id || stashNames.has(stash.id)) {
-        if (stash?.id && stash.name) stashNames.set(stash.id, stash.name);
+        if (stash?.id && stash.name) stashNames.set(stash.id, poe1TabName(stash.name));
         continue;
       }
-      stashNames.set(stash.id, stash.name || "Stash");
+      stashNames.set(stash.id, poe1TabName(stash.name || "Stash"));
       stashOrder.push(stash.id);
     }
   }
@@ -13295,6 +13352,7 @@ function wealthDonut(parts, activeCategory = null) {
 }
 
 function poe1WealthCategory(slot) {
+  if (poe1SlotBeast(slot)) return poe1WealthQuote(slot)?.type || "Beast";
   if (/^Inscribed Ultimatum$/i.test(slot.name)) return "InscribedUltimatum";
   return poe1WealthQuote(slot)?.type || "Currency";
 }
@@ -13329,7 +13387,9 @@ function renderWealth() {
     if (lowVolume || ignoredWealth(slot.name)) return false;
     const unit = wealthUnit(slot.name, slot);
     const count = Number(slot.count);
-    if (unit == null || !(count > 0) || belowWealthMinimum(unit, count)) return false;
+    const beast = poe1SlotBeast(slot);
+    if (!(count > 0) || (!beast && (unit == null || belowWealthMinimum(unit, count)))) return false;
+    if (beast && unit != null && belowWealthMinimum(unit, count)) return false;
     return !draft.categoryFilter || poe1WealthCategory(slot) === draft.categoryFilter;
   }).sort((a, b) => {
     if (sort === "name") return a.name.localeCompare(b.name);
@@ -13346,7 +13406,10 @@ function renderWealth() {
     const each = unit == null ? (poe1 ? "—" : `<span class="muted">unpriced</span>`) : wealthShown(unit);
     const line = unit == null || !(count > 0) ? "—" : wealthShown(unit * count);
     const art = poe1 && slot.icon ? gameIcon(slot.icon) : "";
+    const beastLabel = poe1 ? poe1BeastPriceName(slot) : "";
+    const itemLabel = beastLabel || slot.name;
     let variant = "";
+    if (beastLabel && priceKey(beastLabel) !== priceKey(slot.name)) variant = `<small>${esc(slot.name)}</small>`;
     if (poe1 && slot.frameType === 4) {
       variant = `<small>Level ${esc(slot.gemLevel ?? "?")} · ${esc(slot.gemQuality || 0)}% quality${slot.corrupted ? " · corrupted" : ""}</small>`;
     }
@@ -13365,8 +13428,8 @@ function renderWealth() {
       variant = `<small title="Exchange volume per hour in Chaos Orbs">${esc(volumeLabel)}c/h</small>`;
     }
     return `<tr${poe1 && ignoredWealth(slot.name) ? ' class="wealth-excluded"' : ""}>
-      <td><div class="wealth-item">${poe1 ? `<button type="button" class="wealth-include" data-wealth-ignore="${esc(slot.name)}"${lowVolume ? ' data-wealth-low-volume' : ""} aria-label="${excluded ? "Include" : "Exclude"} ${esc(slot.name)}" aria-pressed="${!excluded}" title="Include or exclude all stacks with this name">${excluded ? "−" : "✓"}</button>` : ""}${art ? `<img class="item-icon" src="${esc(art)}" alt="">` : itemIconHtml(slot.name)}<span>${esc(slot.name)}${variant}</span></div></td>
-      <td><span class="wealth-stash">${esc(slot.stashName || "")}</span></td>
+      <td><div class="wealth-item">${poe1 ? `<button type="button" class="wealth-include" data-wealth-ignore="${esc(slot.name)}"${lowVolume ? ' data-wealth-low-volume' : ""} aria-label="${excluded ? "Include" : "Exclude"} ${esc(itemLabel)}" aria-pressed="${!excluded}" title="Include or exclude all stacks with this name">${excluded ? "−" : "✓"}</button>` : ""}${art ? `<img class="item-icon" src="${esc(art)}" alt="">` : itemIconHtml(itemLabel)}<span>${esc(itemLabel)}${variant}</span></div></td>
+      <td><span class="wealth-stash">${esc(poe1TabName(slot.stashName || ""))}</span></td>
       <td class="num">${esc(wealthCountText(count))}</td>
       <td class="num">${each}</td>
       <td class="num wealth-line">${line}</td>
@@ -13375,7 +13438,7 @@ function renderWealth() {
   if (poe1) askPoe1Session();
   const stashRows = poe1
     ? draft.poe1Tabs.length ? poe1WealthTabs().map(tab => ({ ...tab, id: String(tab.index) }))
-      : [...new Map(slots.map(slot => [slot.stash, slot.stashName || "Stash"])).entries()].map(([id, name]) => ({ id, name }))
+      : [...new Map(slots.map(slot => [slot.stash, poe1TabName(slot.stashName || "Stash")])).entries()].map(([id, name]) => ({ id, name }))
     : WEALTH_STASHES.map(stash => ({ id: stash.id, name: stash.name }));
   const totalsById = new Map(wealthStashTotals(slots).map(row => [row.id, row.total]));
   const byStash = stashRows.map(stash => ({ name: stash.name, value: totalsById.get(stash.id) || 0 }));
@@ -13447,7 +13510,6 @@ function renderWealth() {
     <article class="panel wealth-sheet">
       <div class="wealth-toolbar">
         <input id="wealth-find" value="${esc(draft.find || "")}" placeholder="Search items" ${draft.busy ? "disabled" : ""}>
-        ${poe1 && draft.categoryFilter ? `<button type="button" class="btn ghost" data-wealth-category="" aria-label="Clear category filter">${esc(econTypeLabel(draft.categoryFilter))} ×</button>` : ""}
         ${!poe1 ? `<select id="wealth-stash-filter" ${draft.busy ? "disabled" : ""}>
           <option value="">All stashes</option>
           ${stashRows.map(stash => `<option value="${esc(stash.id)}" ${draft.stashFilter === stash.id ? "selected" : ""}>${esc(stash.name)}</option>`).join("")}
@@ -14569,20 +14631,32 @@ function onClick(event) {
       const draft = wealthDraft();
       const key = category.dataset.wealthCategory;
       draft.categoryFilter = key === draft.categoryFilter ? "" : key;
-      if (draft.categoryFilter) {
-        draft.stashFilter = "";
-        draft.find = "";
-        draft.itemFilter = "all";
-      }
       draft.limit = 100;
       repaintWealth();
       return;
     }
-    if (event.target.closest("[data-wealth-manage-tabs]")) {
+    const hiddenToggle = event.target.closest("[data-poe1-hidden-toggle]");
+    if (hiddenToggle) {
       const draft = wealthDraft();
-      draft.manageTabs = !draft.manageTabs;
+      draft.hiddenOpen = !draft.hiddenOpen;
       repaintWealth();
-      document.querySelector("[data-wealth-manage-tabs]")?.focus();
+      document.querySelector("[data-poe1-hidden-toggle]")?.focus();
+      return;
+    }
+    const stashAll = event.target.closest("[data-poe1-stash-all]");
+    if (stashAll) {
+      const draft = wealthDraft();
+      const on = stashAll.dataset.poe1StashAll === "1";
+      const league = wealthLeague();
+      const bag = { ...(state.poe1StashOn?.[league] || {}) };
+      for (const tab of draft.poe1Tabs || []) bag[String(tab.index)] = on;
+      state.poe1StashOn = { ...(state.poe1StashOn || {}), [league]: bag };
+      if (!on) draft.stashFilter = "";
+      try { save(); } catch { /* the buttons still show */ }
+      publishWealthLive();
+      repaintWealth();
+      document.querySelector(`[data-poe1-stash-all="${stashAll.dataset.poe1StashAll}"]`)?.focus();
+      scheduleWealthRefresh();
       return;
     }
     const tab = event.target.closest("[data-wealth-select-tab]");
@@ -15198,13 +15272,13 @@ function onChange(event) {
     try { save(); } catch { /* the checkbox still shows */ }
     const draft = wealthDraft();
     if (draft.stashFilter === target.dataset.poe1Stash && !target.checked) draft.stashFilter = "";
-    const scroll = target.closest(".wealth-poe1-tabs")?.scrollTop || 0;
+    const scroll = target.closest(".wealth-stash-nav")?.scrollTop || 0;
     publishWealthLive();
     repaintWealth();
-    const picker = document.querySelector(".wealth-poe1-tabs");
+    const picker = document.querySelector(".wealth-stash-nav");
     if (picker) {
       picker.scrollTop = scroll;
-      picker.querySelector(`[data-poe1-stash="${Number(target.dataset.poe1Stash)}"]`)?.focus({ preventScroll: true });
+      picker.querySelector(`[data-poe1-stash="${CSS.escape(String(target.dataset.poe1Stash))}"]`)?.focus({ preventScroll: true });
     }
     scheduleWealthRefresh();
     return;
@@ -15865,7 +15939,7 @@ function poe1CurrencyExchangeQuote(name) {
   if (poe1Prices.league !== econLeagueName()) return null;
   const key = poe1MarketNameKey(name);
   let fallback = null;
-  for (const type of [...POE1_GENERAL_PRICES, "Invitation"]) {
+  for (const type of [...POE1_GENERAL_PRICES, "Invitation", "Beast"]) {
     for (const row of poe1Prices.tables[type] || []) {
       if (row.lowConfidence || !Number.isFinite(row.amount) || row.amount <= 0 || poe1MarketNameKey(row.name) !== key) continue;
       if (row.source !== "poe.watch") return row;
@@ -15930,20 +16004,21 @@ function currencyRateCell(label, count, worth, sourceName) {
 }
 
 function currencyOverlayHtml(drop) {
+  const shownName = poe1BeastPriceName(drop) || drop.name;
   const qty = Math.max(1, Number(drop.qty) || 1);
   const stackMax = Math.max(0, Number(drop.stackMax) || 0);
   const poe1 = activeGame() === "poe1";
-  const quote = poe1 ? poe1CurrencyExchangeQuote(drop.name) : null;
-  const divine = quote ? null : ninjaCurrencyPrice(drop.name);
+  const quote = poe1 ? poe1CurrencyExchangeQuote(shownName) : null;
+  const divine = quote ? null : ninjaCurrencyPrice(shownName);
   const have = currencyLotWorth(qty, quote, divine);
   const stack = stackMax > 1 ? currencyLotWorth(stackMax, quote, divine) : "";
-  const rates = currencyRateCell("You have", qty, have, drop.name) + (stack && stackMax !== qty ? currencyRateCell("Stack", stackMax, stack, drop.name) : "");
+  const rates = currencyRateCell("You have", qty, have, shownName) + (stack && stackMax !== qty ? currencyRateCell("Stack", stackMax, stack, shownName) : "");
   const at = poe1 ? (poe1Prices.league === econLeagueName() ? poe1Prices.fetchedAt : 0) : prices.fetchedAt;
   const note = at ? `Updated ${formatWhen(at)}` : "No price update received yet";
   const missing = /divination/i.test(drop?.rarity || drop?.className || "")
     ? "No price available for this divination card in the selected league."
     : poe1 ? "No market estimate for this item in the selected league." : "No price available for this currency in the selected league.";
-  const who = `<div class="currency-rate-who">${itemIconHtml(drop.name, "sm")}<span class="item-tip-name">${esc(drop.name)}</span></div>`;
+  const who = `<div class="currency-rate-who">${itemIconHtml(shownName, "sm")}<span class="item-tip-name">${esc(shownName)}</span></div>`;
   return `<article class="price-overlay-card item-tip-card is-currency" data-overlay-item="${esc(drop.id || "")}"><div class="price-overlay-shell"><div class="price-overlay-main">
     ${overlayBarHtml()}<div class="price-overlay-body">
     <div class="currency-summary">${rates ? `<div class="currency-rates">${rates}</div>` : `${who}<p>${missing}</p>`}<p class="muted">${esc(note)}</p></div>

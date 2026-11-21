@@ -62,6 +62,8 @@ sealed class TrackerWindow : Form
     const int HotWealthId = 6;
     static readonly Size CompanionMinimum = new(900, 640);
     double _companionWindowScale = 1;
+    double _companionAspect = 1008.0 / 677.0;
+    Size _companionSizeAtDrag;
     Rectangle _lastCompanionArea;
     Size ScaledCompanionMinimum => new((int)Math.Round(CompanionMinimum.Width * _companionWindowScale), (int)Math.Round(CompanionMinimum.Height * _companionWindowScale));
     bool _launcherHotkeyRegistered;
@@ -355,6 +357,39 @@ sealed class TrackerWindow : Form
             Math.Clamp(bounds.Y, area.Top, area.Bottom - height), width, height);
     }
 
+    Rectangle LockCompanionShape(Rectangle proposed, int edge, Rectangle area)
+    {
+        var ratio = _companionAspect > 0.4 ? _companionAspect : 1008.0 / 677.0;
+        var minW = Math.Min(ScaledCompanionMinimum.Width, area.Width);
+        var minH = Math.Min(ScaledCompanionMinimum.Height, area.Height);
+        var width = Math.Max(1, proposed.Width);
+        var height = Math.Max(1, proposed.Height);
+        if (edge is 1 or 2) height = (int)Math.Round(width / ratio);
+        else if (edge is 3 or 6) width = (int)Math.Round(height * ratio);
+        else height = (int)Math.Round(width / ratio);
+        if (width < minW) { width = minW; height = (int)Math.Round(width / ratio); }
+        if (height < minH) { height = minH; width = (int)Math.Round(height * ratio); }
+        if (width > area.Width) { width = area.Width; height = (int)Math.Round(width / ratio); }
+        if (height > area.Height) { height = area.Height; width = (int)Math.Round(height * ratio); }
+        width = Math.Clamp(width, Math.Min(minW, area.Width), area.Width);
+        height = Math.Clamp(height, Math.Min(minH, area.Height), area.Height);
+        var left = edge is 1 or 4 or 7 ? proposed.Right - width : proposed.Left;
+        var top = edge is 3 or 4 or 5 ? proposed.Bottom - height : proposed.Top;
+        left = Math.Clamp(left, area.Left, Math.Max(area.Left, area.Right - width));
+        top = Math.Clamp(top, area.Top, Math.Max(area.Top, area.Bottom - height));
+        return new Rectangle(left, top, width, height);
+    }
+
+    void RememberCompanionScale()
+    {
+        var area = CompanionArea();
+        var basis = area.Width * 0.5328;
+        if (basis < 1 || Width < 1) return;
+        _companionWindowScale = Math.Clamp(Width / basis, 0.7, 1.65);
+        if (Height > 0) _companionAspect = Width / (double)Height;
+        PushJson(new { type = "app-scaled", scale = _companionWindowScale });
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     struct CompanionWindowPosition
     {
@@ -539,6 +574,12 @@ sealed class TrackerWindow : Form
                 m.Result = IntPtr.Zero;
                 return;
             }
+            if (m.Msg == 0x231)
+            {
+                _companionSizeAtDrag = Size;
+                if (Height > 0) _companionAspect = Width / (double)Height;
+            }
+            if (m.Msg == 0x232 && Size != _companionSizeAtDrag) RememberCompanionScale();
             var area = m.Msg is 0x214 or 0x216 or 0x46 ? CompanionArea() : Rectangle.Empty;
             if (!area.IsEmpty && m.LParam != IntPtr.Zero)
             {
@@ -546,7 +587,7 @@ sealed class TrackerWindow : Form
                 {
                     var rect = Rectangle.FromLTRB(Marshal.ReadInt32(m.LParam), Marshal.ReadInt32(m.LParam, 4),
                         Marshal.ReadInt32(m.LParam, 8), Marshal.ReadInt32(m.LParam, 12));
-                    var fit = FitCompanionBounds(rect, area);
+                    var fit = m.Msg == 0x214 ? LockCompanionShape(rect, m.WParam.ToInt32(), area) : FitCompanionBounds(rect, area);
                     Marshal.WriteInt32(m.LParam, fit.Left);
                     Marshal.WriteInt32(m.LParam, 4, fit.Top);
                     Marshal.WriteInt32(m.LParam, 8, fit.Right);
@@ -632,7 +673,7 @@ sealed class TrackerWindow : Form
             if (m.Result == (IntPtr)htClient)
             {
                 var pt = PointToClient(Cursor.Position);
-                const int grip = 8;
+                const int grip = 12;
                 var left = pt.X <= grip;
                 var right = pt.X >= ClientSize.Width - grip;
                 var top = pt.Y <= grip;
@@ -2773,14 +2814,14 @@ sealed class TrackerWindow : Form
         var listed = new JsonArray();
         foreach (var tab in tabRows.EnumerateArray())
         {
-            if (tab.TryGetProperty("hidden", out var hidden) && hidden.ValueKind == JsonValueKind.True) continue;
+            var hiddenTab = tab.TryGetProperty("hidden", out var hidden) && hidden.ValueKind == JsonValueKind.True;
             var index = tab.TryGetProperty("i", out var indexEl) && JsonInt(indexEl, out var indexN) ? indexN : tabs.Count;
             var name = tab.TryGetProperty("n", out var nameEl) ? JsonString(nameEl) : "Stash";
             if (string.IsNullOrWhiteSpace(name)) name = "Stash";
             name = name.Trim();
             tabs.Add((index, name));
             var type = tab.TryGetProperty("type", out var typeEl) ? JsonString(typeEl) : "";
-            listed.Add(new JsonObject { ["index"] = index, ["name"] = name, ["type"] = type, ["colour"] = Poe1TabColour(tab) });
+            listed.Add(new JsonObject { ["index"] = index, ["name"] = name, ["type"] = type, ["colour"] = Poe1TabColour(tab), ["hidden"] = hiddenTab });
         }
         if (only is not null) tabs = tabs.Where(tab => only.Contains(tab.Index)).ToList();
         if (only is null || tabs.Count == 0)
@@ -3479,7 +3520,7 @@ sealed class TrackerWindow : Form
             }
             if (type == "app-scale")
             {
-                var scale = root.TryGetProperty("scale", out var appScaleEl) && appScaleEl.ValueKind == JsonValueKind.Number && appScaleEl.TryGetDouble(out var appScale) && double.IsFinite(appScale) ? Math.Clamp(appScale, 0.75, 1.25) : 1;
+                var scale = root.TryGetProperty("scale", out var appScaleEl) && appScaleEl.ValueKind == JsonValueKind.Number && appScaleEl.TryGetDouble(out var appScale) && double.IsFinite(appScale) ? Math.Clamp(appScale, 0.7, 1.65) : 1;
                 BeginInvoke(() => SetCompanionWindowScale(scale));
                 return;
             }
