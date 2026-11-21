@@ -60,12 +60,44 @@ sealed class TrackerWindow : Form
     const int HotHideoutId = 4;
     const int HotSettingsId = 5;
     const int HotWealthId = 6;
+    const double CompanionRefWidth = 1920;
+    const double CompanionRefHeight = 1080;
+    const double CompanionWidthOfGame = 0.5328;
+    const double CompanionHeightOfGame = 0.6048;
     static readonly Size CompanionMinimum = new(900, 640);
     double _companionWindowScale = 1;
-    double _companionAspect = 1008.0 / 677.0;
+    double _companionAspect = (CompanionRefWidth * CompanionWidthOfGame) / (CompanionRefHeight * CompanionHeightOfGame);
     Size _companionSizeAtDrag;
     Rectangle _lastCompanionArea;
-    Size ScaledCompanionMinimum => new((int)Math.Round(CompanionMinimum.Width * _companionWindowScale), (int)Math.Round(CompanionMinimum.Height * _companionWindowScale));
+    // Scale against a 1920x1080 frame. A custom client around 1920 wide keeps that size.
+    double CompanionFit(Rectangle area)
+    {
+        if (area.Width < 1 || area.Height < 1) return 1;
+        var widthFit = area.Width / CompanionRefWidth;
+        var heightFit = area.Height / CompanionRefHeight;
+        if (widthFit is >= 0.85 and <= 1.2 && heightFit >= 0.65) return 1;
+        return Math.Min(widthFit, heightFit);
+    }
+    double CompanionAspectRatio() => _companionAspect > 0.4 ? _companionAspect : (CompanionRefWidth * CompanionWidthOfGame) / (CompanionRefHeight * CompanionHeightOfGame);
+    Size CompanionFloor(Rectangle area)
+    {
+        var fit = CompanionFit(area);
+        return new Size(
+            Math.Max(1, (int)Math.Round(CompanionMinimum.Width * fit * _companionWindowScale)),
+            Math.Max(1, (int)Math.Round(CompanionMinimum.Height * fit * _companionWindowScale)));
+    }
+    Size CompanionSizeFor(Rectangle area, double scale)
+    {
+        var fit = CompanionFit(area);
+        var ratio = CompanionAspectRatio();
+        var maxW = Math.Max(1, area.Width - 24);
+        var maxH = Math.Max(1, area.Height - 24);
+        var width = Math.Max(1, (int)Math.Round(CompanionRefWidth * CompanionWidthOfGame * fit * scale));
+        var height = Math.Max(1, (int)Math.Round(width / ratio));
+        if (width > maxW) { width = maxW; height = Math.Max(1, (int)Math.Round(width / ratio)); }
+        if (height > maxH) { height = maxH; width = Math.Max(1, (int)Math.Round(height * ratio)); }
+        return new Size(Math.Clamp(width, 1, area.Width), Math.Clamp(height, 1, area.Height));
+    }
     bool _launcherHotkeyRegistered;
     bool _hotkeysPaused;
     bool _companionAboveGame;
@@ -327,11 +359,12 @@ sealed class TrackerWindow : Form
         var area = CompanionArea();
         if (area.IsEmpty) return;
         _lastCompanionArea = area;
-        var minimum = new Size(Math.Min(ScaledCompanionMinimum.Width, area.Width), Math.Min(ScaledCompanionMinimum.Height, area.Height));
+        var size = CompanionSizeFor(area, _companionWindowScale);
+        var floor = CompanionFloor(area);
+        var minimum = new Size(
+            Math.Min(floor.Width, Math.Min(size.Width, area.Width)),
+            Math.Min(floor.Height, Math.Min(size.Height, area.Height)));
         if (MinimumSize != minimum) MinimumSize = minimum;
-        var size = new Size(
-            Math.Max(minimum.Width, Math.Min((int)(area.Width * 0.5328 * _companionWindowScale), area.Width - 24)),
-            Math.Max(minimum.Height, Math.Min((int)(area.Height * 0.6048 * _companionWindowScale), area.Height - 24)));
         var point = recenter
             ? new Point(area.Left + Math.Max(0, (area.Width - size.Width) / 2), area.Top + Math.Max(0, (area.Height - size.Height) / 2))
             : Location;
@@ -351,17 +384,28 @@ sealed class TrackerWindow : Form
 
     Rectangle FitCompanionBounds(Rectangle bounds, Rectangle area)
     {
-        var width = Math.Clamp(bounds.Width, Math.Min(ScaledCompanionMinimum.Width, area.Width), area.Width);
-        var height = Math.Clamp(bounds.Height, Math.Min(ScaledCompanionMinimum.Height, area.Height), area.Height);
+        var floor = CompanionFloor(area);
+        var width = Math.Clamp(bounds.Width, Math.Min(floor.Width, area.Width), area.Width);
+        var height = Math.Clamp(bounds.Height, Math.Min(floor.Height, area.Height), area.Height);
+        if (width != bounds.Width || height != bounds.Height)
+        {
+            var ratio = CompanionAspectRatio();
+            var fittedH = Math.Max(1, (int)Math.Round(width / ratio));
+            if (fittedH > height) { height = Math.Max(1, height); width = Math.Max(1, (int)Math.Round(height * ratio)); }
+            else height = fittedH;
+            width = Math.Clamp(width, 1, area.Width);
+            height = Math.Clamp(height, 1, area.Height);
+        }
         return new Rectangle(Math.Clamp(bounds.X, area.Left, area.Right - width),
             Math.Clamp(bounds.Y, area.Top, area.Bottom - height), width, height);
     }
 
     Rectangle LockCompanionShape(Rectangle proposed, int edge, Rectangle area)
     {
-        var ratio = _companionAspect > 0.4 ? _companionAspect : 1008.0 / 677.0;
-        var minW = Math.Min(ScaledCompanionMinimum.Width, area.Width);
-        var minH = Math.Min(ScaledCompanionMinimum.Height, area.Height);
+        var ratio = CompanionAspectRatio();
+        var floor = CompanionFloor(area);
+        var minW = Math.Min(floor.Width, area.Width);
+        var minH = Math.Min(floor.Height, area.Height);
         var width = Math.Max(1, proposed.Width);
         var height = Math.Max(1, proposed.Height);
         if (edge is 1 or 2) height = (int)Math.Round(width / ratio);
@@ -383,7 +427,7 @@ sealed class TrackerWindow : Form
     void RememberCompanionScale()
     {
         var area = CompanionArea();
-        var basis = area.Width * 0.5328;
+        var basis = CompanionRefWidth * CompanionWidthOfGame * CompanionFit(area);
         if (basis < 1 || Width < 1) return;
         _companionWindowScale = Math.Clamp(Width / basis, 0.7, 1.65);
         if (Height > 0) _companionAspect = Width / (double)Height;
@@ -632,8 +676,9 @@ sealed class TrackerWindow : Form
             Marshal.WriteInt32(m.LParam, 20, area.Top - screen.Bounds.Top);
             if (!gameArea.IsEmpty)
             {
-                Marshal.WriteInt32(m.LParam, 24, Math.Min(ScaledCompanionMinimum.Width, area.Width));
-                Marshal.WriteInt32(m.LParam, 28, Math.Min(ScaledCompanionMinimum.Height, area.Height));
+                var floor = CompanionFloor(area);
+                Marshal.WriteInt32(m.LParam, 24, Math.Min(floor.Width, area.Width));
+                Marshal.WriteInt32(m.LParam, 28, Math.Min(floor.Height, area.Height));
                 Marshal.WriteInt32(m.LParam, 32, area.Width);
                 Marshal.WriteInt32(m.LParam, 36, area.Height);
             }
@@ -3399,7 +3444,7 @@ sealed class TrackerWindow : Form
         _launcher = new GameLauncherForm(GameHasFocus, () => _gameMenus.Hidden, UpdateLauncherShortcut,
             Path.Combine(appData, "launcher-position.json"),
             Path.Combine(appData, "www", "still-sane-sigil.png"),
-            () => OpenCompanionView("dash"), () => OpenCompanionView("settings"), RefreshWealthFromButton, RedeemTesterCode);
+            () => OpenCompanionView("dash"), RedeemTesterCode);
         _testerAccess = new FoundingTesterAccess(appData);
         ApplyTesterAppearance();
         _gameMenuConfigPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),

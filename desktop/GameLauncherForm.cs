@@ -8,7 +8,7 @@ namespace ExileLedger;
 // An independent desktop window. Uses only foreground-window identity and bounds.
 sealed class GameLauncherForm : Form
 {
-    const int IconSize = 52;
+    const int IconAt1080 = 48;
     const int TesterWavePeriod = 3400;
     const uint GetClientAreaAnimation = 0x1042;
     readonly Func<bool> _gameFocused;
@@ -18,6 +18,7 @@ sealed class GameLauncherForm : Form
     readonly System.Windows.Forms.Timer _watch = new() { Interval = 200 };
     readonly System.Windows.Forms.Timer _testerWave = new() { Interval = 33 };
     readonly ContextMenuStrip _menu = new() { ShowImageMargin = false, ShowCheckMargin = true };
+    readonly ToolStripMenuItem _lockItem = new("Lock position");
     readonly ToolStripMenuItem _redeemTesterCode = new("Redeem tester code…");
     readonly MenuMouseProc _menuMouseProc;
     IntPtr _menuMouseHook;
@@ -28,24 +29,26 @@ sealed class GameLauncherForm : Form
     IntPtr _gameWindow;
     Point _pressCursor, _pressLocation;
     bool _pressed, _dragged;
-    int _side = IconSize;
+    int _side = IconAt1080;
     int _wealthWidth;
+    int _pad = 4;
     bool _useGoldIcon;
     string _wealth = "";
-    readonly Action _openWealth;
+    readonly Action _openApp;
 
     sealed record Preferences(double X = 0.98, double Y = 0.3, bool Locked = true);
 
     public GameLauncherForm(Func<bool> gameFocused, Func<bool> menuHidden, Action<bool> focusChanged,
-        string settingsPath, string imagePath, Action dashboard, Action settings, Action wealth, Action redeemTesterCode)
+        string settingsPath, string imagePath, Action openApp, Action redeemTesterCode)
     {
         _gameFocused = gameFocused;
         _menuHidden = menuHidden;
         _focusChanged = focusChanged;
         _settingsPath = settingsPath;
-        _openWealth = wealth;
+        _openApp = openApp;
         _menuMouseProc = HandleMenuMouse;
-        Font = new Font("Segoe UI", 10, FontStyle.Bold);
+        Font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
+        AutoScaleMode = AutoScaleMode.None;
         try
         {
             var stored = JsonSerializer.Deserialize<Preferences>(File.ReadAllText(settingsPath));
@@ -60,35 +63,32 @@ sealed class GameLauncherForm : Form
         StartPosition = FormStartPosition.Manual;
         TopMost = true;
         DoubleBuffered = true;
-        ClientSize = new Size(IconSize, IconSize);
+        ClientSize = new Size(IconAt1080, IconAt1080);
         TransparencyKey = Color.Magenta;
         BackColor = Color.Magenta;
         Cursor = Cursors.Hand;
-        AccessibleName = "Still Sane, Exile? menu";
+        AccessibleName = "Still Sane, Exile?";
         _menu.BackColor = Color.FromArgb(25, 24, 19);
         _menu.ForeColor = Color.FromArgb(238, 223, 190);
         _menu.Font = new Font("Segoe UI", 10);
         _menu.Renderer = new DarkMenuRenderer();
-        _menu.Items.Add("Open SSE", null, (_, _) => RunMenuAction(dashboard));
-        _menu.Items.Add("Settings", null, (_, _) => RunMenuAction(settings));
+        _menu.Items.Add("Open SSE", null, (_, _) => RunMenuAction(_openApp));
         _menu.Items.Add(new ToolStripSeparator());
-        var locked = new ToolStripMenuItem("Lock position") { Checked = _preferences.Locked, CheckOnClick = true };
-        void UpdateLockAppearance()
+        _lockItem.Click += (_, _) => ToggleLock();
+        _menu.Items.Add(_lockItem);
+        _menu.Items.Add("Reset position", null, (_, _) =>
         {
-            locked.Text = _preferences.Locked ? "Unlock position" : "Lock position";
-            Cursor = _preferences.Locked ? Cursors.Hand : Cursors.SizeAll;
-        }
-        locked.CheckedChanged += (_, _) =>
-        {
-            _preferences = _preferences with { Locked = locked.Checked };
-            UpdateLockAppearance();
+            _preferences = new();
+            ApplyLockCursor();
+            SyncLockItem();
             SavePosition();
-        };
-        UpdateLockAppearance();
-        _menu.Items.Add(locked);
-        _menu.Items.Add("Reset position", null, (_, _) => { _preferences = new(); locked.Checked = true; SavePosition(); });
+            if (_gameBounds.Width > 0) LayoutChrome();
+            Invalidate();
+        });
         _redeemTesterCode.Click += (_, _) => RunMenuAction(redeemTesterCode);
         _menu.Items.Add(_redeemTesterCode);
+        SyncLockItem();
+        ApplyLockCursor();
         _menu.Opened += (_, _) =>
         {
             if (_menuMouseHook == IntPtr.Zero)
@@ -120,21 +120,20 @@ sealed class GameLauncherForm : Form
             Capture = false;
             if (!_dragged)
             {
-                if (HitWealth(e.Location)) _openWealth();
-                else OpenMenu();
+                OpenMenu();
                 return;
             }
             var iconLeft = Left + _wealthWidth;
             _preferences = _preferences with
             {
                 X = (double)(iconLeft - _gameBounds.Left) / Math.Max(1, _gameBounds.Width - _side),
-                Y = (double)(Top - _gameBounds.Top) / Math.Max(1, _gameBounds.Height - Height),
+                Y = (double)(Top - _gameBounds.Top) / Math.Max(1, _gameBounds.Height - _side),
             };
             SavePosition();
         };
         MouseCaptureChanged += (_, _) => { if (!Capture) _pressed = false; };
         VisibleChanged += (_, _) => UpdateTesterWave();
-        _testerWave.Tick += (_, _) => Invalidate(new Rectangle(_wealthWidth, 0, _side, _side));
+        _testerWave.Tick += (_, _) => Invalidate(IconBounds());
         _watch.Tick += (_, _) => RefreshVisibility();
         _watch.Start();
     }
@@ -179,16 +178,16 @@ sealed class GameLauncherForm : Form
         get { var cp = base.CreateParams; cp.ExStyle |= 0x08000080; return cp; } // No activation, tool window.
     }
 
-    public void OpenMenu()
+    void OpenMenu()
     {
         if (!Visible || !GameAvailable) return;
         if (!_gameFocused() && GetForegroundWindow() != Handle && !_menu.Visible) return;
-        _menu.Show(this, new Point(0, Height));
+        SyncLockItem();
+        _menu.Show(this, new Point(Width, Height), ToolStripDropDownDirection.BelowLeft);
     }
 
     IntPtr HandleMenuMouse(int code, IntPtr message, IntPtr data)
     {
-        // Only observe button presses while the menu is open. The destination still receives each click.
         if (code >= 0 && _menu.Visible && IsHandleCreated &&
             message.ToInt64() is 0x201 or 0x204 or 0x207 or 0x20B)
         {
@@ -210,9 +209,10 @@ sealed class GameLauncherForm : Form
     {
         _menu.Close();
         Hide();
-        // Restore the app after the native popup has finished its own focus cleanup.
         BeginInvoke(action);
     }
+
+    void SyncLockItem() => _lockItem.Text = _preferences.Locked ? "Unlock position" : "Lock position";
 
     Point ClampLocation(Point point) => new(
         Math.Clamp(point.X, _gameBounds.Left, Math.Max(_gameBounds.Left, _gameBounds.Right - Width)),
@@ -289,8 +289,6 @@ sealed class GameLauncherForm : Form
             return;
         }
         if (_pressed) return;
-        var dpi = GetDpiForWindow(_gameWindow);
-        _side = Math.Max(32, (int)Math.Round(IconSize * (dpi == 0 ? 96 : dpi) / 96.0));
         LayoutChrome();
         if (_menuHidden())
         {
@@ -324,24 +322,69 @@ sealed class GameLauncherForm : Form
         if (Disposing || IsDisposed) return;
         var visible = Visible && _useGoldIcon;
         _testerWave.Enabled = visible && SystemParametersInfoW(GetClientAreaAnimation, 0, out var enabled, 0) && enabled != 0;
-        if (visible) Invalidate(new Rectangle(_wealthWidth, 0, _side, _side));
+        if (visible) Invalidate(IconBounds());
+    }
+
+    int Hud(int px) => Math.Max(1, (int)Math.Round(px * _side / 52.0));
+    float HudF(float px) => Math.Max(1f, px * _side / 52f);
+
+    double HudFit(int width, int height)
+    {
+        var widthFit = width / 1920.0;
+        var heightFit = height / 1080.0;
+        // A custom client around 1920 wide keeps the 1080p pill, even when the height is short.
+        if (widthFit is >= 0.85 and <= 1.2 && heightFit >= 0.65) return 1;
+        return Math.Min(widthFit, heightFit);
+    }
+
+    void ApplyHudScale()
+    {
+        if (_gameBounds.Width < 1 || _gameBounds.Height < 1) return;
+        var fit = HudFit(_gameBounds.Width, _gameBounds.Height);
+        var side = Math.Clamp((int)Math.Round(IconAt1080 * fit), 22, 64);
+        var points = (float)Math.Clamp(9.5 * side / 42.0, 7, 15);
+        var fontChanged = Font.Style != FontStyle.Bold || Math.Abs(Font.SizeInPoints - points) >= 0.2f;
+        if (side == _side && !fontChanged) return;
+        _side = side;
+        if (!fontChanged) return;
+        var next = new Font("Segoe UI", points, FontStyle.Bold);
+        var previous = Font;
+        Font = next;
+        previous.Dispose();
     }
 
     int WealthExtra()
     {
-        if (string.IsNullOrEmpty(_wealth)) return 0;
+        if (string.IsNullOrEmpty(_wealth)) return Hud(8);
         var measured = TextRenderer.MeasureText(_wealth, Font);
-        return measured.Width + 36;
+        return measured.Width + Hud(16);
     }
 
-    bool HitWealth(Point point) => _wealthWidth > 0 && point.X < _wealthWidth;
+    Rectangle IconBounds() => new(_wealthWidth, 0, _side, _side);
+    Rectangle BoxBounds()
+    {
+        var boxH = Math.Clamp((int)Math.Round(_side * 0.80), Math.Min(Hud(26), _side), Math.Max(Hud(26), _side - 2));
+        var top = Math.Max(0, (_side - boxH) / 2);
+        return new Rectangle(0, top, Math.Max(boxH, _wealthWidth + _side / 2), boxH);
+    }
+    void ApplyLockCursor() => Cursor = _preferences.Locked ? Cursors.Hand : Cursors.SizeAll;
+
+    void ToggleLock()
+    {
+        _preferences = _preferences with { Locked = !_preferences.Locked };
+        ApplyLockCursor();
+        SyncLockItem();
+        SavePosition();
+    }
 
     void LayoutChrome()
     {
+        ApplyHudScale();
+        _pad = Math.Max(3, Hud(4));
         _wealthWidth = WealthExtra();
         var iconX = _gameBounds.Left + (int)Math.Round((_gameBounds.Width - _side) * _preferences.X);
         var iconY = _gameBounds.Top + (int)Math.Round((_gameBounds.Height - _side) * _preferences.Y);
-        var size = new Size(_side + _wealthWidth, _side);
+        var size = new Size(_wealthWidth + _side, _side);
         if (Size != size)
         {
             Size = size;
@@ -363,37 +406,45 @@ sealed class GameLauncherForm : Form
         using var transparent = new SolidBrush(Color.Magenta);
         e.Graphics.FillRectangle(transparent, e.ClipRectangle);
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-        var icon = new Rectangle(_wealthWidth, 0, _side, _side);
-        if (_wealthWidth > 0 && e.ClipRectangle.Left < _wealthWidth)
+        var frame = BoxBounds();
+        var border = _useGoldIcon ? Color.FromArgb(242, 196, 78) : Color.FromArgb(90, 82, 68);
+        using (var path = Rounded(frame, Math.Max(3, Hud(4))))
+        using (var fill = new SolidBrush(Color.FromArgb(19, 18, 14)))
+        using (var pen = new Pen(border, _useGoldIcon ? HudF(2f) : HudF(1.25f)))
         {
-            var pill = new Rectangle(0, Math.Max(0, (_side - 34) / 2), _wealthWidth - 8, 34);
-            using var path = Rounded(pill, 17);
-            using var fill = new SolidBrush(Color.FromArgb(19, 18, 14));
-            using var pen = new Pen(Color.FromArgb(185, 157, 94), 1.5f);
             e.Graphics.FillPath(fill, path);
             e.Graphics.DrawPath(pen, path);
-            TextRenderer.DrawText(e.Graphics, _wealth, Font, pill, Color.FromArgb(238, 223, 190),
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }
-        if (!e.ClipRectangle.IntersectsWith(icon)) return;
-        if (_useGoldIcon)
+        var icon = IconBounds();
+        if (!string.IsNullOrEmpty(_wealth))
         {
-            PaintTesterIcon(e.Graphics, icon);
-            return;
+            var text = new Rectangle(Hud(10), frame.Y, Math.Max(1, _wealthWidth - Hud(8)), frame.Height);
+            TextRenderer.DrawText(e.Graphics, _wealth, Font, text, Color.FromArgb(238, 223, 190),
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         }
-        using var ring = new Pen(Color.FromArgb(185, 157, 94), 2);
-        using var disc = new SolidBrush(Color.FromArgb(19, 18, 14));
-        e.Graphics.FillEllipse(disc, icon.X + 2, icon.Y + 2, icon.Width - 5, icon.Height - 5);
-        e.Graphics.DrawEllipse(ring, icon.X + 2, icon.Y + 2, icon.Width - 5, icon.Height - 5);
-        if (_image is not null) e.Graphics.DrawImage(_image, new Rectangle(icon.X + 5, icon.Y + 5, icon.Width - 10, icon.Height - 10));
-        else TextRenderer.DrawText(e.Graphics, "SSE", Font, icon, Color.Wheat,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        if (e.ClipRectangle.IntersectsWith(icon))
+        {
+            if (_useGoldIcon) PaintTesterIcon(e.Graphics, icon);
+            else
+            {
+                using var ring = new Pen(Color.FromArgb(185, 157, 94), HudF(2));
+                using var disc = new SolidBrush(Color.FromArgb(19, 18, 14));
+                var inset = Hud(2);
+                var ringCut = Hud(5);
+                e.Graphics.FillEllipse(disc, icon.X + inset, icon.Y + inset, icon.Width - ringCut, icon.Height - ringCut);
+                e.Graphics.DrawEllipse(ring, icon.X + inset, icon.Y + inset, icon.Width - ringCut, icon.Height - ringCut);
+                var art = Hud(5);
+                if (_image is not null) e.Graphics.DrawImage(_image, new Rectangle(icon.X + art, icon.Y + art, icon.Width - art * 2, icon.Height - art * 2));
+                else TextRenderer.DrawText(e.Graphics, "SSE", Font, icon, Color.Wheat,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+        }
     }
 
     void PaintTesterIcon(Graphics graphics, Rectangle icon)
     {
-        var frame = Rectangle.Inflate(icon, -3, -3);
-        var portrait = Rectangle.Inflate(icon, -6, -6);
+        var frame = Rectangle.Inflate(icon, -Hud(3), -Hud(3));
+        var portrait = Rectangle.Inflate(icon, -Hud(6), -Hud(6));
         using var background = new SolidBrush(Color.FromArgb(36, 25, 12));
         // Give the antialiased gold rim a dark backing inside the color-keyed window.
         var smoothing = graphics.SmoothingMode;
@@ -430,7 +481,7 @@ sealed class GameLauncherForm : Form
             },
             Positions = new[] { 0f, .15f, .24f, .34f, .58f, .82f, 1f },
         };
-        using var rim = new Pen(gold, 3f);
+        using var rim = new Pen(gold, HudF(3f));
         graphics.DrawEllipse(rim, frame);
         using var innerRim = new Pen(Color.FromArgb(202, 135, 31));
         graphics.DrawEllipse(innerRim, portrait);
@@ -438,13 +489,13 @@ sealed class GameLauncherForm : Form
         if (_testerWave.Enabled)
         {
             var angle = (Environment.TickCount64 % TesterWavePeriod) * 360f / TesterWavePeriod;
-            PaintTesterWave(graphics, frame, angle);
+            PaintTesterWave(graphics, frame, angle, HudF(2.5f));
         }
     }
 
-    static void PaintTesterWave(Graphics graphics, Rectangle frame, float angle)
+    static void PaintTesterWave(Graphics graphics, Rectangle frame, float angle, float width)
     {
-        using var wave = new Pen(Color.FromArgb(36, 255, 197, 78), 2.5f);
+        using var wave = new Pen(Color.FromArgb(36, 255, 197, 78), width);
         graphics.DrawArc(wave, frame, angle - 150, 76);
         wave.Color = Color.FromArgb(65, 255, 224, 154);
         graphics.DrawArc(wave, frame, angle - 134, 44);
@@ -539,6 +590,7 @@ sealed class GameLauncherForm : Form
         public override Color SeparatorLight => Color.FromArgb(62, 53, 33);
         public override Color SeparatorDark => Color.FromArgb(90, 77, 49);
     }
+
     [StructLayout(LayoutKind.Sequential)] struct Rect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] struct NativePoint { public int X, Y; }
     delegate bool EnumProc(IntPtr window, IntPtr data);
@@ -548,14 +600,13 @@ sealed class GameLauncherForm : Form
     [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr message, IntPtr data);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetModuleHandle(string? name);
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr data);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr window, System.Text.StringBuilder text, int count);
-    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr window);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr window);
     [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr window, ref NativePoint point);
-    [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr window);
     [DllImport("user32.dll", ExactSpelling = true)] static extern bool SystemParametersInfoW(uint action, uint parameter, out int value, uint flags);
 }
