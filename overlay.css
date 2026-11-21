@@ -203,3 +203,61 @@ body {
 }
 
 .poe1-item-header .price-overlay-unid.is-on { text-transform: none; font-weight: 600; }
+
+.price-overlay-card.item-tip-card.is-currency .price-overlay-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.price-overlay-card.item-tip-card.is-currency .currency-summary {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+}
+.price-overlay-card.item-tip-card.is-currency .currency-rates {
+  flex: 1 1 auto;
+  min-height: 124px;
+}
+.price-overlay-card.item-tip-card.is-currency .currency-rate {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 9px 12px 10px;
+}
+.price-overlay-card.item-tip-card.is-currency .currency-rate-k {
+  font-size: 0.74rem;
+  letter-spacing: 0.1em;
+}
+.price-overlay-card.item-tip-card.is-currency .currency-rate-n {
+  font-size: 0.98rem;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.price-overlay-card.item-tip-card.is-currency .currency-rate-worth .item-icon,
+.price-overlay-card.item-tip-card.is-currency .currency-rate-who .item-icon {
+  width: 26px;
+  height: 26px;
+}
+.price-overlay-card.item-tip-card.is-currency .currency-rate-source .item-tip-name,
+.price-overlay-card.item-tip-card.is-currency .currency-rate-who .item-tip-name {
+  display: inline;
+  font-size: 0.78rem;
+  text-align: left;
+  letter-spacing: 0.03em;
+  line-height: 1.1;
+}
+.price-overlay-card.item-tip-card.is-currency .currency-rate-who {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 2px 0 8px;
+}
+.price-overlay-card.item-tip-card.is-currency .currency-summary > .muted {
+  flex: none;
+  margin: 6px 0 0;
+}

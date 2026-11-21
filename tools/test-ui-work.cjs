@@ -63,6 +63,7 @@ async function testPendingRequests() {
     normalizeRolls: () => [],
     pickedRolls: () => [],
     poe1TradeIdentity: async () => null,
+    poe1TradeName: item => item.name,
     poe1SearchCategory: () => '',
     tradeBaseType: () => drop.name,
     tradeCategory: () => '',
@@ -94,7 +95,8 @@ async function testPendingRequests() {
   };
 
   await trade.quoteRolledDrop(null, drop);
-  assert.equal(searches.length, 0, 'A search needs a manual request');
+  await trade.quoteRolledDrop(null, drop, false, true);
+  assert.equal(searches.length, 0, 'A rare search needs a manual request');
   assert.equal(trade.overlayLogDrop('', 'stale').drop, null, 'A stale control cannot act on the open item');
   assert.equal(trade.overlayLogDrop('', drop.id).drop, drop);
 
@@ -133,6 +135,21 @@ async function testPendingRequests() {
   await anotherLeague;
   assert.equal(drop.quote, undefined, 'PoE 1 cannot show a quote from the previous league');
   assert.equal(drop.quoting, undefined);
+  drop.rarity = 'Unique';
+  game = 'poe2';
+  await trade.quoteRolledDrop(null, drop, false, true);
+  assert.equal(searches.length, 3, 'PoE 2 uniques still require a manual check');
+  game = 'poe1';
+  waiting.enabled = true;
+  await trade.quoteRolledDrop(null, drop, false, true);
+  assert.equal(searches.length, 3, 'A unique automatic search skips an active rate limit');
+  waiting.enabled = false;
+  const unique = trade.quoteRolledDrop(null, drop, false, true);
+  await trade.quoteRolledDrop(null, drop, false, true);
+  assert.equal(searches.length, 4, 'Opening a PoE 1 unique starts one search');
+  searches[3].resolve({ amount: 3 });
+  await unique;
+  assert.equal(drop.quote.amount, 3);
 
   const toasts = [];
   const updates = [];

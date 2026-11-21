@@ -5886,6 +5886,7 @@ button.roll-chip:hover {
 .price-overlay-influence.is-hunter { color: #8ddea0; border-color: #3f8f55; }
 .price-overlay-influence.is-redeemer { color: #e7a0e0; border-color: #8d4d88; }
 .price-overlay-influence.is-warlord { color: #f0a090; border-color: #a85a48; }
+.price-overlay-influence:not(.is-on) { opacity: 0.4; }
 
 .price-overlay-mod.is-rune,
 .price-overlay-affix.is-rune,
@@ -6542,6 +6543,45 @@ body.click-away .price-overlay-x { display: none; }
 .price-overlay-rate-card .rate-table th, .price-overlay-rate-card .rate-table td { padding: 3px 7px; }
 .currency-summary { padding: 8px 0; }
 .currency-summary p { display: flex; justify-content: space-between; gap: 18px; }
+.currency-rates {
+  display: flex;
+  flex-direction: column;
+  border: 1px dashed rgba(176, 186, 204, 0.55);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.currency-rate {
+  min-width: 0;
+  padding: 8px 12px 9px;
+  text-align: center;
+}
+.currency-rate + .currency-rate { border-top: 1px dashed rgba(176, 186, 204, 0.4); }
+.currency-rate-k {
+  display: block;
+  color: #9aa6b8;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.currency-rate-n {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.currency-rate-worth {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.currency-rate-worth .item-icon { width: 22px; height: 22px; }
+.currency-rate-arrow { opacity: 0.7; }
 
 .private-tools { width: min(1040px, 94vw); max-height: 90vh; overflow: auto; padding: 24px; }
 .private-head { display:flex; justify-content:space-between; align-items:start; gap:18px; margin-bottom:18px; }

@@ -20,7 +20,8 @@ sealed class GameMenuVisibility
     readonly HashSet<string> _open = new();
     readonly HashSet<uint> _held = new();
     bool _chat;
-    public bool Hidden => _chat || _open.Count > 0;
+    // Only the inventory covers this button. Other panels stay visible so a stuck menu guess cannot hide it.
+    public bool Hidden => _open.Contains("open_inventory_panel") || _open.Contains("open_cosmetics_inventory");
 
     public void Configure(IEnumerable<string> lines)
     {

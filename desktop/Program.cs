@@ -91,11 +91,10 @@ sealed class TrackerWindow : Form
     readonly MovementShortcutState _movementShortcuts = new();
     readonly GameMenuVisibility _gameMenus = new();
     readonly System.Windows.Forms.Timer _wealthRefresh = new() { Interval = 60_000 };
-    readonly HashSet<(uint Modifiers, uint Key)> _registeredGameHotkeys = new();
     string? _gameMenuConfigPath;
     DateTime _gameMenuConfigStamp;
     long _nextGameMenuConfigCheck;
-    readonly List<(int id, uint modifiers, uint key)> _movementBindings = new();
+    readonly List<(int id, uint modifiers, uint key)> _gameKeyBindings = new();
     IntPtr _keyboardHook;
     KeyboardHookProc? _keyboardHookProc;
     IntPtr _hookForeground;
@@ -107,7 +106,6 @@ sealed class TrackerWindow : Form
     Task? _previewInitialization;
     int _previewGeneration;
     bool _previewEnabled;
-    GuideBrowserHost? _guideBrowser;
     NotifyIcon? _tray;
     FoundingTesterAccess? _testerAccess;
     bool _testerDialogOpen;
@@ -165,7 +163,6 @@ sealed class TrackerWindow : Form
             _launcher?.Dispose();
             _overlay?.Dispose();
             _previewOverlay?.Dispose();
-            _guideBrowser?.Dispose();
             _tray?.Dispose();
             trayMenu.Dispose();
         };
@@ -628,17 +625,6 @@ sealed class TrackerWindow : Form
                 return;
             }
             if (id == HotWealthId) { m.Result = IntPtr.Zero; return; }
-            var playing = FocusedGame();
-            if (playing.Length == 0) { base.WndProc(ref m); return; }
-            if (playing == "poe1")
-            {
-                if (id == HotPriceId) BeginInvoke(() => CaptureClipboardItem("price-item"));
-                else if (id == HotHideoutId) BeginInvoke(SendHideout);
-            }
-            else if (id == HotLogId) BeginInvoke(() => CaptureClipboardItem("log-item"));
-            else if (id == HotPriceId) BeginInvoke(() => CaptureClipboardItem("price-item"));
-            else if (id == HotNextId) BeginInvoke(() => PushHotkey("next-kill"));
-            else if (id == HotHideoutId) BeginInvoke(SendHideout);
         }
         if (m.Msg == wmNcHitTest && WindowState != FormWindowState.Maximized)
         {
@@ -776,7 +762,7 @@ sealed class TrackerWindow : Form
         PushJson(new { type = "active-game", game });
     }
 
-    void DispatchMovementShortcut(int id, uint key, uint scan, bool releaseMovement)
+    void DispatchGameShortcut(int id, uint key, uint scan, bool releaseMovement)
     {
         var playing = FocusedGame();
         if (releaseMovement && playing.Length > 0) keybd_event((byte)key, (byte)scan, 0x0002, 0);
@@ -787,7 +773,7 @@ sealed class TrackerWindow : Form
         else if (playing == "poe2" && id == HotNextId) PushHotkey("next-kill");
     }
 
-    IntPtr InterceptMovementShortcut(int code, IntPtr message, IntPtr data)
+    IntPtr InterceptGameShortcut(int code, IntPtr message, IntPtr data)
     {
         if (code < 0) return CallNextHookEx(_keyboardHook, code, message, data);
         var key = Marshal.PtrToStructure<HookKeyboardData>(data);
@@ -804,12 +790,13 @@ sealed class TrackerWindow : Form
         if (((GetAsyncKeyState(0x5B) | GetAsyncKeyState(0x5C)) & 0x8000) != 0) modifiers |= 8;
         var down = msg is 0x100 or 0x104;
         var gameFocused = GameHasFocus();
-        var decision = key.Key is 0x57 or 0x41 or 0x53 or 0x44
-            ? _movementShortcuts.Handle(key.Key, down, gameFocused, modifiers, _movementBindings)
+        var movement = key.Key is 0x57 or 0x41 or 0x53 or 0x44;
+        var decision = movement || _gameKeyBindings.Any(binding => binding.key == key.Key)
+            ? _movementShortcuts.Handle(key.Key, down, gameFocused, modifiers, _gameKeyBindings, _hookGame == "poe1" ? HotLogId : 0, _hookGame == "poe1" ? HotNextId : 0)
             : default;
         _gameMenus.Observe(key.Key, down, modifiers, gameFocused);
         if (decision.Action != 0)
-            BeginInvoke(() => DispatchMovementShortcut(decision.Action, key.Key, key.Scan, decision.ReleaseMovement));
+            BeginInvoke(() => DispatchGameShortcut(decision.Action, key.Key, key.Scan, movement && decision.ReleaseMovement));
         return decision.Block ? new IntPtr(1) : CallNextHookEx(_keyboardHook, code, message, data);
     }
 
@@ -820,17 +807,12 @@ sealed class TrackerWindow : Form
         _launcherHotkeyRegistered = false;
         if (_keyboardHook != IntPtr.Zero) UnhookWindowsHookEx(_keyboardHook);
         _keyboardHook = IntPtr.Zero;
-        _movementBindings.Clear();
-        _registeredGameHotkeys.Clear();
+        _gameKeyBindings.Clear();
         _movementShortcuts.Clear();
         _gameMenus.ClearHeldKeys();
         _hookForeground = IntPtr.Zero;
         _hookGame = "";
         UnregisterHotKey(Handle, HotWealthId);
-        try { UnregisterHotKey(Handle, HotLogId); } catch { /* ignore */ }
-        try { UnregisterHotKey(Handle, HotNextId); } catch { /* ignore */ }
-        try { UnregisterHotKey(Handle, HotPriceId); } catch { /* ignore */ }
-        try { UnregisterHotKey(Handle, HotHideoutId); } catch { /* ignore */ }
     }
 
     void ApplyHotkeys(string logSpec, string nextSpec, string priceSpec, string hideoutSpec = "F6")
@@ -847,11 +829,9 @@ sealed class TrackerWindow : Form
             shown = spec;
             if (!TryParseHotkey(spec, out var mod, out var vk, allowComma: id == HotPriceId)) return false;
             if (!used.Add((mod, vk))) return false;
-            var registered = RegisterHotKey(Handle, id, mod, vk);
-            if (registered) _registeredGameHotkeys.Add((mod & 15, vk));
-            if (registered && vk is 0x57 or 0x41 or 0x53 or 0x44)
-                _movementBindings.Add((id, mod, vk));
-            return registered;
+            if (id == HotWealthId) return RegisterHotKey(Handle, id, mod, vk);
+            _gameKeyBindings.Add((id, mod, vk));
+            return true;
         }
         var logOk = Bind(HotLogId, _hotLog, out _);
         var nextOk = Bind(HotNextId, _hotNext, out _);
@@ -867,7 +847,7 @@ sealed class TrackerWindow : Form
             {
                 type = "hotkey-status",
                 ok = false,
-                error = bad + " is already in use",
+                error = bad + " is invalid or already assigned",
             });
         }
     }
@@ -875,7 +855,7 @@ sealed class TrackerWindow : Form
     void EnsureGameKeyboardHook()
     {
         if (_keyboardHook != IntPtr.Zero) return;
-        _keyboardHookProc = InterceptMovementShortcut;
+        _keyboardHookProc = InterceptGameShortcut;
         _keyboardHook = SetWindowsHookEx(13, _keyboardHookProc, GetModuleHandle(null), 0);
         if (_keyboardHook == IntPtr.Zero)
             PushJson(new { type = "hotkey-status", ok = false,
@@ -1297,10 +1277,7 @@ sealed class TrackerWindow : Form
 
         public int WaitMs()
         {
-            var penalty = PenaltyUntil > DateTime.UtcNow ? (int)(PenaltyUntil - DateTime.UtcNow).TotalMilliseconds : 0;
-            var slot = 0;
-            foreach (var limit in Limits) slot = Math.Max(slot, limit.WaitMs());
-            return Math.Max(penalty, slot);
+            return PenaltyUntil > DateTime.UtcNow ? (int)(PenaltyUntil - DateTime.UtcNow).TotalMilliseconds : 0;
         }
 
         public void Borrow()
@@ -1530,29 +1507,21 @@ sealed class TrackerWindow : Form
         {
             /* fetch below */
         }
-        await Gate.WaitAsync();
-        try
+        if (Cache.TryGetValue(cacheKey, out hit) && DateTime.UtcNow - hit.at < TimeSpan.FromHours(12) && hit.status is >= 200 and < 300)
+            return hit.body;
+        if (!await WaitForSlot(limiter)) return null;
+        using var res = await TradeHttp.GetAsync(url);
+        NoteRate(res, limiter);
+        var body = await res.Content.ReadAsStringAsync();
+        var status = (int)res.StatusCode;
+        var looksJson = body.TrimStart().StartsWith('{');
+        if (res.IsSuccessStatusCode && looksJson)
         {
-            if (Cache.TryGetValue(cacheKey, out hit) && DateTime.UtcNow - hit.at < TimeSpan.FromHours(12) && hit.status is >= 200 and < 300)
-                return hit.body;
-            if (!await WaitForSlot(limiter)) return null;
-            using var res = await TradeHttp.GetAsync(url);
-            NoteRate(res, limiter);
-            var body = await res.Content.ReadAsStringAsync();
-            var status = (int)res.StatusCode;
-            var looksJson = body.TrimStart().StartsWith('{');
-            if (res.IsSuccessStatusCode && looksJson)
-            {
-                Cache[cacheKey] = (DateTime.UtcNow, status, body);
-                try { await File.WriteAllTextAsync(disk, body); } catch { /* keep memory cache */ }
-                return body;
-            }
-            return null;
+            Cache[cacheKey] = (DateTime.UtcNow, status, body);
+            try { await File.WriteAllTextAsync(disk, body); } catch { /* keep memory cache */ }
+            return body;
         }
-        finally
-        {
-            Gate.Release();
-        }
+        return null;
     }
 
     async Task FetchTradePrice(string id, string league, string name, bool bust = false, bool thorough = false, string typeLine = "", IReadOnlyList<string>? rolls = null, IReadOnlyList<RollFilter>? preMapped = null, bool? corrupted = null, string rarity = "", int? runeSockets = null, string category = "", bool ravenTouched = false, bool exchange = false, string havePref = "", bool? unidentified = null, int? unidentifiedTier = null, bool exactBase = true, int? ilvlMin = null, int? qualityMin = null, string rarityFilter = "", string game = "", int? links = null)
@@ -1606,14 +1575,7 @@ sealed class TrackerWindow : Form
             Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
             return;
         }
-        await Gate.WaitAsync();
-        try
         {
-            if (!bust && Cache.TryGetValue(cacheKey, out hit) && DateTime.UtcNow - hit.at < CacheFor)
-            {
-                Reply(id, hit.status is >= 200 and < 300, hit.status, hit.body);
-                return;
-            }
             TradeLookup? payload = null;
             if (poe1)
                 payload = await LookupPoe1Price(league, name, typeLine, rarity, corrupted, ilvlMin, qualityMin, rarityFilter, useExchange, havePref, runeSockets, links, unidentified, exactBase, category, mapped);
@@ -1641,10 +1603,6 @@ sealed class TrackerWindow : Form
             else
                 Cache.TryRemove(cacheKey, out _);
             Reply(id, body is not null, status, body ?? "{\"error\":\"no listings\"}");
-        }
-        finally
-        {
-            Gate.Release();
         }
     }
 
@@ -2270,7 +2228,8 @@ sealed class TrackerWindow : Form
             filters["armour_filters"] = new JsonObject { ["filters"] = armourBag };
         if (filters.Count > 0) query["filters"] = filters;
         var body = new JsonObject { ["query"] = query, ["sort"] = new JsonObject { ["price"] = "asc" } }.ToJsonString();
-        var (json, status) = await PostTradeSearch("https://www.pathofexile.com/api/trade/search/" + Uri.EscapeDataString(league), body);
+        using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var (json, status) = await PostTradeSearch("https://www.pathofexile.com/api/trade/search/" + Uri.EscapeDataString(league), body, cancel.Token);
         if (status == 429) return new TradeLookup(RateLimited: true);
         if (status is 401 or 403) return new TradeLookup(Forbidden: true);
         if (json is null) return new TradeLookup();
@@ -2293,9 +2252,9 @@ sealed class TrackerWindow : Form
                     url = string.IsNullOrWhiteSpace(queryId) ? "" : "https://www.pathofexile.com/trade/search/" + Uri.EscapeDataString(league) + "/" + Uri.EscapeDataString(queryId),
                 }, JsonOut));
             }
-            var hashes = result.EnumerateArray().Select(el => JsonString(el)).Where(h => !string.IsNullOrWhiteSpace(h)).Take(TradeFetchCap).ToArray();
+            var hashes = result.EnumerateArray().Select(el => JsonString(el)).Where(h => !string.IsNullOrWhiteSpace(h)).Take(50).ToArray();
             var fetched = await FetchListingOffers(hashes, queryId, name, "https://www.pathofexile.com/api/trade/fetch/",
-                sacrificeQuantity, returnAvailableOffers: true);
+                sacrificeQuantity, returnAvailableOffers: true, cancel: cancel.Token);
             if (fetched.Rate) return new TradeLookup(RateLimited: true);
             if (fetched.Forbidden) return new TradeLookup(Forbidden: true);
             if (fetched.Offers is null || fetched.Offers.Count == 0)
@@ -3133,11 +3092,11 @@ sealed class TrackerWindow : Form
         return !wanted.Contains('#') && tag > 0 && listed[..tag].Equals(wanted, StringComparison.OrdinalIgnoreCase);
     }
 
-    async Task<(string? json, int status)> PostTradeSearch(string uri, string body)
+    async Task<(string? json, int status)> PostTradeSearch(string uri, string body, CancellationToken cancel = default)
     {
         if (!await WaitForSlot(SearchLimit)) return (null, 429);
         using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
-        using var searchRes = await TradeHttp.PostAsync(uri, content);
+        using var searchRes = await TradeHttp.PostAsync(uri, content, cancel);
         NoteRate(searchRes, SearchLimit);
         var status = (int)searchRes.StatusCode;
         var searchJson = await searchRes.Content.ReadAsStringAsync();
@@ -3168,7 +3127,7 @@ sealed class TrackerWindow : Form
     }
 
     async Task<(List<OfferRow>? Offers, bool Rate, bool Forbidden)> FetchListingOffers(string[] hashes, string queryId, string fallbackName,
-        string? fetchRoot = null, int? sacrificeQuantity = null, bool returnAvailableOffers = false)
+        string? fetchRoot = null, int? sacrificeQuantity = null, bool returnAvailableOffers = false, CancellationToken cancel = default)
     {
         var offers = new List<OfferRow>();
         var rootUrl = string.IsNullOrWhiteSpace(fetchRoot) ? "https://www.pathofexile.com/api/trade2/fetch/" : fetchRoot;
@@ -3176,10 +3135,12 @@ sealed class TrackerWindow : Form
         {
             var batch = hashes.Skip(i).Take(TradeFetchBatch).ToArray();
             if (batch.Length == 0) break;
+            if (cancel.IsCancellationRequested)
+                return offers.Count > 0 ? (offers, false, false) : (null, false, false);
             if (!await WaitForSlot(FetchLimit, allowWait: !returnAvailableOffers || offers.Count == 0))
                 return offers.Count > 0 ? (offers, false, false) : (null, true, false);
             var fetchUrl = rootUrl + string.Join(",", batch) + "?query=" + Uri.EscapeDataString(queryId ?? "");
-            using var fetchRes = await TradeHttp.GetAsync(fetchUrl);
+            using var fetchRes = await TradeHttp.GetAsync(fetchUrl, cancel);
             NoteRate(fetchRes, FetchLimit);
             var status = (int)fetchRes.StatusCode;
             if (status == 429)
@@ -3613,17 +3574,6 @@ sealed class TrackerWindow : Form
                 BeginInvoke(() => OpenTradeUrl(url));
                 return;
             }
-            if (type == "guides-browse")
-            {
-                var url = root.TryGetProperty("url", out var guideUrlEl) ? guideUrlEl.GetString() ?? "" : "";
-                BeginInvoke(() => _ = OpenGuideBrowserAsync(url));
-                return;
-            }
-            if (type == "guides-close")
-            {
-                BeginInvoke(() => _guideBrowser?.CloseBrowser());
-                return;
-            }
             if (type == "copy-text")
             {
                 var text = root.TryGetProperty("text", out var copyEl) ? copyEl.GetString() ?? "" : "";
@@ -4030,22 +3980,11 @@ sealed class TrackerWindow : Form
         await SlotLock.WaitAsync();
         try
         {
-            while (true)
-            {
-                var wait = limiter.WaitMs();
-                if (wait <= 0)
-                {
-                    limiter.Borrow();
-                    PushRate();
-                    return true;
-                }
-                // Wait out PoE windows/penalties instead of failing early.
-                if (!allowWait || wait > 180_000) return false;
-                PushRate();
-                SlotLock.Release();
-                try { await Task.Delay(Math.Min(Math.Max(wait, 50), 750)); }
-                finally { await SlotLock.WaitAsync(); }
-            }
+            // A real trade-site penalty stops the check. Do not sit on "Checking trade" waiting it out.
+            if (limiter.WaitMs() > 0) return false;
+            limiter.Borrow();
+            PushRate();
+            return true;
         }
         finally
         {
@@ -4133,45 +4072,7 @@ sealed class TrackerWindow : Form
             limiter.PenaltyUntil = DateTime.UtcNow.AddMilliseconds(Math.Max(retry, limiter.Limited ? (limiter.PenaltyUntil - DateTime.UtcNow).TotalMilliseconds : 0));
     }
 
-    async Task OpenGuideBrowserAsync(string url)
-    {
-        if (!GuideBrowserHost.AllowedGuideUrl(url)) return;
-        _guideBrowser ??= CreateGuideBrowser();
-        if (!Controls.Contains(_guideBrowser)) Controls.Add(_guideBrowser);
-        await _guideBrowser.OpenAsync(url, AppDataDir());
-    }
-
-    GuideBrowserHost CreateGuideBrowser()
-    {
-        var host = new GuideBrowserHost();
-        host.Closed += () =>
-        {
-            _web.Visible = true;
-            _web.BringToFront();
-            try
-            {
-                _web.Focus();
-                SendMessage(Handle, 0x127, (IntPtr)0x10001, IntPtr.Zero); // Hide mouse-triggered focus cues.
-                SendMessage(_web.Handle, 0x127, (IntPtr)0x10001, IntPtr.Zero);
-                BeginInvoke(() => PushJson(new { type = "browser-returned" }));
-            }
-            catch { /* ignore */ }
-        };
-        host.MinimizeRequested += () => WindowState = FormWindowState.Minimized;
-        host.MaximizeRequested += () =>
-        {
-            WindowState = WindowState == FormWindowState.Maximized
-                ? FormWindowState.Normal
-                : FormWindowState.Maximized;
-        };
-        host.QuitRequested += Close;
-        host.DragRequested += DragWindow;
-        return host;
-    }
-
-    static bool AllowedOpenHost(string host) => AllowedGuideHost(host);
-
-    /// <summary>Hosts allowed for Guides in-app browser and open-url.</summary>
+    /// <summary>Hosts allowed for open-url.</summary>
     internal static bool AllowedGuideHost(string host)
     {
         if (string.IsNullOrWhiteSpace(host)) return false;
@@ -4481,7 +4382,7 @@ sealed class TrackerWindow : Form
         var needed = new[]
         {
             "index.html", "overlay.html", "overlay.css", "styles.css", "app.js", "affix-ladders.js",
-            "bosses.js", "guides.js", "icons.js", "still-sane-sigil.png",
+            "bosses.js", "icons.js", "still-sane-sigil.png",
         };
         if (File.Exists(stampPath)
             && needed.All(name => File.Exists(Path.Combine(dir, name)))
@@ -4500,11 +4401,10 @@ sealed class TrackerWindow : Form
         WriteResource(asm, "www.app.js", Path.Combine(dir, "app.js"));
         WriteResource(asm, "www.affix-ladders.js", Path.Combine(dir, "affix-ladders.js"), skipUnchanged: true);
         WriteResource(asm, "www.bosses.js", Path.Combine(dir, "bosses.js"));
-        WriteResource(asm, "www.guides.js", Path.Combine(dir, "guides.js"));
         WriteResource(asm, "www.icons.js", Path.Combine(dir, "icons.js"), skipUnchanged: true);
         WriteResource(asm, "www.still-sane-sigil.png", Path.Combine(dir, "still-sane-sigil.png"), skipUnchanged: true);
         // Drop retired Stacked Deck scripts if an older extract left them behind
-        foreach (var stale in new[] { "decks.js", "deck-game.js" })
+        foreach (var stale in new[] { "decks.js", "deck-game.js", "guides.js" })
         {
             var path = Path.Combine(dir, stale);
             if (File.Exists(path)) File.Delete(path);

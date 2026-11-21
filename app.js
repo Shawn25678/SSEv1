@@ -82,7 +82,7 @@ const ui = {
   econChart: null,
   bossId: "",
 };
-const COMPANION_VIEWS = new Set(["dash", "econ", "wealth", "guides", "settings"]);
+const COMPANION_VIEWS = new Set(["dash", "econ", "wealth", "settings"]);
 
 let liveKill = { logId: null, bossId: null };
 const dropUndo = [];
@@ -295,17 +295,6 @@ const POE1_LABELS = {
   Beast: "Beasts",
   Vial: "Vials",
 };
-function poe1GuideSections() {
-  return [{
-    title: "Tools & Wikis",
-    items: [
-      { title: "PoE Wiki", note: "Game mechanics and guides.", url: "https://www.poewiki.net/wiki/Path_of_Exile_Wiki" },
-      { title: "PoEDB", note: "Items and modifiers.", url: "https://poedb.tw/us/" },
-      { title: "PoE Regex", note: "Create item search filters.", url: "https://poe.re/" },
-      { title: "Craft of Exile", note: "Plan your crafting.", url: "https://beta.craftofexile.com/?game=poe1" },
-    ],
-  }];
-}
 let poe2LeagueList = [];
 let poe1LeagueList = [];
 const UNIQUE_BY_BASE = {
@@ -1993,7 +1982,7 @@ function tradeFetch(name, league, bust = false, thorough = false, extra = {}) {
       have: extra.have || "",
       game: extra.game === "poe1" ? "poe1" : "poe2",
     },
-    extra.rolls?.length || filters.length ? 90000 : 45000,
+    extra.game === "poe1" ? 20000 : extra.rolls?.length || filters.length ? 90000 : 45000,
     extra.game === "poe1" ? "PoE 1 trade timed out" : "PoE 2 trade timed out"
   );
 }
@@ -6803,6 +6792,7 @@ function applyUniquePick(log, drop, name) {
   delete drop.quote;
   if (log?.id) save();
   paintPriceOverlay();
+  if (inspectTarget()?.drop === drop) void quoteRolledDrop(log, drop, false, true);
 }
 
 async function loadPoe1UniqueTables(tables) {
@@ -6956,8 +6946,12 @@ function parsePoeItem(text) {
   }
   if (!name) return null;
   let qty = 1;
-  const stack = raw.match(/Stack Size:\s*([\d,]+)/i);
-  if (stack) qty = Math.max(1, Number(stack[1].replace(/,/g, "")) || 1);
+  let stackMax = 0;
+  const stack = raw.match(/Stack Size:\s*([\d,]+)(?:\s*\/\s*([\d,]+))?/i);
+  if (stack) {
+    qty = Math.max(1, Number(stack[1].replace(/,/g, "")) || 1);
+    stackMax = Math.max(0, Number(String(stack[2] || "").replace(/,/g, "")) || 0);
+  }
   const corrupted =
     /^\s*(Corrupted|Twice Corrupted|Double Corrupted|Unmodifiable)\s*$/im.test(raw) ||
     /\{[^}]*Corruption Enhancement/i.test(raw);
@@ -7019,7 +7013,7 @@ function parsePoeItem(text) {
       if (lines.length === 1 && poe1VisceraCategory(lines[0])) { visceraSlot = lines[0]; break; }
     }
   }
-  return { name, baseType, rarity, className, qty, corrupted: isCorrupted, mirrored, sanctified, foil, vaalUnique, desecrated, unidentified, unidentifiedTier, ravenTouched, fractured, mods, influences: parsedMods.influences || [], usesRemaining, runeSockets, links: sockets.links, socketColors: sockets.colors, charmSlots, props, visceraSlot };
+  return { name, baseType, rarity, className, qty, stackMax, corrupted: isCorrupted, mirrored, sanctified, foil, vaalUnique, desecrated, unidentified, unidentifiedTier, ravenTouched, fractured, mods, influences: parsedMods.influences || [], usesRemaining, runeSockets, links: sockets.links, socketColors: sockets.colors, charmSlots, props, visceraSlot };
 }
 
 function readSocketLine(raw) {
@@ -8489,7 +8483,11 @@ function overlayInfluenceHtml(drop, log) {
   const labels = { shaper: "Shaper", elder: "Elder", crusader: "Crusader", hunter: "Hunter", redeemer: "Redeemer", warlord: "Warlord" };
   return (drop?.influences || [])
     .filter((name) => labels[name])
-    .map((name) => activeGame() === "poe1" ? `<button type="button" class="price-overlay-influence is-${name}" data-pick-influence="${name}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" aria-pressed="${!drop.ignoredInfluences?.includes(name)}">${labels[name]}</button>` : `<span class="price-overlay-influence is-${name}">${labels[name]}</span>`)
+    .map((name) => {
+      if (activeGame() !== "poe1") return `<span class="price-overlay-influence is-${name}">${labels[name]}</span>`;
+      const on = !drop.ignoredInfluences?.includes(name);
+      return `<button type="button" class="price-overlay-influence is-${name}${on ? " is-on" : ""}" data-pick-influence="${name}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" aria-pressed="${on}">${labels[name]}</button>`;
+    })
     .join("");
 }
 
@@ -9832,6 +9830,7 @@ function overlayPropsHtml(log, drop) {
 function poe1GeneralPriceItem(drop) {
   if (activeGame() !== "poe1" || drop?.viscera || poe1VisceraItem(drop)) return false;
   if (isClipboardCurrency(drop)) return true;
+  if (/invitations?$/i.test(drop?.className || "") || /invitation$/i.test(drop?.name || "")) return true;
   return /^(?:wombgifts?|corpses?|incubators?|runegrafts?|allflame embers?|tattoos?|omens?|djinn coins?|ducats?|enshrouding crystals?|artifacts?|oils?|fossils?|resonators?|essences?|delirium orbs?|astrolabes?)$/i.test(drop?.className || "");
 }
 
@@ -10919,10 +10918,12 @@ function tradeWaiting() {
   return Number.isFinite(tradeRate.readyAt) && tradeRate.readyAt > Date.now();
 }
 
-async function quoteRolledDrop(log, drop, force = true) {
-  // A trade request must originate from the user's explicit Check trade click.
-  if (!drop?.manualQuoteRequested) return;
+async function quoteRolledDrop(log, drop, force = true, auto = false) {
+  // Automatically check only known PoE 1 uniques opened from the game.
+  if (!drop?.manualQuoteRequested && !(auto && activeGame() === "poe1" &&
+      /^unique$/i.test(drop?.rarity || "") && !unidentifiedUniqueNeedsPick(drop))) return;
   delete drop.manualQuoteRequested;
+  if (auto && inspectTarget()?.drop !== drop) return;
   if (drop?.uiPreview) return;
   const game = activeGame();
   const poe1 = game === "poe1";
@@ -10943,8 +10944,15 @@ async function quoteRolledDrop(log, drop, force = true) {
   drop.quoting = request;
   drop.quoteTried = true;
   paintPriceOverlay();
+  const giveUp = poe1 ? setTimeout(() => {
+    if (drop.quoting !== request) return;
+    drop.quote = { listings: 0, league, at: Date.now(), error: "trade timed out" };
+    drop.quoteTried = false;
+    delete drop.quoting;
+    paintPriceOverlay();
+  }, 20000) : 0;
   const current = () => drop.quoting === request && drop.quoteTried && activeGame() === game &&
-    (poe1 ? econLeagueName() : leagueId()) === league;
+    (poe1 ? econLeagueName() : leagueId()) === league && (!auto || inspectTarget()?.drop === drop);
   try {
     if (!poe1 && tradeWaiting()) {
       const wait = Math.min(120000, Math.max(0, tradeRate.readyAt - Date.now()));
@@ -11012,7 +11020,8 @@ async function quoteRolledDrop(log, drop, force = true) {
       if (sockets !== null) extra.runeSockets = sockets;
     }
     const row = await tradeFetch(poe1 && /^unique$/i.test(drop?.rarity || "") ? identity?.name || poe1TradeName(drop) : drop.name, league, !!force, false, extra);
-    if (!current()) return;
+    const replaced = drop.quoting && drop.quoting !== request;
+    if (replaced || activeGame() !== game || (poe1 ? econLeagueName() : leagueId()) !== league || (auto && inspectTarget()?.drop !== drop)) return;
     const unit = tradeUnit(row?.currency);
     const amount = Number(row?.amount);
     const priced = Number.isFinite(amount) && amount > 0;
@@ -11036,10 +11045,14 @@ async function quoteRolledDrop(log, drop, force = true) {
     drop.quote = drop.quote || { listings: 0, league, at: Date.now(), error };
     if (/rate limited/i.test(raw)) drop.quoteTried = false;
   } finally {
-    if (drop.quoting === request) {
+    if (giveUp) clearTimeout(giveUp);
+    const mine = drop.quoting === request;
+    if (mine) {
       if (!current()) drop.quoteTried = false;
       delete drop.quoting;
-      save();
+    }
+    if (mine || drop.quote) {
+      try { save(); } catch { /* keep the result on screen */ }
       paintPriceOverlay();
       paintLivePrices();
     }
@@ -11069,7 +11082,7 @@ function isClipboardCurrency(parsed) {
   if (activeGame() === "poe1") {
     if (parsed?.viscera || poe1VisceraItem(parsed)) return false;
     if (/Inscribed Ultimatum/i.test(parsed?.className || "") || parsed?.name === "Inscribed Ultimatum") return false;
-    if (/map fragments?|scarabs?|divination cards?/i.test(parsed?.className || "") || / Thread$/i.test(parsed?.name || "")) return true;
+    if (/map fragments?|scarabs?|divination cards?|invitations?/i.test(parsed?.className || "") || / Thread$/i.test(parsed?.name || "") || /invitation$/i.test(parsed?.name || "")) return true;
   }
   if (/currency/i.test(parsed?.rarity || "") || /currency/i.test(parsed?.className || "")) return true;
   return activeGame() === "poe1" && /divination/i.test(parsed?.rarity || parsed?.className || "");
@@ -11115,6 +11128,7 @@ function ingestClipboardItem(text, mode) {
       uniqueId: slug(parsed.name),
       name: parsed.name,
       qty: parsed.qty || 1,
+      stackMax: parsed.stackMax || 0,
       baseType: parsed.baseType || "",
       rarity: parsed.rarity || "",
       className: parsed.className || "",
@@ -11135,7 +11149,10 @@ function ingestClipboardItem(text, mode) {
       drop.pickUnid = true;
       if (parsed.unidentifiedTier > 0) drop.unidentifiedTier = parsed.unidentifiedTier;
     }
-    if (parsed.influences?.length) drop.influences = parsed.influences;
+    if (parsed.influences?.length) {
+      drop.influences = parsed.influences;
+      if (activeGame() === "poe1") drop.ignoredInfluences = parsed.influences.slice();
+    }
     if (parsed.props) drop.props = parsed.props;
     if (parsed.usesRemaining > 0) drop.usesRemaining = parsed.usesRemaining;
     if (parsed.runeSockets > 0 && canHaveRunes(parsed)) {
@@ -11152,7 +11169,9 @@ function ingestClipboardItem(text, mode) {
     if (parsed.charmSlots > 0) drop.charmSlots = parsed.charmSlots;
     if (parsed.visceraSlot) drop.visceraSlot = parsed.visceraSlot;
     if (!isClipboardCurrency(parsed) && parsed.mods?.length) drop.rolls = parsed.mods.slice(0, 24);
-    openInspect({ id: "", drops: [drop] }, drop);
+    const log = { id: "", drops: [drop] };
+    openInspect(log, drop);
+    void quoteRolledDrop(log, drop, false, true);
     return;
   }
   const matched = matchClipboardDrop(parsed);
@@ -12164,49 +12183,6 @@ function renderLogView() {
     <div class="log-list" style="margin-top:10px">${rates || `<div class="empty">Log kills from the dashboard to see rates.</div>`}</div>
     <h2 class="section-title" style="margin-top:28px">Kill history</h2>
     <div class="log-list" style="margin-top:10px">${items}</div>
-  `;
-}
-
-function renderGuides() {
-
-  const sections = activeGame() === "poe1"
-    ? poe1GuideSections()
-    : Array.isArray(window.GUIDE_SECTIONS) ? window.GUIDE_SECTIONS : [];
-  const body = sections
-    .map((section) => {
-      const items = Array.isArray(section.items) ? section.items : [];
-      const rows = items.length
-        ? items
-            .map((item) => {
-              const title = String(item.title || "").trim();
-              if (!title) return "";
-              const note = String(item.note || "").trim();
-              const url = String(item.url || "").trim();
-              const inner = `<span class="guide-copy"><span class="guide-name">${esc(title)}</span>${
-                note ? `<span class="muted">${esc(note)}</span>` : ""
-              }</span>`;
-              if (url) {
-                return `<button class="guide-row is-link" type="button" data-guides-browse="${esc(url)}">${inner}<span class="guide-go">Open</span></button>`;
-              }
-              return `<div class="guide-row">${inner}</div>`;
-            })
-            .join("")
-        : `<p class="muted">Nothing here yet.</p>`;
-      return `<article class="panel">
-        ${sections.length > 1 ? `<h3>${esc(section.title || "Guides")}</h3>` : ""}
-        <div class="guide-list">${rows}</div>
-      </article>`;
-    })
-    .join("");
-  return `
-    <section class="guides">
-      <div>
-        <p class="wealth-kicker">${activeGame() === "poe1" ? "PoE 1" : "PoE 2"}</p>
-        <h2 class="section-title">Tools &amp; Wiki</h2>
-
-      </div>
-      ${body || `<article class="panel"><p class="muted">No guides loaded.</p></article>`}
-    </section>
   `;
 }
 
@@ -14382,14 +14358,13 @@ function wireFarmPad() {
 
 function render() {
   const shown = document.getElementById("item-tip")?.dataset.for || "";
-  if (ui.view === "hunt" || ui.view === "bosses" || ui.view === "title" || ui.view === "decks") ui.view = "dash";
+  if (ui.view === "hunt" || ui.view === "bosses" || ui.view === "title" || ui.view === "decks" || ui.view === "guides") ui.view = "dash";
   if (activeGame() === "poe1" && ui.view === "dash") ui.view = "econ";
   rememberCompanionView();
   document.querySelector('[data-view="dash"]')?.toggleAttribute("hidden", activeGame() === "poe1");
   document.body.classList.toggle("view-bosses", ui.view === "bosses");
   document.body.classList.toggle("view-econ", ui.view === "econ");
   document.body.classList.toggle("view-dash", ui.view === "dash");
-  document.body.classList.toggle("view-guides", ui.view === "guides");
   renderStats();
   renderDivineTape();
   renderFilters();
@@ -14421,9 +14396,6 @@ function render() {
   if (ui.view === "econ") {
     main.innerHTML = renderEcon();
     fillEconChart();
-  }
-  if (ui.view === "guides") {
-    main.innerHTML = renderGuides();
   }
   if (ui.view === "wealth") repaintWealth();
   else document.getElementById("wealth-setup")?.close();
@@ -14816,16 +14788,6 @@ function onClick(event) {
     drop.quoteTried = false;
     drop.manualQuoteRequested = true;
     quoteRolledDrop(log, drop);
-    return;
-  }
-  const guidesBrowse = event.target.closest("[data-guides-browse]");
-  if (guidesBrowse) {
-    event.preventDefault();
-    event.stopPropagation();
-    const url = guidesBrowse.dataset.guidesBrowse;
-    if (!url) return;
-    if (window.chrome?.webview) chrome.webview.postMessage({ type: "guides-browse", url });
-    else window.open(url, "_blank", "noopener");
     return;
   }
   const openUrlBtn = event.target.closest("[data-open-url], [data-open-trade]");
@@ -15650,8 +15612,16 @@ setTimeout(() => checkAppUpdate(), 2800);
 
 function ninjaCurrencyPrice(name) {
   if (activeGame() === "poe1") {
-    const cached = poe1Prices.exchangeValues?.get(priceKey(name));
+    const key = poe1MarketNameKey(name);
+    const cached = poe1Prices.exchangeValues?.get(key);
     if (poe1Prices.league === econLeagueName() && cached > 0) return cached;
+    if (poe1Prices.league === econLeagueName()) {
+      for (const type of ["Currency", "Fragment", "Invitation"]) {
+        for (const row of poe1Prices.tables[type] || []) {
+          if (poe1MarketNameKey(row.name) === key && row.divine > 0) return row.divine;
+        }
+      }
+    }
     if (poe1Prices.league === econLeagueName() && poe1Prices.chaosPerDivine > 0) {
       if (namesMatch(name, "Divine Orb")) return 1;
       if (namesMatch(name, "Chaos Orb")) return 1 / poe1Prices.chaosPerDivine;
@@ -15672,13 +15642,19 @@ function ninjaCurrencyPrice(name) {
   return null;
 }
 
+function poe1MarketNameKey(name) {
+  const key = priceKey(name);
+  if (key === "originator exalted orb") return "originators exalted orb";
+  return key;
+}
+
 function poe1CurrencyExchangeQuote(name) {
   if (poe1Prices.league !== econLeagueName()) return null;
-  const key = priceKey(name);
+  const key = poe1MarketNameKey(name);
   let fallback = null;
-  for (const type of POE1_GENERAL_PRICES) {
+  for (const type of [...POE1_GENERAL_PRICES, "Invitation"]) {
     for (const row of poe1Prices.tables[type] || []) {
-      if (row.lowConfidence || !Number.isFinite(row.amount) || row.amount <= 0 || priceKey(row.name) !== key) continue;
+      if (row.lowConfidence || !Number.isFinite(row.amount) || row.amount <= 0 || poe1MarketNameKey(row.name) !== key) continue;
       if (row.source !== "poe.watch") return row;
       fallback ??= row;
     }
@@ -15697,25 +15673,67 @@ function poe1ExchangeValueHtml(amount, unit) {
   return valueFromAmount(amount, unit);
 }
 
+function currencyLotText(amount, unit) {
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  const shown = n >= 100 ? String(Math.round(n)) : n >= 10 ? String(Math.round(n * 10) / 10) : String(Math.round(n * 100) / 100);
+  const label = unit === "chaos" ? "chaos" : unit === "divine" ? "divine" : unit === "exalted" ? "exalted" : String(unit || "");
+  return `${shown} ${label}`;
+}
+
+function currencyLotWorth(count, quote, divine) {
+  const n = Math.max(0, Number(count) || 0);
+  if (!(n > 0)) return "";
+  if (activeGame() !== "poe1") {
+    if (!(divine > 0)) return "";
+    return { text: currencyLotText(divine * n, "divine"), unit: "divine" };
+  }
+  const rates = poe1Prices;
+  let amount = 0;
+  let unit = "chaos";
+  if (quote && quote.amount > 0) {
+    amount = quote.amount * n;
+    unit = quote.unit || "chaos";
+  } else if (divine > 0) {
+    amount = divine * n;
+    unit = "divine";
+  } else return "";
+  const asDivine = divineWithRates(amount, unit, rates.exaltedPerDivine, rates.chaosPerDivine);
+  if (asDivine >= 1) return { text: currencyLotText(asDivine, "divine"), unit: "divine" };
+  if (rates.chaosPerDivine > 0) {
+    const chaos = unit === "chaos" ? amount : asDivine * rates.chaosPerDivine;
+    if (chaos > 0) return { text: currencyLotText(chaos, "chaos"), unit: "chaos" };
+  }
+  if (asDivine > 0) return { text: currencyLotText(asDivine, "divine"), unit: "divine" };
+  return { text: currencyLotText(amount, unit), unit };
+}
+
+function currencyRateCell(label, count, worth, sourceName) {
+  if (!worth?.text) return "";
+  const source = itemIconHtml(sourceName, "sm");
+  const icon = itemIconHtml(currencyNameForUnit(worth.unit), "sm");
+  const name = `<span class="item-tip-name">${esc(sourceName)}</span>`;
+  return `<div class="currency-rate"><span class="currency-rate-k">${esc(label)}</span><span class="currency-rate-n"><span class="currency-rate-worth currency-rate-source">${source}${name}<span class="currency-rate-x">× ${esc(count)}</span></span><span class="currency-rate-arrow">→</span><span class="currency-rate-worth">${icon}${esc(worth.text)}</span></span></div>`;
+}
+
 function currencyOverlayHtml(drop) {
   const qty = Math.max(1, Number(drop.qty) || 1);
+  const stackMax = Math.max(0, Number(drop.stackMax) || 0);
   const poe1 = activeGame() === "poe1";
   const quote = poe1 ? poe1CurrencyExchangeQuote(drop.name) : null;
   const divine = quote ? null : ninjaCurrencyPrice(drop.name);
-  const value = count => {
-    if (!poe1) return valueHtml(divine * count);
-    if (namesMatch(drop.name, "Divine Orb")) return valueFromAmount(count, "divine");
-    return quote ? poe1ExchangeValueHtml(quote.amount * count, quote.unit)
-      : poe1ExchangeValueHtml(divine * count, "divine");
-  };
+  const have = currencyLotWorth(qty, quote, divine);
+  const stack = stackMax > 1 ? currencyLotWorth(stackMax, quote, divine) : "";
+  const rates = currencyRateCell("You have", qty, have, drop.name) + (stack && stackMax !== qty ? currencyRateCell("Stack", stackMax, stack, drop.name) : "");
   const at = poe1 ? (poe1Prices.league === econLeagueName() ? poe1Prices.fetchedAt : 0) : prices.fetchedAt;
-  const note = at ? `Updated ${formatWhen(at)}` : 'No price update received yet';
+  const note = at ? `Updated ${formatWhen(at)}` : "No price update received yet";
   const missing = /divination/i.test(drop?.rarity || drop?.className || "")
     ? "No price available for this divination card in the selected league."
     : poe1 ? "No market estimate for this item in the selected league." : "No price available for this currency in the selected league.";
-  return `<article class="price-overlay-card item-tip-card" data-overlay-item="${esc(drop.id || "")}"><div class="price-overlay-shell"><div class="price-overlay-main">
-    ${overlayBarHtml()}<div class="price-overlay-body"><div class="item-tip-head">${dropIconHtml(drop, 'lg')}<div class="item-tip-title"><div class="item-tip-name">${esc(drop.name)}</div><span class="muted">Stack: ${esc(qty)}</span></div></div>
-    <div class="currency-summary">${quote || divine != null ? `<p>Each <strong>${value(1)}</strong></p><p>Stack <strong>${value(qty)}</strong></p>` : `<p>${missing}</p>`}<p class="muted">${esc(note)}</p></div>
+  const who = `<div class="currency-rate-who">${itemIconHtml(drop.name, "sm")}<span class="item-tip-name">${esc(drop.name)}</span></div>`;
+  return `<article class="price-overlay-card item-tip-card is-currency" data-overlay-item="${esc(drop.id || "")}"><div class="price-overlay-shell"><div class="price-overlay-main">
+    ${overlayBarHtml()}<div class="price-overlay-body">
+    <div class="currency-summary">${rates ? `<div class="currency-rates">${rates}</div>` : `${who}<p>${missing}</p>`}<p class="muted">${esc(note)}</p></div>
     </div></div></div></article>`;
 }
 
