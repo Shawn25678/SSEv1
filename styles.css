@@ -4807,6 +4807,14 @@ button.roll-chip:hover {
   color: #c5c9d6;
 }
 
+.price-overlay-mod-group.is-logbook-faction > .chip.logbook-faction {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+  margin: 0 0 6px;
+  text-align: center;
+}
+
 .price-overlay-mod-group.is-explicit,
 .price-overlay-mod-group.is-skill,
 .price-overlay-mod-group.is-rune,
@@ -6826,18 +6834,38 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
   position: absolute;
   left: 78px;
   top: 4px;
+  display: grid;
+  gap: 2px;
   margin: 0;
-  padding: 3px 8px;
-  border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent);
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--ink) 28%, transparent);
   border-radius: 4px;
   background: color-mix(in srgb, var(--panel) 94%, #000);
-  color: var(--gold-2);
+  color: var(--ink);
   font-size: .78rem;
+  line-height: 1.25;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
+  white-space: nowrap;
+  z-index: 3;
 }
+.wealth-hover-value { color: var(--gold); font-weight: 600; }
 .wealth-hover[hidden] { display: none; }
+.wealth-cursor { position: absolute; left: 0; top: 0; z-index: 2; width: 0; height: 0; pointer-events: none; }
+.wealth-cursor[hidden] { display: none; }
+.wealth-cursor-dot {
+  position: absolute;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border: 2px solid #161616;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #f4efe2;
+  transform: translate(-50%, -50%);
+}
 .wealth-chart text { fill: color-mix(in srgb, var(--ink) 72%, transparent); font-size: 12px; font-family: var(--font-ui); }
+.wealth-plot { cursor: crosshair; }
 .wealth-dot { cursor: pointer; }
 .wealth-dot-hit { fill: transparent; }
 .wealth-dot-mark { fill: var(--gold); }

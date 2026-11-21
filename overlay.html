@@ -2,8 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="styles.css" />
-    <link rel="stylesheet" href="overlay.css" />
+    <link rel="stylesheet" href="styles.css?v=74" />
+    <link rel="stylesheet" href="overlay.css?v=74" />
   </head>
   <body>
     <div id="root"></div>
@@ -52,6 +52,10 @@
         const cs = getComputedStyle(card);
         h += (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
         let w = card.classList.contains("has-offers") ? 766 : 466;
+        if (card.classList.contains("is-currency")) {
+          const row = card.querySelector(".currency-rate-n");
+          if (row) w = Math.max(320, Math.ceil(row.scrollWidth) + 56);
+        }
         const extra = card.querySelector(".price-overlay-rate-card");
         if (extra && getComputedStyle(extra).display !== "none") {
           const r = card.getBoundingClientRect();

@@ -5575,10 +5575,15 @@ function poe1WatchExchangeSpark(item) {
   return marketSpark(Array.from({ length: 7 }, (_, i) => byDay.get(newest - 6 + i)));
 }
 
+function poe1WatchImbuedGem(item) {
+  return item?.category === "gem" && /\([^)]+\)/.test(item.name || "");
+}
+
 function poe1MarketKey(row) {
   if (row.type === "InscribedUltimatum" && row.ultimatum) return poe1UltimatumKey(row.ultimatum);
   const key = [row.type, priceKey(row.name)];
   if (row.type === "SkillGem") key.push(Number(row.gemLevel) || null, Number(row.gemQuality) || 0, !!row.corrupted);
+  if (row.type === "ImbuedGem") key.push(priceKey(row.variant));
   return JSON.stringify(key);
 }
 
@@ -5588,7 +5593,7 @@ function watchPriceRows(compact, exchange, inscribed, rate) {
   for (const item of compact?.items || []) {
     if (item.lowConfidence || !item.name) continue;
     const type = watchType(item);
-    if (type === "SkillGem" && !(Number(item.gemLevel) > 0)) continue;
+    if (type === "SkillGem" && (poe1WatchImbuedGem(item) || !(Number(item.gemLevel) > 0))) continue;
     const history = Array.isArray(item.sevenDaysHistory) ? item.sevenDaysHistory : item.history;
     add({ name: item.name, type, amount: Number(item.mean), unit: "chaos", source: "poe.watch",
       divine: rate > 0 ? Number(item.mean) / rate : NaN, icon: ninjaIcon(item.icon), listings: item.daily || 0,
@@ -5713,7 +5718,8 @@ function takePoe1Lines(data, type, items) {
       }
     }
     let divine = divineWithRates(amount, unit, bag.exaltedPerDivine, bag.chaosPerDivine);
-    if (!Number.isFinite(divine) && divineValue > 0) divine = divineValue;
+    if (items && divineValue > 0) divine = divineValue;
+    else if (!Number.isFinite(divine) && divineValue > 0) divine = divineValue;
     const icon = ninjaIcon(line.icon || line.image) || named?.icon || "";
     rows.push({
       name,
@@ -5727,7 +5733,9 @@ function takePoe1Lines(data, type, items) {
       icon,
       baseType: line.baseType || "",
       gemLevel: line.gemLevel,
-      gemQuality: type === "SkillGem" ? Number(line.gemQuality) || 0 : line.gemQuality,
+      gemQuality: type === "SkillGem" && line.gemQuality != null && line.gemQuality !== "" ? Number(line.gemQuality) : undefined,
+      levelRequired: Number(line.levelRequired) > 0 ? Number(line.levelRequired) : undefined,
+      variant: String(line.variant || ""),
       corrupted: !!line.corrupted,
       spark: sparkFromLine(line),
       ninjaId: line.id,
@@ -6555,6 +6563,8 @@ function isPoe1MapRuleLine(text, className) {
 function isFlavourLine(raw, extra) {
   const t = stripAdvancedRanges(parseAffixStrings(String(raw || ""))).trim();
   if (!t) return false;
+  if (poe1LogbookFactionName(t)) return false;
+  if (/logbooks?/i.test(extra?.className || "") && /^area contains\b/i.test(t)) return false;
   if (isOriginatorMemoryLine(t)) return false;
   if (isPoe1MapRuleLine(t, extra?.className)) return false;
   if (activeGame() === "poe1" && /^Corrupted Blood cannot be inflicted on you(?: \(implicit\))?$/i.test(t)) return false;
@@ -7200,6 +7210,22 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
         if (isCorruptedLine(rawLine) || isMirroredLine(rawLine)) afterFooter = true;
         continue;
       }
+      const logbookFaction = activeGame() === "poe1" && /logbooks?/i.test(className) ? poe1LogbookFactionName(rawLine) : "";
+      if (logbookFaction) {
+        takeMod({
+          text: logbookFaction,
+          kind: "implicit",
+          slot: "",
+          affix: 0,
+          tier: 0,
+          unique: false,
+          fractured: false,
+          desecrated: false,
+          crafted: false,
+          charm,
+        });
+        continue;
+      }
       if (isFlavourLine(rawLine, context)) continue;
       const influence = poe1InfluenceName(rawLine);
       if (influence) { influences.add(influence); continue; }
@@ -7323,6 +7349,7 @@ function isUsefulRoll(text, kind, extra) {
   if (/^(shaper|elder|crusader|hunter|redeemer|warlord)\s+item$/i.test(t)) return false;
   if (/^\([^()]{8,}\)$/.test(t)) return false;
   if (isFlavourLine(t, extra)) return false;
+  if (/logbooks?/i.test(extra?.className || "") && /^area contains\b/i.test(t)) return true;
   if (isOriginatorMemoryLine(t)) return true;
   if (isPoe1MapRuleLine(t, extra?.className)) return true;
   if (extra?.viscera && !/[\d%+]/.test(t)) return false;
@@ -7491,7 +7518,8 @@ function normalizeRolls(rolls, ctx) {
     const raw = rollLineText(roll);
     const text = stripReminderText(stripAdvancedRanges(parseAffixStrings(raw)));
     const viscera = ctx?.viscera || poe1VisceraItem(ctx);
-    const context = viscera || isPoe1Map(ctx?.className) ? { ...roll, className: ctx?.className, viscera } : roll;
+    const keepClass = viscera || isPoe1Map(ctx?.className) || /logbooks?/i.test(ctx?.className || "");
+    const context = keepClass ? { ...roll, className: ctx?.className, viscera } : roll;
     if (!isUsefulRoll(text, kind, context)) continue;
     const visceraOn = (ctx?.viscera || poe1VisceraItem(ctx)) && kind === "implicit" && !roll?.pickedOff;
     const row = keepRollMeta(roll, text, kind, slot, visceraOn || !!(roll && typeof roll === "object" && roll.pick));
@@ -8502,6 +8530,11 @@ const POE1_LOGBOOK_FACTIONS = {
   "Knights of the Sun": "knights", "Order of the Chalice": "order"
 };
 
+function poe1LogbookFactionName(text) {
+  const clean = String(text || "").replace(/\s*\(implicit\)\s*$/i, "").trim().toLowerCase();
+  return Object.keys(POE1_LOGBOOK_FACTIONS).find(name => name.toLowerCase() === clean) || "";
+}
+
 function poe1Logbook(drop) {
   return activeGame() === "poe1" && (/\blogbooks?\b/i.test(drop?.className || "") ||
     /^Expedition Logbook$/i.test(drop?.baseType || drop?.name || ""));
@@ -8520,6 +8553,38 @@ function overlayLogbookFactionsHtml(log, drop) {
     return `<button type="button" class="chip${on ? " is-active" : ""}" data-pick-faction="${esc(name)}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" aria-pressed="${on}">${esc(name)}</button>`;
   });
   return `<div class="price-overlay-mod-group" role="group" aria-label="Require selected factions"><div class="price-overlay-mod-group-label">Factions</div>${buttons.join(" ")}</div>`;
+}
+
+function logbookAreaRoll(roll) {
+  const text = String(roll?.text || "").trim();
+  if (!text || /\d/.test(text)) return false;
+  return !/\b(increased|reduced|more|less|chance|contains|additional|explosives?|remnants?|markers?|artifacts?|monsters?|suffix|prefix|placement|radius)\b/i.test(text);
+}
+
+function logbookFactionSections(drop, implicitRolls) {
+  const names = new Map((drop.props?.factions || []).map(name => [name.toLowerCase(), name]));
+  if (!names.size) return [];
+  const sections = [];
+  let current = null;
+  for (const roll of implicitRolls) {
+    const faction = names.get(String(roll.text || "").trim().toLowerCase());
+    if (faction) {
+      let area = null;
+      if (current?.rolls.length && logbookAreaRoll(current.rolls[current.rolls.length - 1])) {
+        area = current.rolls.pop();
+        if (!current.name && !current.rolls.length) sections.pop();
+      }
+      current = { name: faction, rolls: area ? [area] : [] };
+      sections.push(current);
+      continue;
+    }
+    if (!current) {
+      current = { name: "", rolls: [] };
+      sections.push(current);
+    }
+    current.rolls.push(roll);
+  }
+  return sections.filter(section => section.name || section.rolls.length);
 }
 
 const POE1_ULTIMATUM_CHALLENGES = {
@@ -10349,12 +10414,27 @@ function priceOverlayHtml(log, drop) {
     explicit: "Affixes",
   };
   const factions = overlayLogbookFactionsHtml(log, drop);
+  const logbookSections = poe1Logbook(drop)
+    ? logbookFactionSections(drop, rolls.filter(roll => canonicalRollKind(roll.kind) === "implicit" || drop.props?.factions?.includes(String(roll.text || "").trim())))
+    : [];
+  const logbookHtml = logbookSections.some(section => section.name)
+    ? logbookSections.map(section => {
+        const on = selectedLogbookFactions(drop).includes(section.name);
+        const area = section.rolls.length && logbookAreaRoll(section.rolls[0]) ? section.rolls[0] : null;
+        const mods = area ? section.rolls.slice(1) : section.rolls;
+        const chip = section.name
+          ? `<button type="button" class="chip logbook-faction${on ? " is-active" : ""}" data-pick-faction="${esc(section.name)}" data-pick-drop="${esc(drop.id)}" data-pick-log="${esc(log.id)}" aria-pressed="${on}">${esc(section.name)}</button>`
+          : `<div class="price-overlay-mod-group-label is-implicit">Implicit modifiers</div>`;
+        return `<div class="price-overlay-mod-group is-implicit is-logbook-faction">${chip}${modButtons(mods)}</div>`;
+      }).join("")
+    : "";
   const ultimatum = activeGame() === "poe1" ? drop.props?.ultimatum : null;
   const ultimatumDetails = ultimatum ? `<div class="price-overlay-mod-group"><div class="price-overlay-mod-group-label">Ultimatum</div>
     ${ultimatum.challenge ? `<div>Challenge · ${esc(ultimatum.challenge)}</div>` : ""}
     ${ultimatum.sacrifice ? `<div>Sacrifice · ${esc(ultimatum.sacrifice)} ×${esc(ultimatum.sacrificeAmount)}</div>` : ""}
     ${ultimatum.reward ? `<div>Reward · ${esc(ultimatum.reward)}</div>` : ""}</div>` : "";
-  const modsBody = factions + ultimatumDetails + listedByKind
+  const modsBody = (logbookHtml ? "" : factions) + ultimatumDetails + logbookHtml + listedByKind
+    .filter(({ kind }) => !(logbookHtml && kind === "implicit"))
     .map(({ kind, rolls: list }) => {
       const body = modButtons(list) + (kind === "explicit" ? resistanceControlsHtml(log, drop) : "");
       return `<div class="price-overlay-mod-group is-${kind}"><div class="price-overlay-mod-group-label is-${kind}" role="heading" aria-level="3">${modGroupLabels[kind] || "Modifiers"}</div>${body}</div>`;
@@ -11482,7 +11562,7 @@ function dedupeEconItems(rows) {
   const merged = new Map();
   const normalize = (text) => String(text || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/\brunemasted\b/g, "runemastered");
   for (const row of rows) {
-    const key = JSON.stringify([normalize(row.name), normalize(row.baseType), !!row.corrupted, Number(row.links) || 0, row.gemLevel, row.gemQuality]);
+    const key = JSON.stringify([normalize(row.name), normalize(row.baseType), !!row.corrupted, Number(row.links) || 0, row.gemLevel, row.gemQuality, Number(row.levelRequired) || 0, normalize(row.variant)]);
     const prev = merged.get(key);
     // Keep the quote and chart ID together, preferring the better-supported row.
     if (!prev || (Number.isFinite(row.divine) && !Number.isFinite(prev.divine)) ||
@@ -11511,7 +11591,7 @@ function econRows(type) {
       (!ui.gemCorrupt || Boolean(row.corrupted) === (ui.gemCorrupt === "yes")));
   }
   const q = ui.econSearch.trim().toLowerCase();
-  if (q) rows = rows.filter(row => row.name.toLowerCase().includes(q) || (row.baseType || "").toLowerCase().includes(q));
+  if (q) rows = rows.filter(row => `${row.name} ${row.baseType || ""} ${row.variant || ""} ${row.levelRequired || ""}`.toLowerCase().includes(q));
   return rows;
 }
 
@@ -11543,20 +11623,65 @@ function prepareEconRows(table, type, showLowConfidence) {
   return [...merged.values()];
 }
 
+function clusterEconDetail(row) {
+  return [row?.baseType, row?.levelRequired ? "Level " + row.levelRequired : "", row?.variant].filter(Boolean).join(" · ");
+}
+
+function econListedBase(row, cat) {
+  const base = String(row?.baseType || "").trim();
+  if (!base || base.includes("|")) return "";
+  if (["ValdoMap", "ScryingOrb", "IncursionTemple", "Beast", "Map", "BlightedMap", "BlightRavagedMap", "UniqueMap", "Invitation", "Corpse", "Wombgift", "Flask", "SkillGem", "ImbuedGem", "ClusterJewel", "BaseType"].includes(cat)) return "";
+  if (String(row?.name || "").toLowerCase().includes(base.toLowerCase())) return "";
+  return base;
+}
+
+function econItemTitle(row, cat) {
+  const type = cat || row?.type || "";
+  const name = row?.name || "";
+  if (type === "ImbuedGem") return row?.variant ? `${name}, ${row.variant}` : name;
+  if (["SkillGem", "ClusterJewel", "BaseType", "Beast"].includes(type)) return name;
+  const parts = [name];
+  if (Number(row?.links) > 0) parts.push(`${row.links}L`);
+  const variant = String(row?.variant || "").trim();
+  if (variant && !/^(?:gen-\d+|atlas)$/i.test(variant)) parts.push(variant);
+  const base = econListedBase(row, type);
+  if (base) parts.push(base);
+  return parts.filter(Boolean).join(", ");
+}
+
+function econItemDetail(row, cat) {
+  const type = cat || row?.type || "";
+  if (type === "ClusterJewel") return clusterEconDetail(row);
+  if (type === "SkillGem") {
+    const bits = [`Level ${row.gemLevel ?? "—"}`];
+    if (row.gemQuality != null && row.gemQuality !== "") bits.push(`${row.gemQuality}% quality`);
+    if (row.corrupted) bits.push("corrupted");
+    return bits.join(" · ");
+  }
+  if (type === "BaseType") {
+    const level = Number(row.levelRequired);
+    const levelText = level >= 86 ? "86+" : level > 0 ? String(level) : "";
+    return [levelText, row.variant].filter(Boolean).join(" · ");
+  }
+  return "";
+}
+
 function econRowHtml(row, type) {
   const cat = type || row.type || ui.econType;
   const spark = row.spark || { data: [], change: 0 };
-  const open = ui.econChart && ui.econChart.name === row.name && String(ui.econChart.ninjaId) === String(row.ninjaId);
-  const extra = [row.baseType || econTypeLabel(cat) || "", row.corrupted ? "corrupted" : "", row.listings ? row.listings.toLocaleString() + " listed" : ""]
+  const title = econItemTitle(row, cat);
+  const detail = econItemDetail(row, cat);
+  const open = ui.econChart && ui.econChart.name === row.name && String(ui.econChart.ninjaId) === String(row.ninjaId) && econItemTitle(ui.econChart, ui.econChart.type) === title;
+  const extra = [detail || row.baseType || econTypeLabel(cat) || "", row.corrupted && cat !== "SkillGem" ? "corrupted" : "", row.listings ? row.listings.toLocaleString() + " listed" : ""]
     .filter(Boolean)
     .join(" · ");
   const priced = Number.isFinite(row.amount) || Number.isFinite(row.divine);
   const lowConfidence = activeGame() === "poe1" && row.lowConfidence;
   const art = gameIcon(row.icon);
-  return `<button class="econ-row${open ? " is-open" : ""}" type="button" aria-label="${esc(row.name + ', ' + extra)}" data-econ-open="${esc(row.name)}" data-econ-id="${esc(String(row.ninjaId ?? ""))}" data-econ-kind="${esc(row.kind || "")}" data-econ-type="${esc(cat)}">
-    <span class="econ-art" ${itemHoverAttr(row.name)}>${art ? `<img class="item-icon" src="${esc(art)}" alt="" draggable="false" onerror="this.remove()" />` : itemIconHtml(row.name, "", true)}</span>
+  return `<button class="econ-row${open ? " is-open" : ""}" type="button" aria-label="${esc(title + ', ' + extra)}" data-econ-open="${esc(row.name)}" data-econ-id="${esc(String(row.ninjaId ?? ""))}" data-econ-kind="${esc(row.kind || "")}" data-econ-type="${esc(cat)}">
+    <span class="econ-art" ${itemHoverAttr(title)}>${art ? `<img class="item-icon" src="${esc(art)}" alt="" draggable="false" onerror="this.remove()" />` : itemIconHtml(title, "", true)}</span>
     <span class="econ-copy">
-      <span class="${econItemTypes().includes(cat) ? "unique-name" : "econ-name"}">${esc(row.name)}</span>${activeGame() === "poe1" && cat === "SkillGem" ? `<span class="econ-base">Level ${esc(row.gemLevel ?? "—")} · ${esc(row.gemQuality ?? 0)}% quality${row.corrupted ? " · corrupted" : ""}</span>` : ""}${row.links > 0 ? `<span class="econ-links">${esc(String(row.links))}L</span>` : ""}${econItemTypes().includes(cat) && row.baseType ? `<span class="econ-base">, ${esc(row.baseType)}${row.corrupted ? " · corrupted" : ""}</span>` : ""}
+      <span class="${econItemTypes().includes(cat) ? "unique-name" : "econ-name"}">${esc(title)}</span>${detail ? `<span class="econ-base">${esc(detail)}</span>` : ""}
     </span>
     ${sparkSvg(spark.data, spark.change)}
     ${econTrendHtml(spark)}
@@ -11587,8 +11712,8 @@ function econChartHtml() {
       <div class="econ-chart-title" ${itemHoverAttr(row.name)}>
         ${itemIconHtml(row.name, "lg")}
         <div>
-          <h3>${esc(row.name)}</h3>
-          <p class="muted">${esc(row.baseType || econTypeLabel(row.type) || "")} · 7-day trend ${econTrendHtml(spark)}</p>
+          <h3>${esc(econItemTitle(row, row.type))}</h3>
+          <p class="muted">${esc(econItemDetail(row, row.type) || econTypeLabel(row.type) || "")} · 7-day trend ${econTrendHtml(spark)}</p>
         </div>
       </div>
       <button class="btn ghost" data-econ-chart-close type="button">Close</button>
@@ -12989,6 +13114,24 @@ function rememberWealthPoint(draft) {
   publishWealthLive();
 }
 
+function wealthHourSamples(points, xy) {
+  return points.map((point, index) => ({
+    x: Number(xy[index][0].toFixed(1)),
+    y: Number(xy[index][1].toFixed(1)),
+    at: point.at,
+    total: point.total,
+  }));
+}
+
+function wealthHoverMarkup(points, xy, unit, top, base, left, plotW, plotH) {
+  const hoverPts = encodeURIComponent(JSON.stringify(wealthHourSamples(points, xy)));
+  return `<rect class="wealth-plot" x="${left}" y="${top}" width="${plotW}" height="${plotH}" fill="transparent" data-wealth-unit="${esc(unit)}" data-wealth-pts="${hoverPts}" />`;
+}
+
+function wealthCursorHtml() {
+  return `<div class="wealth-cursor" hidden><span class="wealth-cursor-dot"></span></div>`;
+}
+
 function wealthChart(points) {
   if (activeGame() !== "poe1") return poe2WealthChart(points);
   const h = 236;
@@ -13021,11 +13164,7 @@ function wealthChart(points) {
   const area = line
     ? `${line} L${xy[xy.length - 1][0].toFixed(1)} ${base.toFixed(1)} L${xy[0][0].toFixed(1)} ${base.toFixed(1)} Z`
     : "";
-  const marks = points.map((point, index) => {
-    const x = xy[index][0].toFixed(1);
-    const y = xy[index][1].toFixed(1);
-    return `<g class="wealth-dot"><title>${esc(wealthPointTitle(point, unit))}</title><circle class="wealth-dot-hit" cx="${x}" cy="${y}" r="8" /><circle class="wealth-dot-mark" cx="${x}" cy="${y}" r="3.4" /></g>`;
-  }).join("");
+  const marks = wealthHoverMarkup(points, xy, unit, top, base, left, plotW, plotH);
   const rawTicks = [];
   for (let at = Math.ceil(t0 / step) * step; at <= t1; at += step) rawTicks.push(at);
   if (!rawTicks.length && points.length) rawTicks.push(t0);
@@ -13072,7 +13211,7 @@ function wealthChart(points) {
     ${area ? `<path class="wealth-area" d="${area}" />` : ""}
     ${line ? `<path class="wealth-line" d="${line}" />` : ""}
     ${stashLines}${marks}${axis}
-  </svg><p class="wealth-hover" hidden></p></div>`;
+  </svg>${wealthCursorHtml()}<p class="wealth-hover" hidden><span class="wealth-hover-when"></span><span class="wealth-hover-value"></span></p></div>`;
 }
 
 function poe2WealthChart(points) {
@@ -13104,11 +13243,7 @@ function poe2WealthChart(points) {
   const area = line
     ? `${line} L${xy[xy.length - 1][0].toFixed(1)} ${base.toFixed(1)} L${xy[0][0].toFixed(1)} ${base.toFixed(1)} Z`
     : "";
-  const marks = points.map((point, index) => {
-    const x = xy[index][0].toFixed(1);
-    const y = xy[index][1].toFixed(1);
-    return `<g class="wealth-dot"><title>${esc(wealthPointTitle(point, unit))}</title><circle class="wealth-dot-hit" cx="${x}" cy="${y}" r="8" /><circle class="wealth-dot-mark" cx="${x}" cy="${y}" r="3.4" /></g>`;
-  }).join("");
+  const marks = wealthHoverMarkup(points, xy, unit, top, base, left, plotW, plotH);
   const minute = 60000;
   const steps = [15, 30, 60, 120, 180, 360, 720, 1440, 2880, 10080, 43200].map(count => count * minute);
   let step = steps[steps.length - 1];
@@ -13136,7 +13271,7 @@ function poe2WealthChart(points) {
     ${area ? `<path class="wealth-area" d="${area}" />` : ""}
     ${line ? `<path class="wealth-line" d="${line}" />` : ""}
     ${marks}${axis}
-  </svg><p class="wealth-hover" hidden></p></div>`;
+  </svg>${wealthCursorHtml()}<p class="wealth-hover" hidden><span class="wealth-hover-when"></span><span class="wealth-hover-value"></span></p></div>`;
 }
 
 function wealthDonut(parts, activeCategory = null) {
@@ -15510,7 +15645,83 @@ function showItemTip(anchor, name) {
 }
 
 let tipTimer = 0;
+function wealthScreenPoint(svg, x, y) {
+  const point = svg.createSVGPoint();
+  point.x = x;
+  point.y = y;
+  const ctm = svg.getScreenCTM();
+  return ctm ? point.matrixTransform(ctm) : point;
+}
+
+function placeWealthCursor(cursor, x, dotY) {
+  const dot = cursor.querySelector(".wealth-cursor-dot");
+  if (!dot) return;
+  dot.style.left = `${x}px`;
+  dot.style.top = `${dotY}px`;
+}
+
+function hideWealthPlotHover(plot) {
+  const wrap = plot?.closest(".wealth-chart-wrap");
+  const hover = wrap?.querySelector(".wealth-hover");
+  const cursor = wrap?.querySelector(".wealth-cursor");
+  if (hover) hover.hidden = true;
+  if (cursor) cursor.hidden = true;
+}
+
+function showWealthPlotHover(event) {
+  const plot = event.target.closest?.(".wealth-plot");
+  const wrap = plot?.closest(".wealth-chart-wrap");
+  const hover = wrap?.querySelector(".wealth-hover");
+  if (!plot || !hover) return false;
+  let pts = [];
+  try { pts = JSON.parse(decodeURIComponent(plot.dataset.wealthPts || "[]")); } catch { pts = []; }
+  if (!pts.length) return false;
+  const svg = plot.ownerSVGElement;
+  const cursor = wrap.querySelector(".wealth-cursor");
+  const screen = svg.createSVGPoint();
+  screen.x = event.clientX;
+  screen.y = event.clientY;
+  const local = svg.getScreenCTM() ? screen.matrixTransform(svg.getScreenCTM().inverse()) : screen;
+  const x = Math.min(pts[pts.length - 1].x, Math.max(pts[0].x, local.x));
+  let next = pts.length - 1;
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].x >= x) { next = i; break; }
+  }
+  const prev = pts[Math.max(0, next - 1)];
+  const span = next === 0 ? 0 : pts[next].x - prev.x;
+  const t = span > 0 ? (x - prev.x) / span : 0;
+  const y = prev.y + (pts[next].y - prev.y) * t;
+  const total = prev.total + (pts[next].total - prev.total) * t;
+  const at = prev.at + (pts[next].at - prev.at) * t;
+  const wrapRect = wrap.getBoundingClientRect();
+  const dotPt = wealthScreenPoint(svg, x, y);
+  const px = dotPt.x - wrapRect.left;
+  const py = dotPt.y - wrapRect.top;
+  if (cursor) {
+    cursor.hidden = false;
+    placeWealthCursor(cursor, px, py);
+  }
+  const when = hover.querySelector(".wealth-hover-when");
+  const value = hover.querySelector(".wealth-hover-value");
+  if (when) when.textContent = new Date(at).toLocaleString(undefined, { weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  if (value) value.textContent = "Wealth: " + wealthAmountText(total, plot.dataset.wealthUnit || "divine");
+  hover.hidden = false;
+  const tipW = hover.offsetWidth || 180;
+  const tipH = hover.offsetHeight || 44;
+  const cx = px;
+  const cy = py;
+  let left = cx + 14;
+  if (left + tipW > wrapRect.width - 8) left = cx - tipW - 14;
+  hover.style.left = `${Math.max(8, left)}px`;
+  hover.style.top = `${Math.max(8, Math.min(cy - tipH / 2, wrapRect.height - tipH - 8))}px`;
+  return true;
+}
+
+document.addEventListener("pointermove", (event) => {
+  if (event.target.closest?.(".wealth-plot")) showWealthPlotHover(event);
+});
 document.addEventListener("pointerover", (event) => {
+  if (showWealthPlotHover(event)) return;
   const wealthDot = event.target.closest?.(".wealth-dot");
   if (wealthDot) {
     const hover = wealthDot.closest(".wealth-chart-wrap")?.querySelector(".wealth-hover");
@@ -15537,6 +15748,8 @@ document.addEventListener("pointerover", (event) => {
   tipTimer = setTimeout(() => showItemTip(el, name), 160);
 });
 document.addEventListener("pointerout", (event) => {
+  const plot = event.target.closest?.(".wealth-plot");
+  if (plot && !(event.relatedTarget && plot.contains(event.relatedTarget))) hideWealthPlotHover(plot);
   const wealthDot = event.target.closest?.(".wealth-dot");
   if (wealthDot && !(event.relatedTarget && wealthDot.contains(event.relatedTarget))) {
     const hover = wealthDot.closest(".wealth-chart-wrap")?.querySelector(".wealth-hover");
