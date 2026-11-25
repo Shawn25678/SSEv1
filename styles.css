@@ -6919,6 +6919,8 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
   box-sizing: border-box;
 }
 .poe1-wealth .wealth-chart { width: 100%; min-width: 0; }
+.poe1-wealth .wealth-chart-wrap { overflow: clip; }
+.poe1-wealth .wealth-hover { box-sizing: border-box; width: max-content; max-width: calc(100% - 16px); white-space: normal; }
 .poe1-wealth { --wealth-sidebar-width: clamp(196px, 22%, 240px); }
 .poe1-wealth .wealth-overview {
   display: grid;
@@ -6953,7 +6955,32 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
 }
 .poe1-wealth .wealth-read-actions .btn { padding: 6px 8px; }
 .poe1-wealth .wealth-top #wealth-status { margin: 0; font-size: .8rem; overflow-wrap: anywhere; }
-.poe1-wealth .wealth-panel-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.poe1-wealth .wealth-panel-title,
+.wealth-hero .wealth-panel-title { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.wealth-history-controls { display: flex; align-items: stretch; gap: 6px; }
+.wealth-history-controls [data-wealth-replay] { min-width: 6.75rem; }
+.wealth-hero.is-replaying .wealth-plot { pointer-events: none; }
+.wealth-hero.is-replaying .wealth-headline > :not(.wealth-replay-label) { display: none; }
+.wealth-replay-label:not([hidden]) { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px; }
+.wealth-spike-review { margin-top: 6px; }
+.wealth-spike-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  max-height: 15rem;
+  overflow-y: auto;
+}
+.wealth-spike-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 8px 0;
+  border-top: 1px solid color-mix(in srgb, var(--gold) 24%, transparent);
+}
+.wealth-spike-row small { display: block; color: var(--muted); }
+.wealth-spike-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .poe1-wealth .wealth-market-status { display: grid; gap: 5px; font-size: .76rem; color: var(--muted); }
 .poe1-wealth .wealth-hero .wealth-chart { max-height: 206px; }
 .poe1-wealth select { max-width: 100%; padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--bg); color: var(--ink); }

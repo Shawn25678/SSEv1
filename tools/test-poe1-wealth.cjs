@@ -3,15 +3,24 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const c = vm.createContext({ console, URL, URLSearchParams, Map, Set, Date, performance,
   window: { addEventListener() {} }, localStorage: { getItem() { return null; }, setItem() {} },
-  document: { addEventListener() {}, getElementById() { return { addEventListener() {} }; } },
+  document: { addEventListener() {}, getElementById() { return { dataset: {}, addEventListener() {} }; } },
   setTimeout() {}, clearTimeout() {}, setInterval() {} });
-let source = fs.readFileSync('app.js', 'utf8');
+const appSource = fs.readFileSync('app.js', 'utf8');
+let source = appSource;
 source = source.slice(0, source.indexOf('document.addEventListener("click", onClick)')) +
   source.slice(source.indexOf('function ninjaCurrencyPrice'), source.indexOf('window.chrome?.webview?.addEventListener("message", event =>'));
 vm.runInContext(fs.readFileSync('bosses.js', 'utf8'), c);
 vm.runInContext(source.replace(/^applyTheme\(.*?\);$/m, ''), c);
 const run = text => vm.runInContext(text, c);
 run('state.activeGame="poe1"; state.poe1League="Covens"; poe1Prices.league="Covens"; poe1Prices.chaosPerDivine=200;');
+const poe2DivineIcon = 'https://web.poecdn.com/image/poe2-divine.png';
+c.poe2DivineIcon = poe2DivineIcon;
+run('iconCache.set("divine orb", poe2DivineIcon);');
+assert.match(c.wealthTotalHtml(2), /ec48896769\/CurrencyModValues\.png/, 'PoE 1 Wealth uses its Divine Orb before prices load');
+run('state.activeGame="poe2";');
+assert.equal(c.lookupIcon('Divine Orb'), poe2DivineIcon, 'PoE 2 keeps its ordinary icon lookup');
+assert.match(c.wealthChart([{at:1,total:2},{at:2,total:3}]), /wealth-replay-clip/);
+run('state.activeGame="poe1"; iconCache.delete("divine orb");');
 const compact = { items: [
   { id:1, name:'Fireball', category:'gem', mean:40, gemLevel:20, gemQuality:20, gemIsCorrupted:false },
   { id:2, name:'Fireball', category:'gem', mean:80, gemLevel:21, gemQuality:20, gemIsCorrupted:true },
@@ -54,13 +63,14 @@ run('state.poe1WealthMinChaos=2;');
 run('ui.wealth={league:"Covens", slots:[{name:"The Test",count:1,stash:"1",stashName:"Cards"},{name:"Divine Orb",count:1,stash:"2",stashName:"Currency"}],poe1Tabs:[{index:1,name:"Cards"},{index:2,name:"Currency"}],manageTabs:true};state.poe1StashOn={Covens:{1:false}};');
 assert.deepEqual(Array.from(run('trackedWealthSlots(wealthDraft())'),slot=>slot.name),['Divine Orb']);
 assert.equal(c.wealthHistoryMatches({league:'Covens'},'Covens',c.poe1WealthScope()),false,'old minimum does not distort the new chart');
-assert.match(run('poe1StashPicker(wealthDraft())'), /data-poe1-stash="1"\s+>/);
+run('wealthDraft().hiddenOpen=true;');
+assert.match(run('poe1WealthSidebar(wealthDraft(), [], new Map())'), /data-poe1-stash="1"\s+aria-label="Show Cards"/);
 run('ui.wealth.stashFilter="2"; applyPoe1StashTabs(wealthDraft(), [{index:1,name:"Old Cards",type:"DivinationCardStash"},{index:2,name:"Crafting supplies",type:"CurrencyStash",colour:"386545"},{index:4,name:"Empty tab",type:"FragmentStash"}]);');
 assert.equal(run('wealthDraft().slots[1].stashName'),'Crafting supplies');
 assert.equal(run('savedPoe1Tabs("Covens")[1].name'),'Crafting supplies');
 assert.equal(run('wealthDraft().stashFilter'),'2','renaming keeps the selected tab');
 assert.equal(run('poe1StashOn(1)'),false,'renaming preserves tracked-tab choices');
-assert.match(run('poe1StashPicker(wealthDraft())'), /Crafting supplies/);
+assert.match(run('poe1WealthSidebar(wealthDraft(), [], new Map())'), /Crafting supplies/);
 run('askPoe1Session=()=>{}; queuePoe1Tabs=()=>{}; itemIconHtml=()=>"";');
 run('poe1LeagueList=[{id:"Standard",name:"Standard"},{id:"Covens",name:"Covens"}];');
 const wealthLayout = c.renderWealth();
@@ -69,7 +79,7 @@ assert.match(wealthLayout, /class="wealth-overview"[\s\S]*?data-wealth-read-tab[
 assert.match(wealthLayout, /wealth-items-layout[\s\S]*wealth-stash-sidebar[\s\S]*data-wealth-select-tab="2" aria-pressed="true"[\s\S]*Crafting supplies[\s\S]*wealth-sheet/);
 assert.match(wealthLayout, /data-wealth-select-tab="4"[\s\S]*Empty tab/);
 assert.match(wealthLayout, /data-wealth-select-tab="2"[^>]*>[\s\S]*?aria-label="Currency tab"[\s\S]*?Crafting supplies/);
-assert.match(wealthLayout, /data-wealth-select-tab="2"[^>]*--stash-accent:#386545/);
+assert.match(wealthLayout, /wealth-stash-row" style="--stash-accent:#386545"[^>]*>\s*<input[^>]*data-poe1-stash="2"/);
 assert.doesNotMatch(wealthLayout, /id="wealth-stash-filter"/);
 assert.doesNotMatch(wealthLayout, /id="wealth-min-card-volume"/);
 assert.doesNotMatch(wealthLayout, />Unpriced<|>Included<|>Excluded<|>Filtered cards</);
@@ -180,7 +190,7 @@ assert.doesNotMatch(c.renderWealth(), /id="wealth-min-card-volume"/);
 c.sortSlots = [{...card,count:10}, noVolume, orb];
 run('ui.wealth.categoryFilter=""; ui.wealth.slots=sortSlots;');
 assert.match(volumeTable(), /The Test[\s\S]*?Divine Orb/);
-assert.doesNotMatch(volumeTable(), /No Volume/);
+assert.match(volumeTable(), /No Volume[\s\S]*?Unpriced/);
 c.onChange({target:{dataset:{wealthOption:'sort'},value:'unit-value',matches:()=>false}});
 assert.match(volumeTable(), /Divine Orb[\s\S]*?The Test/);
 assert.match(c.renderWealth(), /value="unit-value" selected>Highest unit value/);
@@ -233,6 +243,219 @@ for (const [base, cls] of [['Fright Claw','Claws'],['Crude Bow','Bows'],['Timewo
   assert.ok(c.uniqueVariantsForBase(item.baseType,cls).length,base+' choices');
   assert.ok(c.overlayUnidHtml({id:'test'},item).includes('data-pick-unid'),base+' toggle');
   assert.equal(c.resistanceControlsHtml({id:'test'},item),'');
+}
+const day = 86400000;
+const now = Date.now();
+const saved = {
+  poe1IgnoredWealth: ['Divine Orb', 'Divine Orb', null],
+  poe1IncludedLowVolumeCards: ['The Test'],
+  poe1StashOn: {Covens:{1:'false',2:'true'}},
+  wealthSeries: [
+    {league:'Covens',at:now-day,total:5,poe1Scope:'[0,[],[]]'},
+    {league:'Covens',at:now-26*day,total:2,poe1Scope:'[10,[],["Divine Orb"]]'},
+    {league:'Standard',at:now-day,total:200,poe1Scope:'[0,[],[]]'},
+    {league:'Standard',at:now-day,total:12},
+  ],
+};
+c.localStorage.getItem = () => JSON.stringify(saved);
+c.upgraded = c.loadState();
+c.localStorage.getItem = () => null;
+assert.deepEqual(Array.from(c.upgraded.poe1IgnoredWealth), ['Divine Orb']);
+assert.deepEqual(Array.from(c.upgraded.poe1IncludedLowVolumeCards), ['The Test']);
+assert.equal(c.upgraded.wealthSeries.length,1,'PoE 2 keeps its own history');
+assert.equal(c.upgraded.poe1WealthSeries.length,3);
+assert.ok(c.upgraded.poe1WealthSeries.every(row=>row.poe1Scope.startsWith('scope:')));
+const priorState = run('state');
+const priorWealth = run('ui.wealth');
+c.priorState = priorState;
+c.priorWealth = priorWealth;
+run('state=upgraded; state.activeGame="poe1"; state.poe1League="Covens"; ui.wealth=null;');
+assert.deepEqual(Array.from(c.wealthSamples(c.wealthDraft()),row=>row.total),[2,5]);
+assert.equal(c.poe1StashOn(1),false);
+assert.equal(c.poe1StashOn(2),true);
+assert.match(c.renderWealth(),/Value over time/,'history is available before reading the stash');
+assert.equal(c.poe1WealthPerHour(c.wealthSamples(c.wealthDraft())),null,'different filters do not produce an hourly rate');
+run('state.poe1WealthMinChaos=100;');
+assert.deepEqual(Array.from(c.wealthSamples(c.wealthDraft()),row=>row.total),[2,5]);
+run('state=priorState; ui.wealth=priorWealth;');
+{
+  const hour = 3600000;
+  const historyFixture = [
+    {at:now-10*hour,total:80}, {at:now-9*hour,total:4000}, {at:now-8*hour,total:7000},
+    {at:now-7*hour,total:81}, {at:now-6*hour,total:3000,supportedCardPrices:true},
+    {at:now-5*hour,total:82}, {at:now-4*hour,total:5000}, {at:now-3*hour,total:5200},
+  ];
+  const review = c.poe1WealthSpikeReview(historyFixture,'Covens');
+  assert.deepEqual(Array.from(review.points,row=>row.total),[80,81,3000,82,5000,5200]);
+  assert.deepEqual(Array.from(review.entries,entry=>[entry.point.total,entry.samples.length,entry.hidden]),[[7000,2,true],[3000,1,false]]);
+  assert.equal(historyFixture.length,8,'saved history stays intact');
+  assert.deepEqual(Array.from(c.poe1WealthSpikeReview([
+    {at:now-15*hour,total:80},{at:now-14*hour,total:4000},{at:now,total:83},
+  ],'Covens').points,row=>row.total),[80,4000,83],'history across a long gap cannot confirm a short-lived spike');
+
+  const beforeHistoryReview = run('state.poe1WealthSeries');
+  c.beforeReviewLeague = run('state.poe1League');
+  run('state.poe1League="Covens";');
+  const beforeReviewDraft = run('ui.wealth');
+  const beforeReviewView = run('ui.view');
+  const beforeReviewPaint = c.repaintWealth;
+  const beforeReviewPublish = c.publishWealthLive;
+  const beforeReviewStorage = c.localStorage.setItem;
+  let savedReview;
+  c.localStorage.setItem = (_, value) => { savedReview = JSON.parse(value); };
+  c.repaintWealth = () => {};
+  c.publishWealthLive = () => {};
+  c.reviewFixture = [historyFixture[0],{...historyFixture[1],supportedCardPrices:true},
+    {...historyFixture[2],supportedCardPrices:true},{at:now-7.5*hour,total:440,supportedCardPrices:true},historyFixture[3]]
+    .map(point=>({...point,league:'Covens'}));
+  c.reviewFixture[0].stashes = [{id:'cards',name:'Cards',total:80}];
+  c.reviewFixture[2].stashes = [{id:'cards',name:'Cards',total:7000}];
+  run('state.poe1WealthSeries=reviewFixture; ui.wealth=null; ui.view="wealth";');
+  assert.match(c.renderWealth(),/Review spikes \(1\)/);
+  assert.match(c.renderWealth(),/>7000d<\/text>/);
+  const pressReview = (selector, dataset = {}) => c.onClick({target:{closest:query=>query === selector ? {dataset} : null}});
+  pressReview('[data-wealth-spike-toggle]');
+  assert.match(c.renderWealth(),/Cards \+6920d/);
+  const spikeAt = String(historyFixture[2].at);
+  const firstSpikeAt = String(historyFixture[1].at);
+  pressReview('[data-wealth-spike-decision]',{wealthSpikeAt:spikeAt,wealthSpikeDecision:'keep'});
+  assert.equal(savedReview.poe1WealthSpikeDecisions.Covens[spikeAt],'keep');
+  assert.ok(c.poe1WealthSpikeReview(historyFixture,'Covens').points.some(row=>row.total===4000));
+  assert.ok(c.poe1WealthSpikeReview(historyFixture,'Standard').points.every(row=>row.total!==4000));
+  assert.doesNotMatch(c.renderWealth(),/data-wealth-spike-toggle|data-wealth-spike-decision/);
+  pressReview('[data-toast]',{toast:'wealth-spike-undo'});
+  assert.match(c.renderWealth(),/data-wealth-spike-decision="false-price"/);
+  pressReview('[data-wealth-spike-decision]',{wealthSpikeAt:spikeAt,wealthSpikeDecision:'false-price'});
+  assert.equal(savedReview.poe1WealthSpikeDecisions.Covens[spikeAt],'false-price');
+  assert.equal(savedReview.poe1WealthSpikeDecisions.Covens[firstSpikeAt],'false-price');
+  assert.ok(c.poe1WealthSpikeReview(historyFixture,'Covens').points.every(row=>row.total!==4000));
+  const cleanChart = c.renderWealth();
+  assert.doesNotMatch(cleanChart,/data-wealth-spike-toggle|data-wealth-spike-decision/);
+  assert.match(cleanChart,/>100d<\/text>/);
+  assert.doesNotMatch(cleanChart,/>7000d<\/text>/);
+  assert.equal(savedReview.poe1WealthSeries[1].total,4000);
+  run('state.poe1WealthSpikeDecisions={Covens:{[reviewFixture[1].at]:"false-price"}};');
+  assert.deepEqual(Array.from(c.poe1WealthSpikeReview(c.reviewFixture,'Covens').points,row=>row.total),[80,81],
+    'an older per-reading false flag also hides the rest of the detected spike');
+  c.axisFixture = [4.4,5,6,580,8,20,44,280,70,81,82.2].map((total,index)=>({
+    at:now-(10-index)*6*hour,total,league:'Covens',
+  }));
+  run('delete state.poe1WealthSpikeDecisions; state.poe1WealthSeries=axisFixture;');
+  const fullChart = c.renderWealth();
+  assert.equal(c.poe1WealthAxis(580,'divine').max,605);
+  assert.equal(c.poe1WealthAxis(.5,'chaos').max,.75*c.poe1WealthChaosRate());
+  assert.match(fullChart,/>600d<\/text>/);
+  assert.doesNotMatch(fullChart,/>1000d<\/text>|Fit typical values|Show full scale/);
+  const fullHover = JSON.parse(decodeURIComponent(fullChart.match(/data-wealth-pts="([^"]+)"/)[1]));
+  assert.equal(fullHover.find(point=>point.total===580).y,23.6,'the peak has 25 divines of chart space above it');
+  const dates = [...fullChart.matchAll(/y="224" text-anchor="middle">([^<]+)<\/text>/g)].map(match=>match[1]);
+  assert.ok(dates.length >= 2);
+  assert.equal(new Set(dates).size,dates.length,'daily labels are unique');
+  c.periodFixture = [{at:now-60*day,total:4},{at:now-6*day,total:7},{at:now-2*day,total:17},{at:now-6*hour,total:27}]
+    .map(point=>({...point,league:'Covens'}));
+  const older = { ...c.periodFixture[0], at: Math.floor((now - 60 * day) / day) * day };
+  assert.deepEqual(Array.from(c.compactPoe1WealthSeries([
+    older, {...older,at:older.at+hour,total:5}, {...older,at:now-181*day,total:1},
+  ],now),point=>point.total), [5], 'compact older league history to the latest daily point');
+  run('state.poe1WealthSeries=periodFixture;');
+  const periodChart = () => c.renderWealth();
+  assert.match(periodChart(),/<option value="1" >1 day<\/option><option value="3" >3 days<\/option><option value="7" selected>7 days<\/option>/);
+  assert.doesNotMatch(periodChart(),/30 days/);
+  for (const [period, expected] of [['1',[27]],['3',[17,27]],['7',[7,17,27]],['league',[4,7,17,27]]]) {
+    c.onChange({target:{dataset:{wealthOption:'days'},value:period,matches:()=>false}});
+    const samples = JSON.parse(decodeURIComponent(periodChart().match(/data-wealth-pts="([^"]+)"/)[1]));
+    assert.deepEqual(samples.map(sample=>sample.total),expected);
+    assert.equal(/data-wealth-replay disabled/.test(periodChart()),expected.length < 2);
+  }
+  const poe2SavedSeries = run('state.wealthSeries');
+  c.poe2SavedSeries = poe2SavedSeries;
+  run(`state.activeGame="poe2"; ui.wealth=null;
+    state.wealthSeries=[
+      ...periodFixture.map(point=>({...point,league:wealthLeague()})),
+      {...periodFixture[0],league:"other league",total:400},
+      {...periodFixture[1],league:wealthLeague(),poe1Scope:"poe1-history",total:700}
+    ];`);
+  assert.match(periodChart(),/<option value="league" selected>League<\/option>/);
+  for (const [period, expected] of [['1',[27]],['3',[17,27]],['7',[7,17,27]],['league',[4,7,17,27]]]) {
+    c.onChange({target:{dataset:{wealthOption:'days'},value:period,matches:()=>false}});
+    const chart = periodChart();
+    const samples = JSON.parse(decodeURIComponent(chart.match(/data-wealth-pts="([^"]+)"/)[1]));
+    assert.deepEqual(samples.map(sample=>sample.total),expected,'PoE 2 uses only the current PoE 2 league');
+    assert.equal(/data-wealth-replay disabled/.test(chart),expected.length < 2);
+    assert.match(chart,/>Read tabs<\/button>/,'PoE 2 keeps its stash workflow');
+    assert.doesNotMatch(chart,/data-poe1-login|data-wealth-spike-toggle/);
+  }
+  run('state.activeGame="poe1"; state.wealthSeries=poe2SavedSeries;');
+  c.beforeHistoryReview = beforeHistoryReview;
+  c.beforeReviewDraft = beforeReviewDraft;
+  c.beforeReviewView = beforeReviewView;
+  run('state.poe1WealthSeries=beforeHistoryReview; ui.wealth=beforeReviewDraft; ui.view=beforeReviewView; delete state.poe1WealthSpikeDecisions;');
+  c.repaintWealth = beforeReviewPaint;
+  c.publishWealthLive = beforeReviewPublish;
+  c.localStorage.setItem = beforeReviewStorage;
+
+  const hoverStart = appSource.indexOf('const poe1WealthHoverPoints');
+  vm.runInContext(appSource.slice(hoverStart, appSource.indexOf('document.addEventListener("pointermove"',hoverStart)),c);
+  const frames = [];
+  c.requestAnimationFrame = callback => frames.push(callback);
+  const hover = {style:{},querySelector:()=>({})};
+  const cursor = {querySelector:()=>({style:{}})};
+  const wrap = {getBoundingClientRect:()=>({left:0,top:0,width:205,height:150}),
+    querySelector:selector=>selector === '.wealth-hover' ? hover : cursor};
+  Object.assign(hover,{offsetWidth:140,offsetHeight:44});
+  let reads = 0;
+  const encoded = encodeURIComponent(JSON.stringify([{x:8,y:112,at:Date.now()-1000,total:2},{x:202,y:112,at:Date.now(),total:3}]));
+  const plot = {isConnected:true, closest:selector=>selector === '.wealth-plot' ? plot : wrap,
+    dataset:{get wealthPts(){reads++;return encoded;},wealthUnit:'divine'},
+    ownerSVGElement:{createSVGPoint:()=>({}),getScreenCTM:()=>null}};
+  for (let x=100;x<=200;x++) c.queuePoe1WealthHover(plot,{target:plot,clientX:x,clientY:112});
+  assert.equal(frames.length,1);
+  frames.shift()();
+  assert.equal(hover.style.left,'57px');
+  assert.equal(hover.style.top,'56px');
+  c.queuePoe1WealthHover(plot,{target:plot,clientX:8,clientY:112});
+  frames.shift()();
+  assert.equal(hover.style.left,'8px');
+  assert.equal(reads,1);
+  c.queuePoe1WealthHover(plot,{target:plot,clientX:200,clientY:112});
+  c.hideWealthPlotHover(plot);
+  frames.shift()();
+  assert.equal(hover.hidden,true,'a queued hover cannot reopen after pointer-out');
+  const clip = {setAttribute(_, value) { this.width = Number(value); }};
+  const lines = {setAttribute(_, value) { this.clip = value; },removeAttribute() { this.clip = ''; }};
+  const replayTime = {};
+  const replayAmount = {};
+  const label = {hidden:true,querySelector:selector=>selector === '[data-wealth-replay-value]' ? replayAmount : replayTime};
+  const panel = {classList:new Set(),querySelector:selector=>({
+    '.wealth-plot':plot,'#wealth-replay-clip rect':clip,'.wealth-history-lines':lines,'.wealth-replay-label':label,
+  })[selector]};
+  panel.classList.remove = panel.classList.delete;
+  const replayButton = {textContent:'Replay',isConnected:true,closest:()=>panel};
+  c.cancelAnimationFrame = () => { frames.length = 0; };
+  const clickReplay = () => c.onClick({target:{closest:selector=>selector === '[data-wealth-replay]' ? replayButton : null}});
+  clickReplay();
+  const replayStart = performance.now();
+  assert.equal(label.hidden,false);
+  assert.equal(replayButton.textContent,'Stop replay');
+  assert.match(replayAmount.innerHTML, />2(?:\.0)?d<\/span>/);
+  assert.equal(clip.width,4);
+  frames.shift()(replayStart+7000);
+  assert.ok(clip.width > 95 && clip.width < 110,'reveal about half the plot halfway through');
+  frames.shift()(replayStart+14000);
+  assert.match(replayAmount.innerHTML, />3(?:\.0)?d<\/span>/);
+  assert.equal(lines.clip,'');
+  assert.equal(label.hidden,true);
+  run('state.activeGame="poe2";');
+  clickReplay();
+  assert.equal(replayButton.textContent,'Stop replay','PoE 2 can start the same replay');
+  clickReplay();
+  assert.equal(replayButton.textContent,'Replay');
+  assert.equal(frames.length,0,'stopping cancels the scheduled frame');
+  clickReplay();
+  run('state.activeGame="poe1";');
+  frames.shift()(performance.now()+1000);
+  assert.equal(label.hidden,true,'changing games stops old playback');
+  run('state.poe1League=beforeReviewLeague;');
 }
 for (const base of ['Ruby Ring','Coral Ring','Two-Stone Ring']) {
   const item = c.parsePoeItem(`Item Class: Rings\nRarity: Rare\nFated ${base}\n--------\nItem Level: 40\n--------\nUnidentified`);
@@ -610,21 +833,19 @@ run('window.chrome={webview:{postMessage(){throw Error("Unexpected trade request
     lines: [{id:'exalted',primaryValue:0.9024}],
   };
   run('takePoe1Lines(exaltedFeed, "Currency", false);');
-  const exalted = {id:'exalted-test',name:'Exalted Orb',rarity:'Currency',qty:10};
+  const exalted = {id:'exalted-test',name:'Exalted Orb',rarity:'Currency',qty:10,stackMax:20};
   const rateHtml = c.currencyOverlayHtml(exalted);
-  assert.match(rateHtml, /Each .*0\.9c/);
-  assert.match(rateHtml, /Stack .*9\.0c/);
-  const largeStack = c.currencyOverlayHtml({...exalted,qty:300});
-  assert.match(largeStack, /Each .*0\.9c/);
-  assert.match(largeStack, /Stack .*1\.2d/);
+  assert.match(rateHtml, /You have.*9\.02 chaos/);
+  assert.match(rateHtml, /Stack.*18 chaos/);
+  const largeStack = c.currencyOverlayHtml({...exalted,qty:300,stackMax:0});
+  assert.match(largeStack, /You have.*1\.19 divine/);
   run('poe1Prices.tables.DivinationCard.push({name:"The Apothecary",amount:10025,unit:"chaos"});');
   const apothecary = c.currencyOverlayHtml({name:'The Apothecary',rarity:'Divination Card'});
-  assert.match(apothecary, /Each .*44\.2d/);
-  assert.match(apothecary, /Stack .*44\.2d/);
+  assert.match(apothecary, /You have.*44\.2 divine/);
   assert.match(c.poe1ExchangeValueHtml(0.5,'divine'), /113c/);
   assert.match(c.poe1ExchangeValueHtml(run('poe1Prices.chaosPerDivine'),'chaos'), /1\.0d/);
   run('state.poe1League="Standard";');
-  assert.doesNotMatch(c.currencyOverlayHtml(exalted), /0\.9c/);
+  assert.doesNotMatch(c.currencyOverlayHtml(exalted), /9\.02 chaos/);
   run('state.poe1League="Covens"; ui.econChart=poe1Prices.tables.Currency[0];');
   const chart = { innerHTML: '' };
   c.document.getElementById = id => id === 'econ-chart-body' ? chart : null;
@@ -667,7 +888,7 @@ run('window.chrome={webview:{postMessage(){throw Error("Unexpected trade request
   }
   c.requestAnimationFrame = callback => callback();
   c.render = () => c.rememberCompanionView();
-  run('state.activeGame="poe1"; ui.view="wealth"; rememberCompanionView(); state.activeGame="poe2"; ui.view="guides"; rememberCompanionView();');
+  run('state.activeGame="poe1"; ui.view="wealth"; rememberCompanionView(); state.activeGame="poe2"; ui.view="econ"; rememberCompanionView();');
   run('state.activeGame="poe1"; ui.view="econ";');
   c.handleAppHotkey({action:'open-last-view'});
   assert.equal(run('ui.view'),'wealth');
@@ -675,7 +896,7 @@ run('window.chrome={webview:{postMessage(){throw Error("Unexpected trade request
   assert.equal(run('ui.view'),'settings');
   run('state.activeGame="poe2"; ui.view="dash";');
   c.handleAppHotkey({action:'open-last-view'});
-  assert.equal(run('ui.view'),'guides');
+  assert.equal(run('ui.view'),'econ');
   c.publishWealthLive = () => {};
   c.scheduleWealthRefresh = () => {};
   run('state.activeGame="poe1"; ui.view="wealth"; poe1Prices.attemptLeague="Standard";');

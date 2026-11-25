@@ -12,6 +12,7 @@ const context = vm.createContext({
   localStorage: { setItem(key, value) { if (failSave) throw Error('quota'); stored = value; } }
 });
 vm.runInContext(fn, context);
+vm.runInContext(source.slice(source.indexOf('function restorePoe1WealthState('), source.indexOf('function uid(')), context);
 for (const invalid of [null, [], {}, { logs: {} }, { logs: [null] }, { logs: [{ drops: {} }] }, { logs: [{ drops: [null] }] }, { logs: [], hunted: {} }, { logs: [], customBosses: [null] }, { logs: [], theme: [] }]) {
   assert.throws(() => context.applyImportedState(invalid));
   assert.equal(context.state, original);
