@@ -599,6 +599,115 @@ run('window.chrome={webview:{postMessage(){throw Error("Unexpected trade request
 (async () => {
   c.ensureTradeStats = async () => new Map();
   const queryFor = async (item) => JSON.parse(new URL(await c.tradeSiteUrl(item)).searchParams.get('q')).query;
+  const glovesBase = {id:'shagreen-base',name:'Test Gloves',baseType:'Shagreen Gloves',className:'Gloves',rarity:'Rare'};
+  const previousBaseInspect = run('ui.inspect');
+  const previousBasePaint = c.paintPriceOverlay;
+  run('ui').inspect = {dropId:glovesBase.id,drop:glovesBase};
+  c.paintPriceOverlay = () => {};
+  const baseBanner = () => c.overlayBaseHtml({id:''},glovesBase,false,true);
+  assert.match(c.priceOverlayHtml({id:''},glovesBase), /data-pick-base="any"[^>]*><span[^>]*>Shagreen Gloves<\/span><span class="price-overlay-swap-icon"/);
+  assert.equal((await queryFor(glovesBase)).type,'Shagreen Gloves');
+  c.handleOverlayClick({pickBase:'any',pickDrop:glovesBase.id});
+  assert.match(baseBanner(), /data-pick-base="exact"[^>]*><span[^>]*>Any Gloves<\/span><span class="price-overlay-swap-icon"/);
+  const anyGloves = await queryFor(glovesBase);
+  assert.equal(anyGloves.type,undefined);
+  assert.equal(anyGloves.filters.type_filters.filters.category.option,'armour.gloves');
+  c.handleOverlayClick({pickBase:'exact',pickDrop:glovesBase.id});
+  assert.equal((await queryFor(glovesBase)).type,'Shagreen Gloves');
+  run('state.activeGame="poe2";');
+  assert.match(baseBanner(), /data-pick-base="any"/);
+  assert.doesNotMatch(baseBanner(), /price-overlay-swap/);
+  run('state.activeGame="poe1";');
+  run('ui').inspect = previousBaseInspect;
+  c.paintPriceOverlay = previousBasePaint;
+  const helmet = c.parsePoeItem(`Item Class: Helmets
+Rarity: Rare
+Test Helm
+Haunted Bascinet
+--------
+{ Greater Searing Exarch Implicit Modifier }
+30% increased Mana Cost Efficiency
+{ Eater of Worlds Implicit Modifier (Grand) }
+9% increased Mana Reservation Efficiency of Skills
+--------
+{ Prefix Modifier "of Vitality" }
++141 to maximum Life
+Searing Exarch Item
+Eater of Worlds Item`);
+  assert.deepEqual(Array.from(helmet.props.eldritchSources),['exarch','eater']);
+  assert.deepEqual(Array.from(helmet.mods,roll=>[roll.kind,roll.eldritch,roll.eldritchRank]),[
+    ['implicit','exarch','greater'],['implicit','eater','grand'],['explicit',undefined,undefined],
+  ]);
+  const helmetDrop = {...helmet,rolls:helmet.mods,id:'eldritch-helmet'};
+  const helmetFlags = c.overlayFlagsHtml({id:''},helmetDrop);
+  assert.doesNotMatch(helmetFlags, /Searing Exarch|Eater of Worlds/);
+  const helmetHtml = c.priceOverlayHtml({id:''},helmetDrop);
+  assert.match(helmetHtml, /data-pick-text="30% increased Mana Cost Efficiency"[^]*?<span class="price-overlay-pill is-implicit is-exarch">Greater Searing</i);
+  assert.match(helmetHtml, /data-pick-text="9% increased Mana Reservation Efficiency of Skills"[^]*?<span class="price-overlay-pill is-implicit is-eater">Grand Eater</i);
+  assert.deepEqual((await queryFor(helmetDrop)).stats[0].filters.map(row=>[row.id,row.value.option]),[
+    ['pseudo.pseudo_searing_implicit_tier',2],['pseudo.pseudo_tangled_implicit_tier',3],
+  ]);
+  const gloves = c.parsePoeItem(`Item Class: Gloves
+Rarity: Rare
+Test Gloves
+Slink Gloves
+--------
+Item Level: 85
+--------
+25% of Physical Damage Converted to Cold Damage (implicit)
+Gain 1 Rage on Attack Hit (implicit)
+--------
++40 to maximum Life
+--------
+Searing Exarch Item
+Eater of Worlds Item`);
+  assert.deepEqual(Array.from(gloves.mods,roll=>[roll.eldritch,roll.eldritchRank]),[
+    ['eater',undefined],['exarch',undefined],[undefined,undefined],
+  ]);
+  const gloveDrop = {...gloves,rolls:gloves.mods,id:'eldritch-gloves'};
+  const gloveHtml = c.priceOverlayHtml({id:''},gloveDrop);
+  assert.match(gloveHtml, /data-pick-text="25% of Physical Damage Converted to Cold Damage"[^]*?<span class="price-overlay-pill is-implicit is-eater">Eater</i);
+  assert.match(gloveHtml, /data-pick-text="Gain 1 Rage on Attack Hit"[^]*?<span class="price-overlay-pill is-implicit is-exarch">Searing</i);
+  assert.doesNotMatch(JSON.stringify(await queryFor(gloveDrop)), /pseudo_(tangled|searing)_implicit_tier/);
+  run('state.activeGame="poe2";');
+  assert.doesNotMatch(c.priceOverlayHtml({id:''},gloveDrop), /price-overlay-pill is-implicit is-(exarch|eater)/);
+  run('state.activeGame="poe1";');
+  const previousBeastMarket = run('poe1Prices.tables.Beast');
+  const previousBeastNames = run('poe1Prices.beastNames');
+  const previousInspect = run('ui.inspect');
+  const previousCurrencyPaint = c.paintPriceOverlay;
+  const beast = {id:'craicic-croaker',name:'Craicic Croaker',beast:true,qty:1,stackMax:2};
+  run('poe1Prices.tables.Beast=[{name:"Craicic Croaker",amount:1.2,unit:"divine"}]; poe1Prices.beastNames=null;');
+  run('ui').inspect = {dropId:beast.id,drop:beast};
+  let beastOverlay = c.priceOverlayHtml({id:''},beast);
+  assert.match(beastOverlay,/You have.*currency-rate-arrow.*1\.2 divine.*Stack.*2\.4 divine/s);
+  assert.match(beastOverlay,/currency-rate-arrow[^<]*<\/span><button[^>]*data-currency-unit="chaos"[^>]*>(?:<img[^>]*>)?1\.2 divine<span class="price-overlay-swap-icon" aria-hidden="true">⇄<\/span><\/button>/);
+  assert.doesNotMatch(beastOverlay,/currency-summary-footer/);
+  assert.doesNotMatch(beastOverlay,/240 chaos/);
+  c.paintPriceOverlay = () => { beastOverlay = c.priceOverlayHtml({id:''},beast); };
+  c.handleOverlayClick({currencyUnit:'chaos',pickDrop:beast.id});
+  assert.match(beastOverlay,/You have.*240 chaos.*Stack.*480 chaos/s);
+  assert.match(beastOverlay,/data-currency-unit="divine"[^>]*>(?:<img[^>]*>)?240 chaos<span class="price-overlay-swap-icon"/);
+  assert.match(beastOverlay,/data-currency-unit="divine"[^>]*>(?:<img[^>]*>)?480 chaos<span class="price-overlay-swap-icon"/);
+  assert.doesNotMatch(beastOverlay,/1\.2 divine/);
+  c.handleOverlayClick({currencyUnit:'divine',pickDrop:beast.id});
+  assert.match(beastOverlay,/You have.*1\.2 divine.*Stack.*2\.4 divine/s);
+  assert.equal(c.currencyLotWorth(1,{amount:1,unit:'chaos'},null,'divine').text,'0.005 divine');
+  run('poe1Prices.chaosPerDivine=0;');
+  assert.match(c.currencyOverlayHtml(beast),/1\.2 divine/);
+  assert.doesNotMatch(c.currencyOverlayHtml(beast),/data-currency-unit/);
+  run('poe1Prices.chaosPerDivine=200; state.activeGame="poe2";');
+  const poe2Currency = c.currencyRateCell('You have',1,c.currencyLotWorth(1,null,2),'Exalted Orb');
+  assert.match(poe2Currency,/currency-rate-arrow.*2 divine/s);
+  assert.doesNotMatch(c.currencyOverlayHtml(beast),/data-currency-unit/);
+  c.handleOverlayClick({currencyUnit:'chaos',pickDrop:beast.id});
+  assert.equal(run('ui.inspect.currencyUnit'),'divine');
+  run('state.activeGame="poe1";');
+  run('ui').inspect = previousInspect;
+  c.paintPriceOverlay = previousCurrencyPaint;
+  run('poe1Prices').beastNames = previousBeastNames;
+  if (previousBeastMarket) run('poe1Prices.tables').Beast = previousBeastMarket;
+  else delete run('poe1Prices.tables').Beast;
   const ultimatumQuery = await queryFor(ultimatum);
   assert.equal(ultimatumQuery.type,'Inscribed Ultimatum');
   assert.deepEqual(ultimatumQuery.filters.ultimatum_filters,{

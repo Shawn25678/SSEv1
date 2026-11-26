@@ -36,7 +36,7 @@ sealed class GameLauncherForm : Form
     string _wealth = "";
     readonly Action _openApp;
 
-    sealed record Preferences(double X = 0.98, double Y = 0.3, bool Locked = true);
+    sealed record Preferences(double X = 0.98, double Y = 0.3, bool Locked = true, bool CloseWithGame = false);
 
     public GameLauncherForm(Func<bool> gameFocused, Func<bool> menuHidden, Action<bool> focusChanged,
         string settingsPath, string imagePath, Action openApp, Action redeemTesterCode)
@@ -78,10 +78,10 @@ sealed class GameLauncherForm : Form
         _menu.Items.Add(_lockItem);
         _menu.Items.Add("Reset position", null, (_, _) =>
         {
-            _preferences = new();
+            _preferences = new(CloseWithGame: _preferences.CloseWithGame);
             ApplyLockCursor();
             SyncLockItem();
-            SavePosition();
+            SavePreferences();
             if (_gameBounds.Width > 0) LayoutChrome();
             Invalidate();
         });
@@ -129,7 +129,7 @@ sealed class GameLauncherForm : Form
                 X = (double)(iconLeft - _gameBounds.Left) / Math.Max(1, _gameBounds.Width - _side),
                 Y = (double)(Top - _gameBounds.Top) / Math.Max(1, _gameBounds.Height - _side),
             };
-            SavePosition();
+            SavePreferences();
         };
         MouseCaptureChanged += (_, _) => { if (!Capture) _pressed = false; };
         VisibleChanged += (_, _) => UpdateTesterWave();
@@ -142,6 +142,15 @@ sealed class GameLauncherForm : Form
     public bool GameRunning => _gameWindow != IntPtr.Zero && IsWindow(_gameWindow);
     public IntPtr GameWindow => _gameWindow;
     public bool GameAvailable => GameRunning && !IsIconic(_gameWindow);
+    public bool CloseWithGame => _preferences.CloseWithGame;
+
+    public void SetCloseWithGame(bool enabled)
+    {
+        if (CloseWithGame == enabled) return;
+        _preferences = _preferences with { CloseWithGame = enabled };
+        SavePreferences();
+    }
+
     public static Rectangle GetVisibleClientBounds(IntPtr window)
     {
         var origin = new NativePoint();
@@ -246,9 +255,12 @@ sealed class GameLauncherForm : Form
     IntPtr FindPoeWindow()
     {
         IntPtr found = IntPtr.Zero;
+        IntPtr minimized = IntPtr.Zero;
         EnumWindows((window, _) =>
         {
-            if (!IsWindowVisible(window) || IsIconic(window)) return true;
+            if (!IsWindowVisible(window)) return true;
+            var iconic = IsIconic(window);
+            if (iconic && (!CloseWithGame || minimized != IntPtr.Zero)) return true;
             GetWindowThreadProcessId(window, out var pid);
             if ((int)pid == Environment.ProcessId) return true;
             try
@@ -257,12 +269,17 @@ sealed class GameLauncherForm : Form
                 if (!name.StartsWith("PathOfExile", StringComparison.OrdinalIgnoreCase)) return true;
                 var title = new System.Text.StringBuilder(32);
                 if (GetWindowText(window, title, title.Capacity) <= 0) return true;
+                if (iconic)
+                {
+                    minimized = window;
+                    return true;
+                }
                 found = window;
                 return false;
             }
             catch { return true; }
         }, IntPtr.Zero);
-        return found;
+        return found != IntPtr.Zero ? found : minimized;
     }
 
     void RefreshVisibility()
@@ -375,7 +392,7 @@ sealed class GameLauncherForm : Form
         _preferences = _preferences with { Locked = !_preferences.Locked };
         ApplyLockCursor();
         SyncLockItem();
-        SavePosition();
+        SavePreferences();
     }
 
     void LayoutChrome()
@@ -395,10 +412,10 @@ sealed class GameLauncherForm : Form
         if (Location != point) Location = point;
     }
 
-    void SavePosition()
+    void SavePreferences()
     {
         try { File.WriteAllText(_settingsPath, JsonSerializer.Serialize(_preferences)); }
-        catch { /* Keep current position for the running session if disk is unavailable. */ }
+        catch { /* Keep current preferences for the running session if disk is unavailable. */ }
     }
 
     protected override void OnPaint(PaintEventArgs e)

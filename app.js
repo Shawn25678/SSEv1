@@ -1,5 +1,6 @@
 const STORAGE_KEY = "poe2-exile-ledger-v1";
 const APP_VERSION = window.sseStartup?.version || "";
+let closeWithGame = window.sseStartup?.closeWithGame === true;
 
 // Cultivated/Vaal unique identities, including copies without a Vaal property line.
 // Source: https://poe2db.tw/us/Unique_item#CultivatedUniques (2026-11-12).
@@ -7051,6 +7052,10 @@ function parsePoeItem(text) {
     /^\{[^}\n]*\bVaal Unique\b/im.test(raw)
   );
   const props = parseLocalProps(raw);
+  if (activeGame() === "poe1") {
+    const sources = [...new Set(flagLines.map(poe1EldritchItemMarker).filter(Boolean))];
+    if (sources.length) props.eldritchSources = sources;
+  }
   const beast = /right-click to add this to your bestiary/i.test(raw) || /^Genus:/im.test(raw);
   if (activeGame() === "poe1" && /^Inscribed Ultimatum$/i.test(name)) {
     const challenge = raw.match(/^[\t ]*Challenge:[\t ]*([^\n]+)/im)?.[1]?.trim();
@@ -7077,6 +7082,20 @@ function parsePoeItem(text) {
   const modBlocks = headerMods.length ? [headerMods.join("\n"), ...blocks.slice(1)] : blocks.slice(1);
   const parsedMods = parseClipboardMods(modBlocks, rarity, corrupted, name, baseType, className, props);
   const mods = parsedMods.mods;
+  if (activeGame() === "poe1" && props.eldritchSources?.length) {
+    const implicits = mods.filter((roll) => roll.kind === "implicit");
+    if (/^gloves$/i.test(className)) {
+      for (const roll of implicits) {
+        if (roll.eldritch) continue;
+        const source = /^Gain \d+ Rage on Attack Hit$/i.test(roll.text) ? "exarch"
+          : /^\d+% of Physical Damage Converted to Cold Damage$/i.test(roll.text) ? "eater" : "";
+        if (props.eldritchSources.includes(source)) roll.eldritch = source;
+      }
+    }
+    const unlabelled = implicits.filter((roll) => !roll.eldritch);
+    const remaining = props.eldritchSources.filter((source) => !implicits.some((roll) => roll.eldritch === source));
+    if (unlabelled.length === 1 && remaining.length === 1) unlabelled[0].eldritch = remaining[0];
+  }
   const ravenTouched =
     parsedMods.ravenTouched || /raven-?touched/i.test(parseAffixStrings(raw).replace(/[\u2010-\u2015]/g, "-"));
   const fractured =
@@ -7151,8 +7170,19 @@ function poe1InfluenceName(line) {
   return hit ? hit[1].toLowerCase() : "";
 }
 
+function poe1EldritchItemMarker(line) {
+  const flag = foldItemFlagLine(line).toLowerCase();
+  if (flag === "searing exarch item") return "exarch";
+  if (flag === "eater of worlds item") return "eater";
+  return "";
+}
+
 function eldritchFromHeader(line) {
-  const hit = String(line || "").match(/\b(lesser|greater|grand|exceptional|exquisite|perfect)\s+(eater of worlds|searing exarch)\b/i);
+  const text = String(line || "");
+  const named = activeGame() === "poe1" &&
+    text.match(/\b(eater of worlds|searing exarch)\s+implicit modifier\s*\((lesser|greater|grand|exceptional|exquisite|perfect)\)/i);
+  if (named) return { eldritch: /eater/i.test(named[1]) ? "eater" : "exarch", eldritchRank: named[2].toLowerCase() };
+  const hit = text.match(/\b(lesser|greater|grand|exceptional|exquisite|perfect)\s+(eater of worlds|searing exarch)\b/i);
   if (!hit) return null;
   return { eldritch: /eater/i.test(hit[2]) ? "eater" : "exarch", eldritchRank: hit[1].toLowerCase() };
 }
@@ -7233,6 +7263,7 @@ function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase =
       const rawLine = line.trim();
       if (!rawLine) continue;
       if (isItemJunkLine(rawLine)) continue;
+      if (activeGame() === "poe1" && poe1EldritchItemMarker(rawLine)) continue;
       if (itemName && namesMatch(rawLine, itemName) && !looksLikeModifierLine(rawLine)) continue;
       if (itemBase && namesMatch(rawLine, itemBase) && !looksLikeModifierLine(rawLine)) continue;
       if (/^\{/.test(rawLine)) {
@@ -7424,6 +7455,7 @@ function stripAdvancedRanges(text) {
 function isUsefulRoll(text, kind, extra) {
   const t = stripReminderText(stripAdvancedRanges(parseAffixStrings(String(text || ""))).trim());
   if (!t || t.length > 160) return false;
+  if (activeGame() === "poe1" && poe1EldritchItemMarker(t)) return false;
   if (/^(shaper|elder|crusader|hunter|redeemer|warlord)\s+item$/i.test(t)) return false;
   if (/^\([^()]{8,}\)$/.test(t)) return false;
   if (isFlavourLine(t, extra)) return false;
@@ -7783,6 +7815,13 @@ function handleOverlayClick(msg) {
   if (msg.overlayRate != null) {
     return;
   }
+  if (msg.currencyUnit === "chaos" || msg.currencyUnit === "divine") {
+    const target = inspectTarget();
+    if (!target || target.drop.id !== msg.pickDrop || !poe1GeneralPriceItem(target.drop)) return;
+    ui.inspect.currencyUnit = msg.currencyUnit;
+    paintPriceOverlay();
+    return;
+  }
   if (msg.pickBase) {
     const { log, drop } = overlayLogDrop(msg.pickLog, msg.pickDrop);
     applyDropBaseMode(log, drop, msg.pickBase);
@@ -8017,7 +8056,11 @@ function rollKindLabel(roll, tierOverride) {
   let tag = "";
   if (roll?.fractured) tag = "Fractured";
   else if (kind === "skill" || isGrantedSkillRoll(roll?.text)) tag = "Skill";
-  else if (roll?.eldritch && roll?.eldritchRank) tag = roll.eldritchRank.charAt(0).toUpperCase() + roll.eldritchRank.slice(1) + (roll.eldritch === "eater" ? " Eater" : " Searing");
+  else if (roll?.eldritch && (roll.eldritchRank || activeGame() === "poe1")) {
+    const source = roll.eldritch === "eater" ? "Eater" : "Searing";
+    const rank = roll.eldritchRank;
+    tag = rank ? rank.charAt(0).toUpperCase() + rank.slice(1) + " " + source : source;
+  }
   else if (kind === "implicit") tag = "Implicit";
   else if (kind === "corrupt") tag = "Corrupted";
   else if (kind === "enchant") tag = "Enchant";
@@ -8738,7 +8781,7 @@ function poe1MarkFilters(drop) {
     const pseudo = eater ? "pseudo.pseudo_tangled_implicit_tier" : "pseudo.pseudo_searing_implicit_tier";
     if (!seen.has(pseudo)) {
       seen.add(pseudo);
-      rows.push({ id: pseudo, min: rank });
+      rows.push({ id: pseudo, option: String(rank) });
     }
   }
   return rows;
@@ -9786,6 +9829,8 @@ function setDropDpsType(log, drop, tag) {
   else render();
 }
 
+const OVERLAY_SWAP_ICON = '<span class="price-overlay-swap-icon" aria-hidden="true">⇄</span>';
+
 function overlayBaseHtml(log, drop, includeRarity = true, asTitle = false) {
   const rarity = includeRarity ? overlayRarityHtml(log, drop) : "";
   let base = tradeBaseType(drop) || drop.baseType || drop.className || "";
@@ -9807,7 +9852,8 @@ function overlayBaseHtml(log, drop, includeRarity = true, asTitle = false) {
   const broad = irregular[category.toLowerCase()] || (/^(gloves|boots|focus)$/i.test(category) ? category : category.replace(/s$/i, ""));
   const shown = on ? base : `Any ${broad}`;
   const hint = on ? `Search any ${broad}; click again to return to ${base}` : `Search this exact base: ${base}`;
-  return `<div class="price-overlay-base-row"><button type="button" class="item-tip-base price-overlay-base-choice" data-pick-base="${on ? "any" : "exact"}" aria-pressed="${on}" title="${esc(hint)}" ${mark}><span class="price-overlay-base-label${asTitle ? " item-tip-name" : ""}">${esc(shown)}</span></button>${rarity}</div>`;
+  const poe1 = activeGame() === "poe1";
+  return `<div class="price-overlay-base-row"><button type="button" class="item-tip-base price-overlay-base-choice${poe1 ? " price-overlay-swap-control" : ""}" data-pick-base="${on ? "any" : "exact"}" aria-pressed="${on}" title="${esc(hint)}" ${mark}><span class="price-overlay-base-label${asTitle ? " item-tip-name" : ""}">${esc(shown)}</span>${poe1 ? OVERLAY_SWAP_ICON : ""}</button>${rarity}</div>`;
 }
 
 function overlayPropSliderHtml(log, drop, opt) {
@@ -10217,7 +10263,8 @@ async function tradeSiteUrl(drop) {
         continue;
       }
       if (id.startsWith("pseudo.")) {
-        query.stats[0].filters.push({ id, ...(row.min == null ? {} : { value: { min: row.min } }), disabled: false });
+        const value = row.option != null ? { option: Number(row.option) } : row.min == null ? null : { min: row.min };
+        query.stats[0].filters.push({ id, ...(value ? { value } : {}), disabled: false });
         continue;
       }
       if (id.startsWith("map.")) {
@@ -10381,7 +10428,8 @@ function priceOverlayHtml(log, drop) {
   function pillHtml(tag, kind, roll) {
     if (!tag) return "";
     const rollKind = canonicalRollKind(roll?.kind);
-    const categoryInHeading = ["enchant", "corrupt", "rune", "skill", "implicit"].includes(rollKind) && !roll?.fractured && !roll?.ghost;
+    const eldritchImplicit = activeGame() === "poe1" && rollKind === "implicit" && !!roll?.eldritch;
+    const categoryInHeading = ["enchant", "corrupt", "rune", "skill", "implicit"].includes(rollKind) && !roll?.fractured && !roll?.ghost && !eldritchImplicit;
     let pillBase = String(tag || "").replace(/\s*·\s*hyb/i, "").replace(/\s+T\d+\s*$/i, "").trim();
     if (categoryInHeading) {
       const tier = String(tag).match(/\bT\d+\b/i)?.[0] || "";
@@ -14375,6 +14423,10 @@ function renderSettings() {
       <article class="panel settings-app-panel">
         <h3>App</h3>
         <p class="muted" id="update-status" style="margin-top:8px"${APP_VERSION ? "" : " hidden"}>${esc(updateVersionLabel())}</p>
+        ${window.chrome?.webview ? `<label class="settings-check" style="margin-top:12px">
+          <input type="checkbox" data-close-with-game ${closeWithGame ? "checked" : ""} />
+          <span>Close SSE when the game closes</span>
+        </label>` : ""}
         <div class="row-actions">
           <button class="btn ghost" id="settings-check-btn" type="button"${window.chrome?.webview ? "" : " hidden"}>Check</button>
           <button class="btn gold" id="settings-update-btn" type="button" hidden>Update</button>
@@ -15154,6 +15206,11 @@ function onClick(event) {
     handleOverlayClick(influence.dataset);
     return;
   }
+  const currencyUnit = event.target.closest("[data-currency-unit]");
+  if (currencyUnit) {
+    handleOverlayClick(currencyUnit.dataset);
+    return;
+  }
   const pickUnid = event.target.closest("[data-pick-unid]");
   if (pickUnid) {
     event.preventDefault();
@@ -15577,6 +15634,11 @@ function onClick(event) {
 
 function onChange(event) {
   const target = event.target;
+  if (target.matches?.("[data-close-with-game]")) {
+    closeWithGame = target.checked;
+    window.chrome?.webview?.postMessage({ type: "close-with-game", enabled: closeWithGame });
+    return;
+  }
   if (activeGame() === "poe1" && (target.id === "wealth-poe1-league" || (ui.view !== "dash" && target.id === "league-input"))) {
     selectPoe1League(target.value);
     return;
@@ -16354,15 +16416,16 @@ function poe1ExchangeValueHtml(amount, unit) {
   return valueFromAmount(amount, unit);
 }
 
-function currencyLotText(amount, unit) {
+function currencyLotText(amount, unit, preserveSmallValue = false) {
   const n = Number(amount);
   if (!Number.isFinite(n) || n <= 0) return "";
-  const shown = n >= 100 ? String(Math.round(n)) : n >= 10 ? String(Math.round(n * 10) / 10) : String(Math.round(n * 100) / 100);
+  const shown = preserveSmallValue && n < 0.01 ? String(Number(n.toPrecision(2)))
+    : n >= 100 ? String(Math.round(n)) : n >= 10 ? String(Math.round(n * 10) / 10) : String(Math.round(n * 100) / 100);
   const label = unit === "chaos" ? "chaos" : unit === "divine" ? "divine" : unit === "exalted" ? "exalted" : String(unit || "");
   return `${shown} ${label}`;
 }
 
-function currencyLotWorth(count, quote, divine) {
+function currencyLotWorth(count, quote, divine, preferredUnit) {
   const n = Math.max(0, Number(count) || 0);
   if (!(n > 0)) return "";
   if (activeGame() !== "poe1") {
@@ -16380,21 +16443,28 @@ function currencyLotWorth(count, quote, divine) {
     unit = "divine";
   } else return "";
   const asDivine = divineWithRates(amount, unit, rates.exaltedPerDivine, rates.chaosPerDivine);
+  const chaos = unit === "chaos" ? amount : asDivine * rates.chaosPerDivine;
+  if (preferredUnit === "divine" && asDivine > 0) return { text: currencyLotText(asDivine, "divine", true), unit: "divine" };
+  if (preferredUnit === "chaos" && chaos > 0) return { text: currencyLotText(chaos, "chaos", true), unit: "chaos" };
   if (asDivine >= 1) return { text: currencyLotText(asDivine, "divine"), unit: "divine" };
-  if (rates.chaosPerDivine > 0) {
-    const chaos = unit === "chaos" ? amount : asDivine * rates.chaosPerDivine;
-    if (chaos > 0) return { text: currencyLotText(chaos, "chaos"), unit: "chaos" };
-  }
+  if (rates.chaosPerDivine > 0 && chaos > 0) return { text: currencyLotText(chaos, "chaos"), unit: "chaos" };
   if (asDivine > 0) return { text: currencyLotText(asDivine, "divine"), unit: "divine" };
   return { text: currencyLotText(amount, unit), unit };
 }
 
-function currencyRateCell(label, count, worth, sourceName) {
+function currencyRateCell(label, count, worth, sourceName, convertDropId) {
   if (!worth?.text) return "";
   const source = itemIconHtml(sourceName, "sm");
   const icon = itemIconHtml(currencyNameForUnit(worth.unit), "sm");
   const name = `<span class="item-tip-name">${esc(sourceName)}</span>`;
-  return `<div class="currency-rate"><span class="currency-rate-k">${esc(label)}</span><span class="currency-rate-n"><span class="currency-rate-worth currency-rate-source">${source}${name}<span class="currency-rate-x">× ${esc(count)}</span></span><span class="currency-rate-arrow">→</span><span class="currency-rate-worth">${icon}${esc(worth.text)}</span></span></div>`;
+  const text = `${icon}${esc(worth.text)}`;
+  let value = `<span class="currency-rate-worth">${text}</span>`;
+  if (convertDropId && (worth.unit === "divine" || worth.unit === "chaos")) {
+    const nextUnit = worth.unit === "divine" ? "chaos" : "divine";
+    const title = nextUnit === "chaos" ? "Show in Chaos" : "Show in Divines";
+    value = `<button type="button" class="currency-rate-worth currency-unit-toggle price-overlay-swap-control" data-currency-unit="${nextUnit}" data-pick-drop="${esc(convertDropId)}" title="${title}" aria-label="${esc(`${label}, ${worth.text}. ${title}`)}">${text}${OVERLAY_SWAP_ICON}</button>`;
+  }
+  return `<div class="currency-rate"><span class="currency-rate-k">${esc(label)}</span><span class="currency-rate-n"><span class="currency-rate-worth currency-rate-source">${source}${name}<span class="currency-rate-x">× ${esc(count)}</span></span><span class="currency-rate-arrow">→</span>${value}</span></div>`;
 }
 
 function currencyOverlayHtml(drop) {
@@ -16404,9 +16474,11 @@ function currencyOverlayHtml(drop) {
   const poe1 = activeGame() === "poe1";
   const quote = poe1 ? poe1CurrencyExchangeQuote(shownName) : null;
   const divine = quote ? null : ninjaCurrencyPrice(shownName);
-  const have = currencyLotWorth(qty, quote, divine);
-  const stack = stackMax > 1 ? currencyLotWorth(stackMax, quote, divine) : "";
-  const rates = currencyRateCell("You have", qty, have, shownName) + (stack && stackMax !== qty ? currencyRateCell("Stack", stackMax, stack, shownName) : "");
+  const selectedUnit = poe1 && ui.inspect?.dropId === drop.id ? ui.inspect?.currencyUnit : "";
+  const have = currencyLotWorth(qty, quote, divine, selectedUnit);
+  const stack = stackMax > 1 && stackMax !== qty ? currencyLotWorth(stackMax, quote, divine, selectedUnit) : "";
+  const convertDropId = poe1 && poe1Prices.chaosPerDivine > 0 ? drop.id : "";
+  const rates = currencyRateCell("You have", qty, have, shownName, convertDropId) + currencyRateCell("Stack", stackMax, stack, shownName, convertDropId);
   const at = poe1 ? (poe1Prices.league === econLeagueName() ? poe1Prices.fetchedAt : 0) : prices.fetchedAt;
   const note = at ? `Updated ${formatWhen(at)}` : "No price update received yet";
   const missing = /divination/i.test(drop?.rarity || drop?.className || "")

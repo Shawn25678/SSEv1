@@ -2,8 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="styles.css?v=74" />
-    <link rel="stylesheet" href="overlay.css?v=76" />
+    <link rel="stylesheet" href="styles.css?v=105" />
+    <link rel="stylesheet" href="overlay.css?v=78" />
   </head>
   <body>
     <div id="root"></div>
@@ -56,7 +56,9 @@
           const row = card.querySelector(".currency-rate-n");
           const note = card.querySelector(".currency-summary > p:not(.muted)");
           const who = card.querySelector(".currency-rate-who");
-          const textW = Math.max(row?.scrollWidth || 0, note?.scrollWidth || 0, who?.scrollWidth || 0);
+          const swapRows = [...card.querySelectorAll(".currency-rate-n:has(> .currency-unit-toggle)")];
+          const textW = Math.max(row?.scrollWidth || 0, note?.scrollWidth || 0, who?.scrollWidth || 0,
+            ...swapRows.map((line) => line.scrollWidth));
           if (textW) w = Math.max(360, Math.ceil(textW) + 72);
         }
         const extra = card.querySelector(".price-overlay-rate-card");
@@ -830,7 +832,7 @@
           return;
         }
         const t = event.target.closest(
-          "[data-res-action],[data-close-inspect],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-dps-type],[data-pick-search],[data-pick-base],[data-pick-rarity],[data-pick-have],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-fractured],[data-pick-runes],[data-pick-runes-toggle],[data-pick-links-toggle],[data-pick-influence],[data-pick-faction],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
+          "[data-res-action],[data-close-inspect],[data-currency-unit],[data-pick-text],[data-pick-affix],[data-pick-rid],[data-pick-prop],[data-pick-dps-type],[data-pick-search],[data-pick-base],[data-pick-rarity],[data-pick-have],[data-pick-corrupt],[data-pick-unid],[data-pick-raven],[data-pick-fractured],[data-pick-runes],[data-pick-runes-toggle],[data-pick-links-toggle],[data-pick-influence],[data-pick-faction],[data-pick-unique],[data-quote-drop],[data-open-trade],[data-open-trade-site],[data-price-lookup]"
         );
         if (!t || !window.chrome?.webview) return;
         event.preventDefault();

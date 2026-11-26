@@ -4819,7 +4819,8 @@ button.roll-chip:hover {
 .price-overlay-mod-group.is-skill,
 .price-overlay-mod-group.is-rune,
 .price-overlay-mod-group.is-corrupt,
-.price-overlay-mod-group.is-enchant {
+.price-overlay-mod-group.is-enchant,
+.poe1-item-header .price-overlay-mod-group.is-implicit:not(.is-logbook-faction) {
   --group-accent: #7898ff;
   padding: 6px 6px 4px;
   border: 1px solid var(--group-accent);
@@ -4879,6 +4880,15 @@ button.roll-chip:hover {
 .price-overlay-mod-group.is-implicit {
   border-radius: 0;
   background: transparent;
+}
+
+.poe1-item-header .price-overlay-mod-group.is-implicit:not(.is-logbook-faction) {
+  --group-accent: #c9ac72;
+}
+.poe1-item-header .is-implicit:not(.is-logbook-faction) > .price-overlay-mod-group-label {
+  border: 1px solid color-mix(in srgb, var(--group-accent) 65%, transparent);
+  background: color-mix(in srgb, var(--group-accent) 17%, transparent);
+  color: #f1d9aa;
 }
 
 .price-overlay-mod-group .price-overlay-mod-wrap:last-child {
@@ -5877,6 +5887,12 @@ button.roll-chip:hover {
 
 .price-overlay-pill.is-eater { color: #7ec8ff; }
 .price-overlay-pill.is-exarch { color: #ff8a6a; }
+.poe1-item-header .price-overlay-pill.is-implicit:is(.is-eater, .is-exarch) {
+  padding: 1px 4px;
+  border: 1px solid color-mix(in srgb, currentColor 60%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
 
 .price-overlay-influence {
   display: inline-flex;
@@ -5895,6 +5911,20 @@ button.roll-chip:hover {
 .price-overlay-influence.is-redeemer { color: #e7a0e0; border-color: #8d4d88; }
 .price-overlay-influence.is-warlord { color: #f0a090; border-color: #a85a48; }
 .price-overlay-influence:not(.is-on) { opacity: 0.4; }
+.poe1-item-header .price-overlay-influence[data-pick-influence] {
+  opacity: 1;
+  border-color: color-mix(in srgb, currentColor 60%, transparent);
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  cursor: pointer;
+}
+.poe1-item-header .price-overlay-influence[aria-pressed="true"] {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 27%, transparent);
+}
+.poe1-item-header .price-overlay-influence:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: 2px;
+}
 
 .price-overlay-mod.is-rune,
 .price-overlay-affix.is-rune,
@@ -6590,6 +6620,76 @@ body.click-away .price-overlay-x { display: none; }
 }
 .currency-rate-worth .item-icon { width: 22px; height: 22px; }
 .currency-rate-arrow { opacity: 0.7; }
+.price-overlay-card.is-currency .currency-rates:has(.currency-unit-toggle) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(5, max-content) minmax(0, 1fr);
+  grid-auto-rows: 1fr;
+  column-gap: 8px;
+}
+.price-overlay-card.is-currency .currency-rates:has(.currency-unit-toggle) > .currency-rate {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-content: center;
+}
+.price-overlay-card.is-currency .currency-rates:has(.currency-unit-toggle) .currency-rate-k {
+  grid-column: 1 / -1;
+}
+.price-overlay-card.is-currency .currency-rates:has(.currency-unit-toggle) .currency-rate-n {
+  display: grid;
+  grid-column: 2 / -2;
+  grid-template-columns: subgrid;
+  width: auto;
+  margin-inline: 0;
+}
+.price-overlay-card.is-currency .currency-rates:has(.currency-unit-toggle) .currency-rate-source {
+  display: grid;
+  grid-column: 1 / span 3;
+  grid-template-columns: subgrid;
+}
+.price-overlay-card.is-currency .currency-rates:has(.currency-unit-toggle) .currency-rate-source .item-tip-name { grid-column: 2; }
+.price-overlay-card.is-currency .currency-rates:has(.currency-unit-toggle) .currency-rate-x { grid-column: 3; }
+.currency-unit-toggle .price-overlay-swap-icon { margin-inline-start: auto; }
+.currency-unit-toggle {
+  appearance: none;
+  padding: 3px 8px;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+.price-overlay-swap-control,
+.price-overlay-item-banner .price-overlay-swap-control {
+  border: 1px solid color-mix(in srgb, var(--gold) 62%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--gold) 13%, var(--panel));
+  cursor: pointer;
+}
+.price-overlay-item-banner .price-overlay-swap-control {
+  width: auto;
+  padding: 0 8px;
+}
+.price-overlay-swap-control:is(:hover, :focus-visible),
+.price-overlay-item-banner .price-overlay-swap-control:is(:hover, :focus-visible) {
+  border-color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 24%, var(--panel));
+  color: var(--gold-2);
+  text-decoration: none;
+}
+.price-overlay-swap-control:focus-visible {
+  outline: 1px solid var(--gold-2);
+  outline-offset: 2px;
+}
+.price-overlay-swap-icon {
+  flex: none;
+  margin-inline-start: 2px;
+  padding-inline-start: 6px;
+  border-inline-start: 1px solid var(--line-strong);
+  color: var(--gold);
+  font-family: var(--font-ui);
+  font-size: 0.95rem;
+  line-height: 1;
+}
 
 .private-tools { width: min(1040px, 94vw); max-height: 90vh; overflow: auto; padding: 24px; }
 .private-head { display:flex; justify-content:space-between; align-items:start; gap:18px; margin-bottom:18px; }
@@ -6912,7 +7012,6 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
   min-height: 52px;
 }
 .poe1-item-header .price-overlay-unid { text-transform: none; }
-.poe1-item-header [data-pick-influence][aria-pressed="false"] { opacity: .55; }
 .poe1-wealth, .poe1-wealth > *, .poe1-wealth .wealth-chart-wrap {
   min-width: 0;
   max-width: 100%;

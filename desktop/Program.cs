@@ -111,6 +111,7 @@ sealed class TrackerWindow : Form
     string _companionViewAction = "open-dashboard";
     long _companionOpeningUntil;
     GameLauncherForm? _launcher;
+    Process? _gameExitProcess;
     string _hotHideout = "F6";
     bool _sendingHideout;
     const uint ModNoRepeat = 0x4000;
@@ -191,6 +192,7 @@ sealed class TrackerWindow : Form
         FormClosing += (_, _) => HideTradePreview(notifyPage: false);
         FormClosed += (_, _) =>
         {
+            StopWatchingGameExit();
             ClearHotkeys();
             _wealthRefresh.Stop();
             _wealthRefresh.Dispose();
@@ -498,6 +500,7 @@ sealed class TrackerWindow : Form
 
     void UpdateLauncherShortcut(bool gameFocused)
     {
+        WatchGameExit();
         if (_wealthSnapshot) return;
         NoteFocusedGame();
         if (gameFocused && Environment.TickCount64 >= _nextGameMenuConfigCheck)
@@ -523,6 +526,53 @@ sealed class TrackerWindow : Form
             UnregisterHotKey(Handle, HotSettingsId);
             _launcherHotkeyRegistered = false;
         }
+    }
+
+    void WatchGameExit()
+    {
+        if (_launcher?.CloseWithGame != true || _launcher.GameWindow == IntPtr.Zero) return;
+        GetWindowThreadProcessId(_launcher.GameWindow, out var pid);
+        if (pid == 0 || _gameExitProcess?.Id == pid) return;
+
+        Process? process = null;
+        try
+        {
+            process = Process.GetProcessById((int)pid);
+            if (!process.ProcessName.StartsWith("PathOfExile", StringComparison.OrdinalIgnoreCase)) return;
+            process.Exited += OnWatchedGameExited;
+            process.EnableRaisingEvents = true;
+            StopWatchingGameExit();
+            _gameExitProcess = process;
+            process = null;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // The window can disappear before its process is available to watch.
+        }
+        finally { process?.Dispose(); }
+    }
+
+    void OnWatchedGameExited(object? sender, EventArgs e)
+    {
+        try
+        {
+            BeginInvoke(() =>
+            {
+                if (!ReferenceEquals(_gameExitProcess, sender) || _launcher?.CloseWithGame != true) return;
+                _launcher.NoteGameWindow();
+                WatchGameExit();
+                if (ReferenceEquals(_gameExitProcess, sender)) Close();
+            });
+        }
+        catch (InvalidOperationException) { /* The companion may already be closing. */ }
+    }
+
+    void StopWatchingGameExit()
+    {
+        if (_gameExitProcess is not { } process) return;
+        _gameExitProcess = null;
+        process.Exited -= OnWatchedGameExited;
+        process.Dispose();
     }
 
     void OnCompanionDeactivated(object? sender, EventArgs e)
@@ -1721,7 +1771,8 @@ sealed class TrackerWindow : Form
                     min = n;
                 if (row.TryGetProperty("max", out var maxEl) && JsonDouble(maxEl, out var x) && double.IsFinite(x))
                     max = x;
-                var option = (fid.StartsWith("ultimatum.", StringComparison.Ordinal) || fid == "trade.discriminator") &&
+                var option = (fid.StartsWith("ultimatum.", StringComparison.Ordinal) || fid == "trade.discriminator" ||
+                    fid is "pseudo.pseudo_tangled_implicit_tier" or "pseudo.pseudo_searing_implicit_tier") &&
                     row.TryGetProperty("option", out var optionEl) && optionEl.ValueKind == JsonValueKind.String
                     ? optionEl.GetString() : null;
                 if (option is { Length: > 120 } || option?.Any(char.IsControl) == true) continue;
@@ -2262,6 +2313,12 @@ sealed class TrackerWindow : Form
             {
                 value ??= new JsonObject();
                 value["max"] = max;
+            }
+            if (filter.Id is "pseudo.pseudo_tangled_implicit_tier" or "pseudo.pseudo_searing_implicit_tier" &&
+                int.TryParse(filter.Option, out var tier) && tier is >= 1 and <= 6)
+            {
+                value ??= new JsonObject();
+                value["option"] = tier;
             }
             if (value is not null) obj["value"] = value;
             statRows.Add(obj);
@@ -3495,9 +3552,14 @@ sealed class TrackerWindow : Form
         return _webReady ??= StartWebAsync();
     }
 
-    static string CompanionStartupScript(bool testerUnlocked)
+    string CompanionStartupScript()
     {
-        var startup = JsonSerializer.Serialize(new { version = AppUpdate.CurrentLabel(), testerUnlocked });
+        var startup = JsonSerializer.Serialize(new
+        {
+            version = AppUpdate.CurrentLabel(),
+            testerUnlocked = _testerAccess?.Unlocked == true,
+            closeWithGame = _launcher?.CloseWithGame == true,
+        });
         return $"if (window === window.top) window.sseStartup = {startup};";
     }
 
@@ -3528,7 +3590,7 @@ sealed class TrackerWindow : Form
         _web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
         _web.CoreWebView2.Settings.IsStatusBarEnabled = false;
         _web.CoreWebView2.Settings.IsWebMessageEnabled = true;
-        await _web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(CompanionStartupScript(_testerAccess?.Unlocked == true));
+        await _web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(CompanionStartupScript());
         _web.CoreWebView2.WebMessageReceived += OnWebMessage;
         _web.CoreWebView2.NavigationCompleted += (_, ev) =>
         {
@@ -3561,6 +3623,19 @@ sealed class TrackerWindow : Form
             if (type == "quit")
             {
                 BeginInvoke(Close);
+                return;
+            }
+            if (type == "close-with-game")
+            {
+                if (_launcher is null || !root.TryGetProperty("enabled", out var setting) ||
+                    setting.ValueKind is not (JsonValueKind.True or JsonValueKind.False)) return;
+                _launcher.SetCloseWithGame(setting.GetBoolean());
+                if (_launcher.CloseWithGame)
+                {
+                    _launcher.NoteGameWindow();
+                    WatchGameExit();
+                }
+                else StopWatchingGameExit();
                 return;
             }
             if (type == "app-scale")
