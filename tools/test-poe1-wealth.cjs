@@ -599,6 +599,16 @@ run('window.chrome={webview:{postMessage(){throw Error("Unexpected trade request
 (async () => {
   c.ensureTradeStats = async () => new Map();
   const queryFor = async (item) => JSON.parse(new URL(await c.tradeSiteUrl(item)).searchParams.get('q')).query;
+  const flask = c.parsePoeItem('Item Class: Utility Flasks\nRarity: Magic\nGranite Flask\n--------\nItem Level: 84');
+  assert.match(c.overlayPropsHtml({id:''},flask), /Item level[\s\S]*?value="84"/);
+  assert.equal((await queryFor(flask)).filters.misc_filters?.filters.ilvl,undefined);
+  flask.pickIlvl = true;
+  assert.equal((await queryFor(flask)).filters.misc_filters.filters.ilvl.min,84);
+  c.setDropIlvlMin(null,flask,'85',true);
+  assert.equal((await queryFor(flask)).filters.misc_filters.filters.ilvl.min,85);
+  run('state.activeGame="poe2";');
+  assert.equal(c.ilvlFilterState(flask).min,82);
+  run('state.activeGame="poe1";');
   const glovesBase = {id:'shagreen-base',name:'Test Gloves',baseType:'Shagreen Gloves',className:'Gloves',rarity:'Rare'};
   const previousBaseInspect = run('ui.inspect');
   const previousBasePaint = c.paintPriceOverlay;

@@ -8881,8 +8881,11 @@ function ilvlFilterState(drop) {
   const raw = Number(drop?.props?.ilvl);
   if (!Number.isFinite(raw) || raw <= 0) return null;
   if (/^unique$/i.test(String(drop?.rarity || ""))) return null;
-  const cluster = activeGame() === "poe1" && (clusterJewelSize(drop) || poe1TradeCategory(drop.className) === "jewel.cluster");
-  const cap = cluster ? Math.max(100, raw) : maxUsefulItemLevel(tradeCategory(drop?.className));
+  const category = tradeCategory(drop?.className);
+  const fullItemLevel = activeGame() === "poe1" && (
+    category === "flask" || clusterJewelSize(drop) || poe1TradeCategory(drop.className) === "jewel.cluster"
+  );
+  const cap = fullItemLevel ? Math.max(100, raw) : maxUsefulItemLevel(category);
   if (cap <= 1) return null;
   const value = Math.min(raw, cap);
   const want = Number(drop?.wantIlvl);
