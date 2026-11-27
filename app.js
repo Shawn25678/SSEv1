@@ -14448,6 +14448,21 @@ function askPoe1Session() {
     .catch(() => { poe1SessionAsked = false; });
 }
 
+function clearPoe1StashCache() {
+  if (activeGame() !== "poe1") return false;
+  const previous = state.poe1StashTabs;
+  state.poe1StashTabs = { ...previous };
+  delete state.poe1StashTabs[wealthLeague()];
+  try { save(); }
+  catch {
+    state.poe1StashTabs = previous;
+    return false;
+  }
+  ui.wealth = null;
+  scheduleWealthRefresh();
+  return true;
+}
+
 function wealthLastReadAt() {
   let latest = 0;
   const series = activeGame() === "poe1" ? state.poe1WealthSeries : state.wealthSeries;
@@ -14557,7 +14572,7 @@ async function listPoe1Stashes() {
     if (draft !== wealthDraft()) return;
     if (result?.retryAfterMs > 0) {
       draft.tabsRetryAt = Date.now() + result.retryAfterMs;
-      draft.message = "Path of Exile paused stash requests. SSE will retry loading the tabs automatically.";
+      draft.message = `Path of Exile paused stash requests. Retrying the tab list at ${formatWhen(draft.tabsRetryAt)}.`;
       return;
     }
     applyPoe1StashTabs(draft, result?.tabs);
@@ -14621,6 +14636,11 @@ async function readWealthTab(opts) {
     repaintWealth();
     return;
   }
+  const tabIndices = poe1Tabs.map(tab => tab.index);
+  const selection = tabIndices.join(",");
+  const pending = poe1 && draft.stashRead?.selection === selection ? draft.stashRead : null;
+  if (pending && Date.now() < draft.retryAt) return;
+  if (poe1 && !pending) draft.stashRead = null;
   if (!poe1 && !stashes.length) {
     if (auto) return;
     draft.message = "Turn on at least one stash tab.";
@@ -14640,27 +14660,42 @@ async function readWealthTab(opts) {
   try {
     if (poe1 && (poe1RefreshTask || poe1PricesDue(draft.league))) await refreshPoe1Prices();
     if (poe1 && (activeGame() !== "poe1" || draft !== wealthDraft())) return;
+    const remaining = pending ? tabIndices.filter(index => !pending.groups.has(String(index))) : tabIndices;
     const result = await webviewJson(
       poe1
-        ? { type: "wealth-stash", game: "poe1", league: draft.league, tabs: poe1Tabs.map(tab => tab.index) }
+        ? { type: "wealth-stash", game: "poe1", league: draft.league, tabs: remaining, resume: !!pending?.tabs }
         : { type: "wealth-stash", league: draft.league, account, stashes },
       poe1 ? 150000 : 90000,
       poe1 ? "The stash read timed out. Try again in a moment." : "The trade site timed out. Try again in a moment.");
     if (draft !== wealthDraft()) return;
-    const groups = Array.isArray(result?.stashes) ? result.stashes : [];
+    let groups = Array.isArray(result?.stashes) ? result.stashes : [];
     const partial = groups.some(group => group?.partial);
     if (poe1) {
-      const read = new Set(groups.filter(group => Array.isArray(group?.stacks)).map(group => String(group.id)));
-      if (result?.limited || partial || poe1Tabs.some(tab => !read.has(String(tab.index)))) {
-        draft.retryAt = Date.now() + (result?.retryAfterMs > 0 ? result.retryAfterMs : 2 * 60000);
-        draft.message = result?.retryAfterMs > 0
-          ? "Path of Exile paused stash requests. SSE will retry the read automatically."
-          : draft.completeRead || wealthHasBaseline()
+      const selected = new Set(tabIndices.map(String));
+      const read = pending?.groups || new Map();
+      const tabs = result?.tabs || pending?.tabs;
+      const names = new Map((tabs || poe1Tabs).map(tab => [String(tab.index), tab.name]));
+      for (const group of groups) {
+        const id = String(group?.id);
+        if (selected.has(id) && !group.partial && Array.isArray(group.stacks))
+          read.set(id, { ...group, name: names.get(id) || group.name });
+      }
+      if (result?.retryAfterMs > 0 && read.size < tabIndices.length) {
+        draft.retryAt = Date.now() + result.retryAfterMs;
+        draft.stashRead = { selection, groups: read, tabs };
+        draft.message = `Path of Exile paused stash requests. ${read.size}/${tabIndices.length} tabs read. Retrying at ${formatWhen(draft.retryAt)}.`;
+        return;
+      }
+      draft.stashRead = null;
+      if (result?.limited || partial || read.size < tabIndices.length) {
+        draft.retryAt = Date.now() + 2 * 60000;
+        draft.message = draft.completeRead || wealthHasBaseline()
           ? "Some selected tabs could not be read. Wealth still shows the last complete read."
           : "Some selected tabs could not be read. Try reading the stash again.";
         return;
       }
-      applyPoe1StashTabs(draft, result?.tabs);
+      groups = tabIndices.map(index => read.get(String(index)));
+      applyPoe1StashTabs(draft, tabs);
       draft.completeRead = true;
     }
     draft.slots = groups.flatMap(group => (Array.isArray(group?.stacks) ? group.stacks : []).filter(row => row && row.name).map(row => ({
@@ -14785,6 +14820,7 @@ function renderSettings() {
           <span>Close SSE when the game closes</span>
         </label>` : ""}
         <div class="row-actions">
+          ${poe1 && window.chrome?.webview ? '<button class="btn ghost" data-poe1-clear-stash-cache type="button">Clear stash cache</button>' : ""}
           <button class="btn ghost" id="settings-check-btn" type="button"${window.chrome?.webview ? "" : " hidden"}>Check</button>
           <button class="btn gold" id="settings-update-btn" type="button" hidden>Update</button>
         </div>
@@ -15940,6 +15976,11 @@ function onClick(event) {
   const backupWhere = event.target.closest("[data-backup-where]");
   if (backupWhere) {
     setBackupFolder(backupWhere.dataset.backupWhere);
+    return;
+  }
+  if (event.target.closest("[data-poe1-clear-stash-cache]")) {
+    if (clearPoe1StashCache()) showToast("Stash cache cleared. Open Wealth to reload the tab list.");
+    else showToast("Could not clear the stash cache.");
     return;
   }
   if (event.target.closest("#settings-check-btn")) {

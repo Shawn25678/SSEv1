@@ -2889,7 +2889,7 @@ sealed class TrackerWindow : Form
         return picks;
     }
 
-    async Task<string> LookupPoe1Wealth(string league, IReadOnlyList<int>? only)
+    async Task<string> LookupPoe1Wealth(string league, IReadOnlyList<int>? only, bool resume)
     {
         var account = ReadPoe1Account();
         league = league.Trim();
@@ -2902,38 +2902,46 @@ sealed class TrackerWindow : Form
             throw new InvalidOperationException("Sign in to Path of Exile first.");
         var retryDeadline = DateTimeOffset.UtcNow.AddSeconds(70);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(135));
-        var first = await GetPoe1Stash(session, account, league, 0, true, retryDeadline, timeout.Token);
-        if (first.Status is 401 or 403)
-            throw new InvalidOperationException(first.AuthRejected
-                ? "Sign in again. Path of Exile rejected the stash read."
-                : "Path of Exile did not return the stash. The saved sign-in was kept.");
-        if (first.Status == 429)
-            return new JsonObject { ["limited"] = true, ["retryAfterMs"] = first.RetryAfterMs }.ToJsonString();
-        if (first.Status != 200 || first.Json is null)
-            throw new InvalidOperationException("Path of Exile did not return the stash.");
+        // A resumed read already has the tab list from its first response.
+        resume = resume && only is { Count: > 0 };
+        var first = resume ? default : await GetPoe1Stash(session, account, league, 0, true, retryDeadline, timeout.Token);
         using var firstDocument = first.Json;
-        if (firstDocument.RootElement.ValueKind != JsonValueKind.Object ||
-            !firstDocument.RootElement.TryGetProperty("tabs", out var tabRows) || tabRows.ValueKind != JsonValueKind.Array)
-        {
-            throw new InvalidOperationException("Path of Exile did not return the stash tab list.");
-        }
         var tabs = new List<(int Index, string Name)>();
-        var listed = new JsonArray();
-        foreach (var tab in tabRows.EnumerateArray())
+        JsonArray? listed = null;
+        if (resume)
         {
-            var hiddenTab = tab.TryGetProperty("hidden", out var hidden) && hidden.ValueKind == JsonValueKind.True;
-            var index = tab.TryGetProperty("i", out var indexEl) && JsonInt(indexEl, out var indexN) ? indexN : tabs.Count;
-            var name = tab.TryGetProperty("n", out var nameEl) ? JsonString(nameEl) : "Stash";
-            if (string.IsNullOrWhiteSpace(name)) name = "Stash";
-            name = name.Trim();
-            tabs.Add((index, name));
-            var type = tab.TryGetProperty("type", out var typeEl) ? JsonString(typeEl) : "";
-            listed.Add(new JsonObject { ["index"] = index, ["name"] = name, ["type"] = type, ["colour"] = Poe1TabColour(tab), ["hidden"] = hiddenTab });
+            tabs.AddRange(only!.Select(index => (index, "")));
         }
-        if (only is not null) tabs = tabs.Where(tab => only.Contains(tab.Index)).ToList();
-        if (only is null || tabs.Count == 0)
+        else
         {
-            return new JsonObject { ["tabs"] = listed, ["stashes"] = new JsonArray() }.ToJsonString();
+            if (first.Status is 401 or 403)
+                throw new InvalidOperationException(first.AuthRejected
+                    ? "Sign in again. Path of Exile rejected the stash read."
+                    : "Path of Exile did not return the stash. The saved sign-in was kept.");
+            if (first.Status == 429)
+                return new JsonObject { ["limited"] = true, ["retryAfterMs"] = first.RetryAfterMs }.ToJsonString();
+            if (first.Status != 200 || first.Json is null)
+                throw new InvalidOperationException("Path of Exile did not return the stash.");
+            if (first.Json.RootElement.ValueKind != JsonValueKind.Object ||
+                !first.Json.RootElement.TryGetProperty("tabs", out var tabRows) || tabRows.ValueKind != JsonValueKind.Array)
+            {
+                throw new InvalidOperationException("Path of Exile did not return the stash tab list.");
+            }
+            listed = new JsonArray();
+            foreach (var tab in tabRows.EnumerateArray())
+            {
+                var hiddenTab = tab.TryGetProperty("hidden", out var hidden) && hidden.ValueKind == JsonValueKind.True;
+                var index = tab.TryGetProperty("i", out var indexEl) && JsonInt(indexEl, out var indexN) ? indexN : tabs.Count;
+                var name = tab.TryGetProperty("n", out var nameEl) ? JsonString(nameEl) : "Stash";
+                if (string.IsNullOrWhiteSpace(name)) name = "Stash";
+                name = name.Trim();
+                tabs.Add((index, name));
+                var type = tab.TryGetProperty("type", out var typeEl) ? JsonString(typeEl) : "";
+                listed.Add(new JsonObject { ["index"] = index, ["name"] = name, ["type"] = type, ["colour"] = Poe1TabColour(tab), ["hidden"] = hiddenTab });
+            }
+            if (only is null)
+                return new JsonObject { ["tabs"] = listed, ["stashes"] = new JsonArray() }.ToJsonString();
+            tabs = tabs.Where(tab => only.Contains(tab.Index)).ToList();
         }
         var limited = tabs.Count > 24;
         var results = new JsonArray();
@@ -4016,7 +4024,8 @@ sealed class TrackerWindow : Form
                 try
                 {
                     var body = game == "poe1"
-                        ? await LookupPoe1Wealth(league, Poe1TabPicks(root))
+                        ? await LookupPoe1Wealth(league, Poe1TabPicks(root),
+                            root.TryGetProperty("resume", out var resume) && resume.ValueKind == JsonValueKind.True)
                         : await LookupWealthTabs(league, account, WealthJobs(root));
                     Reply(id, true, 200, body);
                 }
