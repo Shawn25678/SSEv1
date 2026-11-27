@@ -12864,7 +12864,8 @@ function loadWealthCardRewards() {
       if (!cardRewards.length && row.name === "The Void") cardRewards.push("Reward from a random divination card set");
       const cardCatalogArt = typeof row.art_src === "string" && /^[^/\\]+\.png$/i.test(row.art_src)
         ? `${wealthCardCatalogDataUrl}/images/${encodeURIComponent(row.art_src)}` : "";
-      cards.set(priceKey(row.name), { name: row.name, cardSetSize: Number(row.stack_size), cardRewards, cardCatalogArt });
+      cards.set(priceKey(row.name), { name: row.name, cardSetSize: Number(row.stack_size), cardRewards, cardCatalogArt,
+        dropDisabled: row.is_disabled === true });
     }
     return cards;
   }).catch(() => {
@@ -13869,7 +13870,8 @@ function wealthCardCatalogTile(card) {
   const progress = card.cardSetSize > 0 ? `${owned}/${card.cardSetSize} owned` : `${owned} owned`;
   const art = wealthCardCatalogArt(card) || card.cardCatalogArt;
   const rewards = wealthCardRewardLines(card);
-  return `<article class="wealth-catalog-tile">
+  const searchText = priceKey([card.name, ...rewards].join(" "));
+  return `<article class="wealth-catalog-tile" data-search="${esc(searchText)}"${card.dropDisabled ? " data-drop-disabled" : ""}>
     <div class="wealth-catalog-face">
       <h3>${esc(card.name)}</h3>
       <div class="wealth-catalog-art">
@@ -13890,14 +13892,16 @@ function wealthCardCatalogTile(card) {
 
 function openWealthCardCatalog() {
   const dialog = document.getElementById("wealth-card-catalog");
-  if (!dialog || dialog.open) return;
+  if (!dialog || dialog.open || activeGame() !== "poe1") return;
+  // The card metadata pinned above describes the Covens drop pool.
+  const covens = /^(?:(?:hardcore|hc|ssf|ruthless)\s+)*covens(?:\s+(?:hardcore|hc|ssf|ruthless))*$/i.test(wealthDraft().league.trim());
   dialog.innerHTML = `<div class="sheet-inner">
     <header><h2 id="wealth-card-catalog-title">Divination cards</h2>
       <form method="dialog"><button type="submit" class="close" aria-label="Close card catalog">×</button></form>
     </header>
     <div class="wealth-toolbar">
-      <input type="search" aria-label="Search cards" placeholder="Search cards" autofocus>
-      <select aria-label="Show cards"><option value="all">All cards</option><option value="filtered">Filtered cards</option></select>
+      <input type="search" aria-label="Search by card name or reward" placeholder="Search by card name or reward" autofocus>
+      <select aria-label="Show cards"><option value="all">${covens ? "Available cards" : "All cards"}</option><option value="filtered">Filtered cards</option>${covens ? '<option value="disabled">Drop-disabled</option>' : ""}</select>
       <span class="wealth-catalog-status muted" role="status"></span>
     </div>
     <div class="wealth-catalog-grid"></div>
@@ -13917,42 +13921,72 @@ function openWealthCardCatalog() {
       image.hidden = true;
     }
   }, true);
-  let cards = wealthCardCatalogEntries(null, wealthDraft());
+  let tiles = [];
   let loading = true;
   let fullCatalog = false;
   let catalog = null;
   let rewards = null;
-  const paint = () => {
+  let loadingRewards = true;
+  const empty = document.createElement("p");
+  empty.className = "muted";
+  const filterTiles = () => {
     const query = priceKey(find.value);
-    const shown = cards.filter(card => priceKey(card.name).includes(query) &&
-      (show.value === "all" || ignoredWealth(card.name, card)));
-    status.textContent = loading ? "Loading card catalog…" :
-      `${shown.length} card${shown.length === 1 ? "" : "s"}${fullCatalog ? "" : " · trade catalog unavailable"}`;
-    results.innerHTML = shown.map(wealthCardCatalogTile).join("") ||
-      `<p class="muted">${loading ? "Loading cards…" : "No matching cards."}</p>`;
+    const needsDropStatus = covens && show.value !== "filtered" && !rewards;
+    const waitingForDrops = needsDropStatus && loadingRewards;
+    let count = 0;
+    for (const { tile, action } of tiles) {
+      const disabled = covens && tile.hasAttribute("data-drop-disabled");
+      const inView = show.value === "filtered" ? action.getAttribute("aria-pressed") === "true" :
+        show.value === "disabled" ? disabled : !disabled;
+      const visible = !waitingForDrops && inView && tile.dataset.search.includes(query);
+      if (tile.hidden === visible) tile.hidden = !visible;
+      if (visible) count++;
+    }
+    status.textContent = loading || waitingForDrops ? "Loading card catalog…" :
+      needsDropStatus ? "Drop status unavailable" :
+      `${count} card${count === 1 ? "" : "s"}${fullCatalog ? "" : " · trade catalog unavailable"}`;
+    empty.hidden = count > 0;
+    empty.textContent = loading || waitingForDrops ? "Loading cards…" :
+      needsDropStatus && show.value === "disabled" ? "Reopen the catalog to retry." : "No matching cards.";
   };
-  find.addEventListener("input", () => { results.scrollTop = 0; paint(); });
-  show.addEventListener("change", () => { results.scrollTop = 0; paint(); });
+  const refreshTiles = () => {
+    const focused = document.activeElement?.dataset.wealthCatalogCard;
+    const cards = wealthCardCatalogEntries(catalog, wealthDraft(), rewards);
+    results.innerHTML = cards.map(wealthCardCatalogTile).join("");
+    tiles = Array.from(results.children, tile => ({ tile, action: tile.querySelector("button") }));
+    results.append(empty);
+    filterTiles();
+    if (focused) {
+      const match = tiles.find(({ tile, action }) => !tile.hidden && action.dataset.wealthCatalogCard === focused);
+      (match?.action || find).focus({ preventScroll: true });
+    }
+  };
+  find.addEventListener("input", () => { filterTiles(); results.scrollTop = 0; });
+  show.addEventListener("change", () => { filterTiles(); results.scrollTop = 0; });
   results.addEventListener("click", event => {
     const card = event.target.closest("[data-wealth-catalog-card]");
     if (!card || activeGame() !== "poe1") return;
     const excluded = card.getAttribute("aria-pressed") !== "true";
     setWealthCatalogCard(card.dataset.wealthCatalogCard, excluded);
+    card.setAttribute("aria-pressed", String(excluded));
+    card.title = excluded ? "Restore to Wealth" : "Exclude from Wealth";
     if (show.value === "filtered") {
-      paint();
-      show.focus({ preventScroll: true });
-    } else {
-      card.setAttribute("aria-pressed", String(excluded));
-      card.title = excluded ? "Restore to Wealth" : "Exclude from Wealth";
+      const visible = tiles.filter(({ tile }) => !tile.hidden);
+      const index = visible.findIndex(entry => entry.action === card);
+      filterTiles();
+      (visible[index + 1]?.action || visible[index - 1]?.action || show).focus({ preventScroll: true });
     }
   });
-  paint();
+  refreshTiles();
   dialog.showModal();
-  dialog.addEventListener("close", () => document.querySelector("[data-wealth-browse-cards]")?.focus({ preventScroll: true }), { once: true });
+  dialog.addEventListener("close", () => {
+    if (dialog.open) return;
+    dialog.replaceChildren();
+    document.querySelector("[data-wealth-browse-cards]")?.focus({ preventScroll: true });
+  }, { once: true });
   const update = () => {
     if (!dialog.open || !results.isConnected || activeGame() !== "poe1") return;
-    cards = wealthCardCatalogEntries(catalog, wealthDraft(), rewards);
-    paint();
+    refreshTiles();
   };
   poe1TradeCatalog().then(result => {
     catalog = result;
@@ -13961,7 +13995,7 @@ function openWealthCardCatalog() {
     update();
   });
   loadWealthCardRewards().then(result => {
-    if (!result) return;
+    loadingRewards = false;
     rewards = result;
     update();
   });
