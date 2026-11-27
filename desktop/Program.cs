@@ -1479,6 +1479,8 @@ sealed class TrackerWindow : Form
     }
 
     static readonly HttpClient Poe1Http = CreatePoe1Http();
+    static readonly SemaphoreSlim Poe1StashGate = new(1);
+    static DateTimeOffset _poe1StashCooldown;
 
     static HttpClient CreatePoe1Http()
     {
@@ -2898,18 +2900,21 @@ sealed class TrackerWindow : Form
         var session = ReadPoe1Session();
         if (session.Length < 8)
             throw new InvalidOperationException("Sign in to Path of Exile first.");
-        var first = await GetPoe1Stash(session, account, league, 0, true);
+        var retryDeadline = DateTimeOffset.UtcNow.AddSeconds(70);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(135));
+        var first = await GetPoe1Stash(session, account, league, 0, true, retryDeadline, timeout.Token);
         if (first.Status is 401 or 403)
             throw new InvalidOperationException(first.AuthRejected
                 ? "Sign in again. Path of Exile rejected the stash read."
                 : "Path of Exile did not return the stash. The saved sign-in was kept.");
         if (first.Status == 429)
-            throw new InvalidOperationException("The stash site is rate limited. Wait a moment, then read again.");
+            return new JsonObject { ["limited"] = true, ["retryAfterMs"] = first.RetryAfterMs }.ToJsonString();
         if (first.Status != 200 || first.Json is null)
             throw new InvalidOperationException("Path of Exile did not return the stash.");
-        if (!first.Json.RootElement.TryGetProperty("tabs", out var tabRows) || tabRows.ValueKind != JsonValueKind.Array)
+        using var firstDocument = first.Json;
+        if (firstDocument.RootElement.ValueKind != JsonValueKind.Object ||
+            !firstDocument.RootElement.TryGetProperty("tabs", out var tabRows) || tabRows.ValueKind != JsonValueKind.Array)
         {
-            first.Json.Dispose();
             throw new InvalidOperationException("Path of Exile did not return the stash tab list.");
         }
         var tabs = new List<(int Index, string Name)>();
@@ -2928,26 +2933,30 @@ sealed class TrackerWindow : Form
         if (only is not null) tabs = tabs.Where(tab => only.Contains(tab.Index)).ToList();
         if (only is null || tabs.Count == 0)
         {
-            first.Json.Dispose();
             return new JsonObject { ["tabs"] = listed, ["stashes"] = new JsonArray() }.ToJsonString();
         }
         var limited = tabs.Count > 24;
         var results = new JsonArray();
         var taken = 0;
+        var retryAfterMs = 0;
         foreach (var tab in tabs)
         {
             if (taken >= 24) break;
-            JsonDocument? doc = tab.Index == 0 ? first.Json : null;
+            JsonDocument? doc = tab.Index == 0 ? firstDocument : null;
             var owned = false;
             if (doc is null)
             {
-                await Task.Delay(350);
-                var next = await GetPoe1Stash(session, account, league, tab.Index, false);
-                if (next.Status == 429) { next.Json?.Dispose(); limited = true; break; }
+                await Task.Delay(750, timeout.Token);
+                var next = await GetPoe1Stash(session, account, league, tab.Index, false, retryDeadline, timeout.Token);
+                if (next.Status == 429)
+                {
+                    retryAfterMs = next.RetryAfterMs;
+                    limited = true;
+                    break;
+                }
                 if (next.Status is 401 or 403)
                 {
                     next.Json?.Dispose();
-                    first.Json.Dispose();
                     throw new InvalidOperationException(next.AuthRejected
                         ? "Sign in again. Path of Exile rejected the stash read."
                         : "Path of Exile did not return the stash. The saved sign-in was kept.");
@@ -2956,11 +2965,19 @@ sealed class TrackerWindow : Form
                 owned = true;
             }
             taken++;
-            if (doc is null) continue;
+            if (doc is null)
+            {
+                limited = true;
+                continue;
+            }
             try
             {
                 var stacks = Poe1Stacks(doc);
-                if (stacks.Count == 0) continue;
+                if (stacks is null)
+                {
+                    limited = true;
+                    continue;
+                }
                 results.Add(new JsonObject
                 {
                     ["id"] = tab.Index.ToString(),
@@ -2973,9 +2990,7 @@ sealed class TrackerWindow : Form
                 if (owned) doc.Dispose();
             }
         }
-        var json = new JsonObject { ["tabs"] = listed, ["stashes"] = results, ["limited"] = limited }.ToJsonString();
-        first.Json.Dispose();
-        return json;
+        return new JsonObject { ["tabs"] = listed, ["stashes"] = results, ["limited"] = limited, ["retryAfterMs"] = retryAfterMs }.ToJsonString();
     }
 
     static string Poe1TabColour(JsonElement tab)
@@ -2992,7 +3007,40 @@ sealed class TrackerWindow : Form
         return Regex.IsMatch(hex, @"\A[0-9a-fA-F]{6}\z") ? hex : "";
     }
 
-    async Task<(int Status, JsonDocument? Json, bool AuthRejected)> GetPoe1Stash(string session, string account, string league, int tabIndex, bool listTabs)
+    async Task<(int Status, JsonDocument? Json, bool AuthRejected, int RetryAfterMs)> GetPoe1Stash(
+        string session, string account, string league, int tabIndex, bool listTabs, DateTimeOffset retryDeadline, CancellationToken cancellation)
+    {
+        await Poe1StashGate.WaitAsync(cancellation);
+        try
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var now = DateTimeOffset.UtcNow;
+                var wait = _poe1StashCooldown - now;
+                if (wait > TimeSpan.Zero)
+                {
+                    if (_poe1StashCooldown > retryDeadline) break;
+                    await Task.Delay(wait, cancellation);
+                }
+                var result = await RequestPoe1Stash(session, account, league, tabIndex, listTabs, cancellation);
+                if (result.Status != 429) return (result.Status, result.Json, result.AuthRejected, 0);
+                _poe1StashCooldown = DateTimeOffset.UtcNow + result.RetryAfter;
+            }
+            var remaining = (_poe1StashCooldown - DateTimeOffset.UtcNow).TotalMilliseconds;
+            return (429, null, false, (int)Math.Clamp(Math.Ceiling(remaining), 1, int.MaxValue));
+        }
+        finally { Poe1StashGate.Release(); }
+    }
+
+    static TimeSpan Poe1StashRetryAfter(HttpResponseMessage response, DateTimeOffset now)
+    {
+        var retry = response.Headers.RetryAfter;
+        var wait = retry?.Delta ?? (retry?.Date - now) ?? TimeSpan.FromMinutes(1);
+        return (wait < TimeSpan.FromSeconds(1) ? TimeSpan.FromSeconds(1) : wait) + TimeSpan.FromSeconds(1);
+    }
+
+    async Task<(int Status, JsonDocument? Json, bool AuthRejected, TimeSpan RetryAfter)> RequestPoe1Stash(
+        string session, string account, string league, int tabIndex, bool listTabs, CancellationToken cancellation)
     {
         var url = "https://www.pathofexile.com/character-window/get-stash-items?accountName="
             + Uri.EscapeDataString(account) + "&realm=pc&league=" + Uri.EscapeDataString(league)
@@ -3001,18 +3049,19 @@ sealed class TrackerWindow : Form
         request.Headers.TryAddWithoutValidation("Cookie", "POESESSID=" + session);
         request.Headers.TryAddWithoutValidation("X-Requested-With", "XMLHttpRequest");
         request.Headers.Referrer = new Uri("https://www.pathofexile.com/");
-        using var response = await Poe1Http.SendAsync(request);
+        using var response = await Poe1Http.SendAsync(request, cancellation);
         var status = (int)response.StatusCode;
-        var body = await response.Content.ReadAsStringAsync();
+        if (status == 429) return (status, null, false, Poe1StashRetryAfter(response, DateTimeOffset.UtcNow));
+        var body = await response.Content.ReadAsStringAsync(cancellation);
         var rejected = status is 401 or 403 && Poe1AuthRejected(body);
         if (rejected)
         {
             try { File.Delete(Poe1SessionPath()); } catch { /* the next sign-in replaces it */ }
-            return (status, null, true);
+            return (status, null, true, TimeSpan.Zero);
         }
-        if (status != 200) return (status, null, false);
-        try { return (status, JsonDocument.Parse(body), false); }
-        catch { return (status, null, false); }
+        if (status != 200) return (status, null, false, TimeSpan.Zero);
+        try { return (status, JsonDocument.Parse(body), false, TimeSpan.Zero); }
+        catch { return (status, null, false, TimeSpan.Zero); }
     }
 
     static bool Poe1AuthRejected(string body)
@@ -3028,11 +3077,12 @@ sealed class TrackerWindow : Form
         catch { return false; }
     }
 
-    static JsonArray Poe1Stacks(JsonDocument doc)
+    static JsonArray? Poe1Stacks(JsonDocument doc)
     {
         var totals = new Dictionary<string, JsonObject>(StringComparer.OrdinalIgnoreCase);
-        if (!doc.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
-            return new JsonArray();
+        if (doc.RootElement.ValueKind != JsonValueKind.Object ||
+            !doc.RootElement.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array)
+            return null;
         foreach (var item in items.EnumerateArray())
         {
             var name = item.TryGetProperty("name", out var nameEl) ? JsonString(nameEl).Trim() : "";

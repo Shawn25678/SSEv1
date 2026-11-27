@@ -14489,15 +14489,18 @@ function wealthRefreshDue() {
 
 function scheduleWealthRefresh() {
   clearTimeout(wealthRefreshTimer);
-  if (!wealthAutoArmed()) return;
+  if (activeGame() !== "poe1" || !poe1SignedIn) return;
   const draft = wealthDraft();
   if (draft.busy) return;
-  const launch = !draft.readStarted;
-  const due = draft.retryAt || Math.max(wealthLastReadAt(), draft.readStarted || 0) + WEALTH_REFRESH_MS;
-  const wait = launch ? 1200 : Math.max(4000, due - Date.now());
+  const retryList = !!draft.tabsRetryAt;
+  if (!retryList && !wealthAutoArmed()) return;
+  const launch = !draft.readStarted && !draft.retryAt;
+  const due = draft.tabsRetryAt || draft.retryAt || Math.max(wealthLastReadAt(), draft.readStarted || 0) + WEALTH_REFRESH_MS;
+  const wait = launch && !retryList ? 1200 : Math.max(4000, due - Date.now());
   wealthRefreshTimer = setTimeout(() => {
     if (activeGame() !== "poe1" || draft !== wealthDraft()) return;
-    void readWealthTab({ auto: true, launch });
+    if (retryList) void listPoe1Stashes();
+    else void readWealthTab({ auto: true, launch });
   }, wait);
 }
 
@@ -14535,21 +14538,28 @@ async function signInPoe1() {
 
 async function listPoe1Stashes() {
   const draft = wealthDraft();
-  if (draft.busy) return;
+  if (draft.busy || (draft.tabsRetryAt && Date.now() < draft.tabsRetryAt)) return;
   if (!window.chrome?.webview) {
     draft.message = "Reading the tab runs in Still Sane.";
     repaintWealth();
     return;
   }
+  draft.tabsAsked = true;
+  draft.tabsRetryAt = 0;
   draft.busy = true;
   draft.message = "Loading stash tabs…";
   repaintWealth();
   try {
     const result = await webviewJson(
       { type: "wealth-stash", game: "poe1", league: draft.league, list: true },
-      30000,
+      150000,
       "The stash read timed out. Try again in a moment.");
     if (draft !== wealthDraft()) return;
+    if (result?.retryAfterMs > 0) {
+      draft.tabsRetryAt = Date.now() + result.retryAfterMs;
+      draft.message = "Path of Exile paused stash requests. SSE will retry loading the tabs automatically.";
+      return;
+    }
     applyPoe1StashTabs(draft, result?.tabs);
     draft.message = draft.poe1Tabs.length ? "" : "No stash tabs in that league.";
     draft.tabsReady = draft.poe1Tabs.length > 0;
@@ -14565,6 +14575,9 @@ async function listPoe1Stashes() {
       scheduleWealthRefresh();
     }
   }
+  if (draft !== wealthDraft() || draft.tabsRetryAt || !draft.readAfterTabList) return;
+  draft.readAfterTabList = false;
+  if (draft.poe1Tabs.length) await readWealthTab();
 }
 
 async function readWealthTab(opts) {
@@ -14594,9 +14607,12 @@ async function readWealthTab(opts) {
   }));
   if (poe1 && !poe1Tabs.length) {
     if (auto) return;
-    draft.message = Array.isArray(draft.poe1Tabs) && draft.poe1Tabs.length
-      ? "Turn on at least one stash tab."
-      : "Choose the stash tabs first.";
+    if (!draft.poe1Tabs.length && poe1SignedIn) {
+      draft.readAfterTabList = true;
+      await listPoe1Stashes();
+      return;
+    }
+    draft.message = draft.poe1Tabs.length ? "Turn on at least one stash tab." : "Sign in to Path of Exile first.";
     repaintWealth();
     return;
   }
@@ -14636,8 +14652,10 @@ async function readWealthTab(opts) {
     if (poe1) {
       const read = new Set(groups.filter(group => Array.isArray(group?.stacks)).map(group => String(group.id)));
       if (result?.limited || partial || poe1Tabs.some(tab => !read.has(String(tab.index)))) {
-        draft.retryAt = Date.now() + 2 * 60000;
-        draft.message = draft.completeRead || wealthHasBaseline()
+        draft.retryAt = Date.now() + (result?.retryAfterMs > 0 ? result.retryAfterMs : 2 * 60000);
+        draft.message = result?.retryAfterMs > 0
+          ? "Path of Exile paused stash requests. SSE will retry the read automatically."
+          : draft.completeRead || wealthHasBaseline()
           ? "Some selected tabs could not be read. Wealth still shows the last complete read."
           : "Some selected tabs could not be read. Try reading the stash again.";
         return;
