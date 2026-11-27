@@ -606,8 +606,22 @@ run('window.chrome={webview:{postMessage(){throw Error("Unexpected trade request
   assert.equal((await queryFor(flask)).filters.misc_filters.filters.ilvl.min,84);
   c.setDropIlvlMin(null,flask,'85',true);
   assert.equal((await queryFor(flask)).filters.misc_filters.filters.ilvl.min,85);
+  const eclipseStaff = c.parsePoeItem('Item Class: Staves\nRarity: Magic\nEclipse Staff\n--------\nItem Level: 85');
+  const paganWand = c.parsePoeItem('Item Class: Wands\nRarity: Normal\nPagan Wand\n--------\nItem Level: 86');
+  const cabalistRegalia = c.parsePoeItem('Item Class: Body Armours\nRarity: Rare\nTest Armour\nCabalist Regalia\n--------\nItem Level: 100');
+  for (const [item,level] of [[eclipseStaff,85],[paganWand,86],[cabalistRegalia,100]]) {
+    assert.match(c.overlayPropsHtml({id:''},item),new RegExp(`Item level[\\s\\S]*?value="${level}"`));
+    assert.equal((await queryFor(item)).filters.misc_filters?.filters.ilvl,undefined);
+    assert.equal((await queryFor({...item,pickIlvl:true})).filters.misc_filters.filters.ilvl.min,level);
+  }
+  c.setDropIlvlMin(null,eclipseStaff,'84',true);
+  assert.equal((await queryFor(eclipseStaff)).filters.misc_filters.filters.ilvl.min,84);
+  assert.equal(c.ilvlFilterState({rarity:'Rare',className:'Jewels',baseType:'Crimson Jewel',props:{ilvl:85}}),null);
   run('state.activeGame="poe2";');
   assert.equal(c.ilvlFilterState(flask).min,82);
+  assert.equal(c.ilvlFilterState(eclipseStaff).min,81);
+  assert.equal(c.ilvlFilterState(paganWand).value,81);
+  assert.equal(c.ilvlFilterState(cabalistRegalia).value,82);
   run('state.activeGame="poe1";');
   const glovesBase = {id:'shagreen-base',name:'Test Gloves',baseType:'Shagreen Gloves',className:'Gloves',rarity:'Rare'};
   const previousBaseInspect = run('ui.inspect');
@@ -630,6 +644,97 @@ run('window.chrome={webview:{postMessage(){throw Error("Unexpected trade request
   run('state.activeGame="poe1";');
   run('ui').inspect = previousBaseInspect;
   c.paintPriceOverlay = previousBasePaint;
+  const auditIndex = c.buildTradeStatIndex({result:[
+    {id:'implicit',entries:[{id:'implicit.audit_mana_reservation',text:'#% increased Mana Reservation Efficiency of Skills'}]},
+    {id:'imbued',entries:[{id:'imbued.pseudo_built_in_support|3918067187',text:'Supported by Level 1 Lifetap'},
+      {id:'imbued.pseudo_built_in_support|4224789409',text:'Supported by Level 1 Less Duration'},
+      {id:'imbued.pseudo_built_in_support|48249346',text:'Supported by Level 1 More Duration'}]},
+  ]});
+  c.ensureTradeStats = async () => auditIndex;
+  const imbued = c.parsePoeItem('Item Class: Skill Gems\nRarity: Gem\nFireball\n--------\nLevel: 20\nQuality: +20%\n--------\nSupported by Level 1 Lifetap');
+  const gemQuery = await queryFor({...imbued,rolls:imbued.mods});
+  assert.deepEqual(gemQuery.stats[0].filters,[{id:'imbued.pseudo_built_in_support|3918067187',disabled:false}]);
+  const lessDuration = await queryFor({...imbued,rolls:[{text:'Supported by Level 1 Less Duration',pick:true}]});
+  assert.deepEqual(lessDuration.stats[0].filters,[{id:'imbued.pseudo_built_in_support|4224789409',disabled:false}]);
+  const kineticClipboard = `Item Class: Skill Gems
+Rarity: Gem
+Kinetic Blast
+--------
+Attack, Projectile, AoE
+Level: 20 (Max)
+Cost: 9 Mana
+Attack Speed: 115% of base
+Attack Damage: 155% of base
+Effectiveness of Added Damage: 155%
+Quality: +20% (augmented)
+--------
+Requirements:
+Level: 70
+Int: 155
+--------
+Fires a projectile from a Wand that causes a series of area explosions in a secondary radius around its point of impact, each damaging enemies.
+--------
+Kinetic Blast creates 4 additional explosions
+150% Arcane Might
+(Arcane Might causes Increases and Reductions to Spell Damage to also apply to Attack Damage at that percentage of their value)
+40% less Area Damage
+Base explosion radius is 1.4 metres
+Base secondary radius is 2 metres
+
+Additional Effects From Quality:
+Kinetic Blast creates 1(0-1) additional explosion
+--------
+Supported by Level 1 \u200BItem Rarity
+--------
+Place into an item socket to gain this skill. Right click to remove from a socket.
+--------
+Corrupted
+--------
+Imbued`;
+  const kineticBlast = c.parsePoeItem(kineticClipboard);
+  assert.deepEqual(Array.from(kineticBlast.mods,row=>row.text),['Supported by Level 1 Item Rarity']);
+  const kineticDrop = {...kineticBlast,id:'kinetic-blast',rolls:kineticBlast.mods};
+  assert.equal(c.overlayBaseHtml({id:''},kineticDrop,false),'');
+  assert.doesNotMatch(c.priceOverlayHtml({id:''},kineticDrop), /data-pick-base|price-overlay-swap-icon/);
+  const itemRarityId = 'imbued.pseudo_built_in_support|1787283513';
+  const previousGem = {inspect:run('ui.inspect'),webview:c.window.chrome,paint:c.paintPriceOverlay,
+    live:c.paintLivePrices,trade:c.tradeFetch,stats:c.ensureTradeStats};
+  c.ensureTradeStats = async () => { throw new Error('Trade catalog unavailable'); };
+  const kineticQuery = await queryFor(kineticDrop);
+  assert.equal(kineticQuery.type,'Kinetic Blast');
+  assert.equal((await queryFor({...kineticDrop,pickExactBase:false})).type,'Kinetic Blast');
+  assert.deepEqual(kineticQuery.stats[0].filters,[{id:itemRarityId,disabled:false}]);
+  assert.deepEqual(kineticQuery.filters.misc_filters.filters,
+    {gem_level:{min:20},quality:{min:20},corrupted:{option:'true'}});
+  assert.deepEqual((await queryFor({...kineticDrop,rolls:kineticDrop.rolls.map(roll=>({...roll,pick:false}))})).stats[0].filters,[]);
+  let gemRequest;
+  c.window.chrome = {webview:{}};
+  c.paintPriceOverlay = () => {};
+  c.paintLivePrices = () => {};
+  c.tradeFetch = async (...args) => { gemRequest = args[4]; return {amount:1,currency:'chaos',listings:2}; };
+  c.hideItemTip = () => {};
+  c.ingestClipboardItem(kineticClipboard,'price');
+  delete c.hideItemTip;
+  const {drop:openedGem} = c.inspectTarget();
+  c.handleOverlayClick({quoteDrop:openedGem.id,quoteLog:''});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(Array.from(gemRequest?.filters || [],row=>({...row})),[{id:itemRarityId}]);
+  assert.equal(gemRequest.ilvlMin,20);
+  assert.equal(gemRequest.qualityMin,20);
+  assert.equal(gemRequest.corrupted,true);
+  assert.equal(gemRequest.exactBase,true);
+  run('ui').inspect = previousGem.inspect;
+  c.window.chrome = previousGem.webview;
+  c.paintPriceOverlay = previousGem.paint;
+  c.paintLivePrices = previousGem.live;
+  c.tradeFetch = previousGem.trade;
+  c.ensureTradeStats = previousGem.stats;
+  const hiddenSpaceLifetap = await queryFor({...imbued,rolls:[{text:'Supported by Level 1 \u200BLifetap',pick:true}]});
+  assert.deepEqual(hiddenSpaceLifetap.stats[0].filters,gemQuery.stats[0].filters);
+  run('state.activeGame="poe2";');
+  assert.equal(c.parsePoeItem(kineticClipboard).mods.length,0);
+  assert.match(c.overlayBaseHtml({id:''},kineticDrop,false), /data-pick-base="any"/);
+  run('state.activeGame="poe1";');
   const helmet = c.parsePoeItem(`Item Class: Helmets
 Rarity: Rare
 Test Helm
@@ -654,9 +759,29 @@ Eater of Worlds Item`);
   const helmetHtml = c.priceOverlayHtml({id:''},helmetDrop);
   assert.match(helmetHtml, /data-pick-text="30% increased Mana Cost Efficiency"[^]*?<span class="price-overlay-pill is-implicit is-exarch">Greater Searing</i);
   assert.match(helmetHtml, /data-pick-text="9% increased Mana Reservation Efficiency of Skills"[^]*?<span class="price-overlay-pill is-implicit is-eater">Grand Eater</i);
-  assert.deepEqual((await queryFor(helmetDrop)).stats[0].filters.map(row=>[row.id,row.value.option]),[
-    ['pseudo.pseudo_searing_implicit_tier',2],['pseudo.pseudo_tangled_implicit_tier',3],
-  ]);
+  const helmetTradeQuery = await queryFor(helmetDrop);
+  assert.equal(helmetTradeQuery.stats[0].filters.length,0);
+  assert.doesNotMatch(JSON.stringify(helmetTradeQuery.filters), /searing_item|tangled_item/);
+  const selectedHelmet = {...helmetDrop,rolls:helmet.mods.map(roll=>({...roll,pick:roll.eldritch === 'eater'}))};
+  const selectedHelmetQuery = await queryFor(selectedHelmet);
+  assert.deepEqual(selectedHelmetQuery.stats[0].filters,
+    [{id:'implicit.audit_mana_reservation',disabled:false,value:{min:9}}]);
+  assert.doesNotMatch(JSON.stringify(selectedHelmetQuery.filters), /searing_item|tangled_item/);
+  const previousHelmet = {inspect:run('ui.inspect'),webview:c.window.chrome,paint:c.paintPriceOverlay,
+    live:c.paintLivePrices,trade:c.tradeFetch};
+  let helmetRequest;
+  c.window.chrome = {webview:{}};
+  c.paintPriceOverlay = () => {};
+  c.paintLivePrices = () => {};
+  c.tradeFetch = async (...args) => { helmetRequest = args[4]; return {amount:1,currency:'chaos',listings:2}; };
+  run('ui').inspect = {dropId:selectedHelmet.id,drop:selectedHelmet};
+  await c.quoteRolledDrop(null,{...selectedHelmet,manualQuoteRequested:true});
+  assert.deepEqual(Array.from(helmetRequest?.filters || [],row=>[row.id,row.min]),[['implicit.audit_mana_reservation',9]]);
+  run('ui').inspect = previousHelmet.inspect;
+  c.window.chrome = previousHelmet.webview;
+  c.paintPriceOverlay = previousHelmet.paint;
+  c.paintLivePrices = previousHelmet.live;
+  c.tradeFetch = previousHelmet.trade;
   const gloves = c.parsePoeItem(`Item Class: Gloves
 Rarity: Rare
 Test Gloves

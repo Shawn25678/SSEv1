@@ -2671,7 +2671,8 @@ function buildTradeStatIndex(data, game = activeGame()) {
     for (const entry of group.entries || []) {
       const id = entry?.id || "";
       const text = entry?.text || "";
-      const key = game === "poe1" && isClusterGrantEnchant({ kind, text })
+      const key = game === "poe1" && kind === "imbued" ? poe1ImbuedSupportKey(text)
+        : game === "poe1" && isClusterGrantEnchant({ kind, text })
         ? clusterGrantTradeKey(text) : foldTradeMatcher(text);
       if (!id || !key) continue;
       const list = map.get(key) || [];
@@ -3329,6 +3330,21 @@ function tradeStatVariable(raw, statText) {
   return Number.isFinite(n) ? n : null;
 }
 
+function poe1ImbuedSupportText(text) {
+  // The game can insert a zero-width space before the support name in copied text.
+  const clean = text.replace(/\u200B/g, "").trim();
+  return /^Supported by Level \d+ \S/i.test(clean) ? clean : "";
+}
+
+function poe1ImbuedSupportKey(text) {
+  return poe1ImbuedSupportText(text).replace(/(?: Support)?(?: \(imbued\))?$/i, "").toLowerCase();
+}
+
+function knownPoe1ImbuedSupportId(text) {
+  return poe1ImbuedSupportKey(text) === "supported by level 1 item rarity"
+    ? "imbued.pseudo_built_in_support|1787283513" : "";
+}
+
 function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
   const grouped = new Map();
   const poe1 = activeGame() === "poe1";
@@ -3351,6 +3367,13 @@ function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
     }
     const kind = canonicalRollKind(roll && typeof roll === "object" ? roll.kind : "");
     const text = stripAdvancedRanges(parseAffixStrings(raw));
+    const supportKey = poe1 && /^gem$/i.test(extra.rarity || "") ? poe1ImbuedSupportKey(text) : "";
+    if (supportKey) {
+      const support = index?.get(supportKey)?.find(row => row.id.startsWith("imbued.pseudo_built_in_support|"));
+      const id = support?.id || knownPoe1ImbuedSupportId(text);
+      if (id) grouped.set(id, { id, text, n: 1 });
+      continue;
+    }
     const viscera = poe1VisceraItem(extra);
     const mapRule = isPoe1MapRuleLine(text, extra.className);
     const context = mapRule || viscera ? { ...roll, className: extra.className, viscera } : roll;
@@ -3364,7 +3387,8 @@ function mapRollsToTradeFilters(rolls, index, exact = false, extra = {}) {
           : kind;
     const preferLocal = localModApplies(foldTradeMatcher(text), extra);
     const jewelImplicit = activeGame() === "poe1" && kind === "corrupt" && /\bjewels?\b/i.test(extra.className || "");
-    let hit = findTradeStat(index, text, tradeKind, { preferLocal, statOnly: viscera || jewelImplicit ? "implicit" : "" });
+    const eldritchImplicit = poe1 && kind === "implicit" && !!roll?.eldritch;
+    let hit = findTradeStat(index, text, tradeKind, { preferLocal, statOnly: viscera || jewelImplicit || eldritchImplicit ? "implicit" : "" });
     if (viscera && !String(hit?.id || "").startsWith("implicit.")) {
       hit = findTradeStat(index, text, "explicit", { preferLocal, statOnly: "explicit" });
     }
@@ -7223,7 +7247,13 @@ function kindFromLineTag(rawLine) {
 }
 
 function parseClipboardMods(blocks, rarity, corrupted, itemName = "", itemBase = "", className = "", props = null) {
-  if (/^(currency|gem|divination card)$/i.test(rarity)) return { mods: [], ravenTouched: false, fractured: false };
+  if (/^(currency|gem|divination card)$/i.test(rarity)) {
+    const mods = poe1Gem({ rarity })
+      ? normalizeRolls(blocks.flatMap(block => block.split("\n"))
+        .map(poe1ImbuedSupportText).filter(Boolean).map(text => ({ text, pick: true })))
+      : [];
+    return { mods, ravenTouched: false, fractured: false };
+  }
   const charm = /charm/i.test(className);
   const uniqueItem = /unique/i.test(String(rarity || ""));
   const corruptedJewel = activeGame() === "poe1" && corrupted && /\bjewels?\b/i.test(className);
@@ -8766,24 +8796,6 @@ function poe1MarkFilters(drop) {
     if (!/^(shaper|elder|crusader|hunter|redeemer|warlord)$/.test(name)) continue;
     rows.push({ id: "pseudo.pseudo_has_" + name + "_influence", min: 1 });
   }
-  const tier = { lesser: 1, greater: 2, grand: 3, exceptional: 4, exquisite: 5, perfect: 6 };
-  const seen = new Set();
-  for (const roll of drop?.rolls || []) {
-    if (roll?.eldritch !== "eater" && roll?.eldritch !== "exarch") continue;
-    const rank = tier[roll?.eldritchRank];
-    if (!rank) continue;
-    const eater = roll.eldritch === "eater";
-    const flag = "misc." + (eater ? "tangled_item" : "searing_item") + ":true";
-    if (!seen.has(flag)) {
-      seen.add(flag);
-      rows.push({ id: flag });
-    }
-    const pseudo = eater ? "pseudo.pseudo_tangled_implicit_tier" : "pseudo.pseudo_searing_implicit_tier";
-    if (!seen.has(pseudo)) {
-      seen.add(pseudo);
-      rows.push({ id: pseudo, option: String(rank) });
-    }
-  }
   return rows;
 }
 
@@ -8817,7 +8829,7 @@ function equipTradeKey(id) {
 
 // Base on/off, ilvl caps and Q20 damage follow Exiled Exchange 2 (MIT).
 function canRelaxBase(drop) {
-  if (/^unique$/i.test(String(drop?.rarity || ""))) return false;
+  if (poe1Gem(drop) || /^unique$/i.test(String(drop?.rarity || ""))) return false;
   return !!tradeBaseType(drop) && !!tradeCategory(drop?.className);
 }
 
@@ -8877,16 +8889,14 @@ function ilvlFilterState(drop) {
     const value = Number(drop.props?.gemLevel) || 1;
     return { value, cap: 40, min: drop.wantIlvl ?? value, on: drop.pickIlvl !== false };
   }
-  if (activeGame() === "poe1" && /^maps?$/i.test(String(drop?.className || ""))) return null;
+  const poe1 = activeGame() === "poe1";
+  if (poe1 && /^maps?$/i.test(String(drop?.className || ""))) return null;
   const raw = Number(drop?.props?.ilvl);
   if (!Number.isFinite(raw) || raw <= 0) return null;
   if (/^unique$/i.test(String(drop?.rarity || ""))) return null;
-  const category = tradeCategory(drop?.className);
-  const fullItemLevel = activeGame() === "poe1" && (
-    category === "flask" || clusterJewelSize(drop) || poe1TradeCategory(drop.className) === "jewel.cluster"
-  );
-  const cap = fullItemLevel ? Math.max(100, raw) : maxUsefulItemLevel(category);
-  if (cap <= 1) return null;
+  const categoryCap = maxUsefulItemLevel(tradeCategory(drop?.className));
+  if (categoryCap <= 1 && !(poe1 && (clusterJewelSize(drop) || poe1TradeCategory(drop.className) === "jewel.cluster"))) return null;
+  const cap = poe1 ? Math.max(100, raw) : categoryCap;
   const value = Math.min(raw, cap);
   const want = Number(drop?.wantIlvl);
   return { value, cap, min: Number.isFinite(want) ? Math.min(cap, Math.max(1, want)) : value, on: drop?.pickIlvl === true };
@@ -10178,6 +10188,17 @@ function tradeSiteQuery(drop, filters) {
   return { query, sort: { price: "asc" } };
 }
 
+async function poe1OverlayStatFilters(drop, rolls) {
+  const picked = rolls.filter(roll => !isTabletUsesRoll(roll.text));
+  const gem = poe1Gem(drop);
+  const needsCatalog = picked.some(roll => !(gem && knownPoe1ImbuedSupportId(roll.text)));
+  const index = needsCatalog ? await ensureTradeStats() : null;
+  return mapRollsToTradeFilters(picked, index, true, {
+    props: drop.props, className: drop.className, rarity: drop.rarity,
+    visceraSlot: drop.visceraSlot, fractured: searchFractured(drop),
+  }).filter(row => row.id && !String(row.id).startsWith("item."));
+}
+
 async function tradeSiteUrl(drop) {
   const poe1 = activeGame() === "poe1";
   const league = poe1 ? econLeagueName() : leagueId();
@@ -10213,13 +10234,7 @@ async function tradeSiteUrl(drop) {
     }
     let statFilters = [];
     try {
-      const picked = pickedRolls(drop).filter((roll) => !isTabletUsesRoll(roll.text));
-      statFilters = mapRollsToTradeFilters(
-        picked,
-        picked.length ? await ensureTradeStats() : null,
-        true,
-        { props: drop.props, className: drop.className, visceraSlot: drop.visceraSlot, fractured: searchFractured(drop) }
-      ).filter((row) => row.id && !String(row.id).startsWith("item."));
+      statFilters = await poe1OverlayStatFilters(drop, pickedRolls(drop));
     } catch {
       statFilters = [];
     }
@@ -11188,13 +11203,11 @@ async function quoteRolledDrop(log, drop, force = true, auto = false) {
       extra.filters = [];
       extra.exactBase = true;
     } else if (poe1) {
-      const pickedMods = picked.filter((roll) => !isTabletUsesRoll(roll.text));
-      const index = pickedMods.length ? await ensureTradeStats() : null;
+      const statFilters = await poe1OverlayStatFilters(drop, picked);
       if (!current()) return;
       const markFilters = poe1MarkFilters(drop);
       extra.filters = markFilters.filter(row => row.id.startsWith("ultimatum.")).concat(
-        mapRollsToTradeFilters(pickedMods, index, true, { props: drop.props, className: drop.className, visceraSlot: drop.visceraSlot, fractured: searchFractured(drop) })
-          .filter((row) => row.id && !String(row.id).startsWith("item.")),
+        statFilters,
         pickedPropFilters(drop), markFilters.filter(row => !row.id.startsWith("ultimatum.")));
       if (identity) extra.filters.unshift({ id: "trade.discriminator", option: identity.discriminator });
       if (!extra.category && poe1TalismanBase(extra.typeLine)) extra.category = "accessory.amulet";
