@@ -280,67 +280,70 @@ assert.deepEqual(Array.from(c.wealthSamples(c.wealthDraft()),row=>row.total),[2,
 run('state=priorState; ui.wealth=priorWealth;');
 {
   const hour = 3600000;
-  const historyFixture = [
-    {at:now-10*hour,total:80}, {at:now-9*hour,total:4000}, {at:now-8*hour,total:7000},
-    {at:now-7*hour,total:81}, {at:now-6*hour,total:3000,supportedCardPrices:true},
-    {at:now-5*hour,total:82}, {at:now-4*hour,total:5000}, {at:now-3*hour,total:5200},
-  ];
-  const review = c.poe1WealthSpikeReview(historyFixture,'Covens');
-  assert.deepEqual(Array.from(review.points,row=>row.total),[80,81,3000,82,5000,5200]);
-  assert.deepEqual(Array.from(review.entries,entry=>[entry.point.total,entry.samples.length,entry.hidden]),[[7000,2,true],[3000,1,false]]);
-  assert.equal(historyFixture.length,8,'saved history stays intact');
-  assert.deepEqual(Array.from(c.poe1WealthSpikeReview([
-    {at:now-15*hour,total:80},{at:now-14*hour,total:4000},{at:now,total:83},
-  ],'Covens').points,row=>row.total),[80,4000,83],'history across a long gap cannot confirm a short-lived spike');
-
   const beforeHistoryReview = run('state.poe1WealthSeries');
-  c.beforeReviewLeague = run('state.poe1League');
-  run('state.poe1League="Covens";');
   const beforeReviewDraft = run('ui.wealth');
   const beforeReviewView = run('ui.view');
+  const beforeReviewLeague = run('state.poe1League');
   const beforeReviewPaint = c.repaintWealth;
   const beforeReviewPublish = c.publishWealthLive;
   const beforeReviewStorage = c.localStorage.setItem;
+  const beforeCardSelection = run('state.poe1IgnoredWealth');
+  const beforeCardUnit = c.wealthUnit;
   let savedReview;
   c.localStorage.setItem = (_, value) => { savedReview = JSON.parse(value); };
   c.repaintWealth = () => {};
   c.publishWealthLive = () => {};
-  c.reviewFixture = [historyFixture[0],{...historyFixture[1],supportedCardPrices:true},
-    {...historyFixture[2],supportedCardPrices:true},{at:now-7.5*hour,total:440,supportedCardPrices:true},historyFixture[3]]
-    .map(point=>({...point,league:'Covens'}));
-  c.reviewFixture[0].stashes = [{id:'cards',name:'Cards',total:80}];
-  c.reviewFixture[2].stashes = [{id:'cards',name:'Cards',total:7000}];
-  run('state.poe1WealthSeries=reviewFixture; ui.wealth=null; ui.view="wealth";');
-  assert.match(c.renderWealth(),/Review spikes \(1\)/);
-  assert.match(c.renderWealth(),/>7000d<\/text>/);
-  const pressReview = (selector, dataset = {}) => c.onClick({target:{closest:query=>query === selector ? {dataset} : null}});
-  pressReview('[data-wealth-spike-toggle]');
-  assert.match(c.renderWealth(),/Cards \+6920d/);
-  const spikeAt = String(historyFixture[2].at);
-  const firstSpikeAt = String(historyFixture[1].at);
-  pressReview('[data-wealth-spike-decision]',{wealthSpikeAt:spikeAt,wealthSpikeDecision:'keep'});
-  assert.equal(savedReview.poe1WealthSpikeDecisions.Covens[spikeAt],'keep');
-  assert.ok(c.poe1WealthSpikeReview(historyFixture,'Covens').points.some(row=>row.total===4000));
-  assert.ok(c.poe1WealthSpikeReview(historyFixture,'Standard').points.every(row=>row.total!==4000));
-  assert.doesNotMatch(c.renderWealth(),/data-wealth-spike-toggle|data-wealth-spike-decision/);
-  pressReview('[data-toast]',{toast:'wealth-spike-undo'});
-  assert.match(c.renderWealth(),/data-wealth-spike-decision="false-price"/);
-  pressReview('[data-wealth-spike-decision]',{wealthSpikeAt:spikeAt,wealthSpikeDecision:'false-price'});
-  assert.equal(savedReview.poe1WealthSpikeDecisions.Covens[spikeAt],'false-price');
-  assert.equal(savedReview.poe1WealthSpikeDecisions.Covens[firstSpikeAt],'false-price');
-  assert.ok(c.poe1WealthSpikeReview(historyFixture,'Covens').points.every(row=>row.total!==4000));
-  const cleanChart = c.renderWealth();
-  assert.doesNotMatch(cleanChart,/data-wealth-spike-toggle|data-wealth-spike-decision/);
-  assert.match(cleanChart,/>100d<\/text>/);
-  assert.doesNotMatch(cleanChart,/>7000d<\/text>/);
-  assert.equal(savedReview.poe1WealthSeries[1].total,4000);
-  run('state.poe1WealthSpikeDecisions={Covens:{[reviewFixture[1].at]:"false-price"}};');
-  assert.deepEqual(Array.from(c.poe1WealthSpikeReview(c.reviewFixture,'Covens').points,row=>row.total),[80,81],
-    'an older per-reading false flag also hides the rest of the detected spike');
+  const hunter = "Hunter's Resolve";
+  const league = 'Covens';
+  const at = now-hour;
+  const newer = {league,at,total:645,stashes:[{id:'cd',name:'Cards',total:630},{id:'mats',name:'Currency',total:15}],
+    cardValues:[[hunter,'cd',624],['The Watcher','cd',6]]};
+  const history = [{league,at:now-4*hour,total:70},{league,at:now-3*hour,total:41},
+    {league,at:now-2*hour,total:647,itemChanges:[{name:hunter,unit:26,count:24}]},newer];
+  c.cardHistoryUpgrade = {poe1WealthSeries:history,
+    poe1WealthItemReadings:[{league,at:now-3*hour,scope:c.poe1WealthScopeId(),items:[{name:hunter,total:17}]}],
+    poe1WealthSpikeDecisions:{Covens:{[at]:'false-price'}}};
+  assert.equal(c.restorePoe1WealthState(c.cardHistoryUpgrade),undefined);
+  assert.equal(c.cardHistoryUpgrade.poe1WealthSpikeDecisions,undefined);
+  assert.equal(c.cardHistoryUpgrade.poe1WealthItemReadings,undefined);
+  run('state.poe1League="Covens"; state.poe1WealthSeries=cardHistoryUpgrade.poe1WealthSeries; state.poe1IgnoredWealth=[]; ui.wealth=null; ui.view="wealth";');
+  const readTotals = () => Array.from(c.wealthSamples(c.wealthDraft()),point=>point.total);
+  assert.deepEqual(readTotals(),[70,41,647,645]);
+  const checkbox = name => c.onClick({target:{closest:selector=>selector==='[data-wealth-ignore]' ? {
+    dataset:{wealthIgnore:name},getAttribute:()=>String(!c.ignoredWealth(name)),hasAttribute:()=>false,
+  } : null}});
+  checkbox(hunter);
+  assert.deepEqual(readTotals(),[70,24,23,21]);
+  assert.deepEqual(Array.from(c.wealthSamples(c.wealthDraft()).at(-1).stashes,row=>row.total),[6,15]);
+  assert.ok(savedReview.poe1IgnoredWealth.includes(hunter));
+  assert.equal(savedReview.poe1WealthSeries[0].total,645);
+  const filteredChart = c.renderWealth();
+  assert.doesNotMatch(filteredChart,/Review spikes|False price|>600d<\/text>/);
+  assert.match(filteredChart,/Older readings without saved card values/);
+  const visibleTotals = JSON.parse(decodeURIComponent(filteredChart.match(/data-wealth-pts="([^"]+)"/)[1]));
+  assert.deepEqual(visibleTotals.map(point=>point.total),[70,24,23,21]);
+  checkbox(hunter);
+  assert.deepEqual(readTotals(),[70,41,647,645]);
+  c.wealthUnit = (_, slot) => slot.unit;
+  const cards = [{name:hunter,frameType:6,stash:'cd',count:24,unit:26},
+    {name:hunter,frameType:6,stash:'other',count:1,unit:26},
+    {name:'Divine Orb',frameType:5,stash:'mats',count:3,unit:1}];
+  assert.deepEqual(Array.from(c.poe1WealthCardValues(cards),row=>Array.from(row)),[[hunter,'cd',624],[hunter,'other',26]]);
+  checkbox(hunter);
+  const excludedValues = c.poe1WealthCardValues(cards);
+  assert.deepEqual(Array.from(excludedValues,row=>Array.from(row)),[[hunter,'cd',-624],[hunter,'other',-26]]);
+  c.excludedCardPoint = {league,at:now,total:3,cardValues:excludedValues};
+  run('state.poe1WealthSeries=[excludedCardPoint];');
+  assert.deepEqual(readTotals(),[3]);
+  checkbox(hunter);
+  assert.deepEqual(readTotals(),[653]);
+  c.wealthUnit = beforeCardUnit;
+  c.beforeCardSelection = beforeCardSelection;
+  run('state.poe1IgnoredWealth=beforeCardSelection;');
   c.axisFixture = [4.4,5,6,580,8,20,44,280,70,81,82.2].map((total,index)=>({
     at:now-(10-index)*6*hour,total,league:'Covens',
   }));
-  run('delete state.poe1WealthSpikeDecisions; state.poe1WealthSeries=axisFixture;');
+  run('state.poe1WealthSeries=axisFixture;');
   const fullChart = c.renderWealth();
   assert.equal(c.poe1WealthAxis(580,'divine').max,605);
   assert.equal(c.poe1WealthAxis(.5,'chaos').max,.75*c.poe1WealthChaosRate());
@@ -389,7 +392,7 @@ run('state=priorState; ui.wealth=priorWealth;');
   c.beforeHistoryReview = beforeHistoryReview;
   c.beforeReviewDraft = beforeReviewDraft;
   c.beforeReviewView = beforeReviewView;
-  run('state.poe1WealthSeries=beforeHistoryReview; ui.wealth=beforeReviewDraft; ui.view=beforeReviewView; delete state.poe1WealthSpikeDecisions;');
+  run('state.poe1WealthSeries=beforeHistoryReview; ui.wealth=beforeReviewDraft; ui.view=beforeReviewView;');
   c.repaintWealth = beforeReviewPaint;
   c.publishWealthLive = beforeReviewPublish;
   c.localStorage.setItem = beforeReviewStorage;
@@ -455,7 +458,7 @@ run('state=priorState; ui.wealth=priorWealth;');
   run('state.activeGame="poe1";');
   frames.shift()(performance.now()+1000);
   assert.equal(label.hidden,true,'changing games stops old playback');
-  run('state.poe1League=beforeReviewLeague;');
+  run('state').poe1League = beforeReviewLeague;
 }
 for (const base of ['Ruby Ring','Coral Ring','Two-Stone Ring']) {
   const item = c.parsePoeItem(`Item Class: Rings\nRarity: Rare\nFated ${base}\n--------\nItem Level: 40\n--------\nUnidentified`);
