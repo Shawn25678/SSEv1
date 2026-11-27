@@ -50,6 +50,29 @@ c.ninjaCards = {
 };
 run('takePoe1Lines(ninjaCards,"DivinationCard",false); mergePoe1Watch(fixture);');
 assert.equal(c.wealthUnit('The Test', {name:'The Test',frameType:6}), .25, 'ninja wins over fallback');
+{
+  const card = {name:'The Test',frameType:6,count:24};
+  const timestamp = Math.floor(Date.now() / 1000);
+  const chaos = {value:1,volume:19,timestamp,lowConfidence:false};
+  const divine = {value:26,volume:1,timestamp,lowConfidence:true};
+  const rates = (chaos, divine) => c.mergePoe1Watch([null, {items:[{name:card.name,category:'card',chaos,divine}]}, []]);
+  run('poe1Prices.tables.DivinationCard[0].amount=5200;');
+  rates(chaos, divine);
+  assert.equal(c.wealthUnit(card.name, card), 1/200, 'uses the direct Chaos quote below one Divine');
+  assert.equal(c.wealthValue([card]).total, 24/200);
+  assert.equal(c.poe1WealthCardValues([card])[0][2], 24/200, 'saved chart contributions use the same price');
+  run('state.activeGame="poe2";');
+  assert.equal(c.wealthUnit(card.name, card), null, 'the PoE 2 path does not use PoE 1 exchange pairs');
+  run('state.activeGame="poe1";');
+  rates({...chaos,value:220}, {...divine,value:1.15,lowConfidence:false});
+  assert.equal(c.wealthUnit(card.name, card), 1.15, 'uses the direct Divine quote for a higher-value card');
+  rates({...chaos,value:220}, divine);
+  assert.equal(c.wealthUnit(card.name, card), 220/200, 'converts Chaos when the Divine pair is low confidence');
+  rates({...chaos,timestamp:timestamp-25*3600}, divine);
+  assert.equal(c.wealthUnit(card.name, card), 26, 'falls back to the existing quote if both pairs are unusable');
+  run('poe1Prices.tables.DivinationCard[0].amount=50;');
+  c.mergePoe1Watch([null, {items:[]}, []]);
+}
 assert.equal(c.wealthUnit('Fireball', {name:'Fireball',frameType:4,gemLevel:20,gemQuality:20,corrupted:false}), .2);
 assert.equal(c.wealthUnit('Fireball', {name:'Fireball',frameType:4,gemLevel:21,gemQuality:20,corrupted:true}), .4);
 assert.equal(c.wealthUnit('Fireball', {name:'Fireball',frameType:4,gemLevel:1,gemQuality:0}), null);
@@ -319,7 +342,7 @@ run('state=priorState; ui.wealth=priorWealth;');
   assert.equal(savedReview.poe1WealthSeries[0].total,645);
   const filteredChart = c.renderWealth();
   assert.doesNotMatch(filteredChart,/Review spikes|False price|>600d<\/text>/);
-  assert.match(filteredChart,/Older readings without saved card values/);
+  assert.doesNotMatch(filteredChart,/Older readings without saved card values/);
   const visibleTotals = JSON.parse(decodeURIComponent(filteredChart.match(/data-wealth-pts="([^"]+)"/)[1]));
   assert.deepEqual(visibleTotals.map(point=>point.total),[70,24,23,21]);
   checkbox(hunter);

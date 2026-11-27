@@ -126,6 +126,7 @@ const poe1Prices = {
   tables: {},
   history: {},
   cardChaosPerHour: new Map(),
+  cardExchangePairs: new Map(),
 };
 
 const NINJA_EXCHANGE = [
@@ -5763,6 +5764,10 @@ function mergePoe1Watch(data) {
   poe1Prices.wealthIndex = null;
   poe1Prices.beastNames = null;
   poe1EconRowsCache.clear();
+  if (Array.isArray(data[1]?.items)) {
+    const cards = data[1].items.filter(item => item?.category === "card" && item.name);
+    poe1Prices.cardExchangePairs = new Map(cards.map(({ name, chaos, divine }) => [priceKey(name), { chaos, divine }]));
+  }
   const primary = new Map();
   const exchangeNames = new Map();
   const primaryRows = Object.values(poe1Prices.tables).flat();
@@ -5892,6 +5897,7 @@ async function refreshPoe1PricesNow(force = false) {
     poe1Prices.beastNames = null;
     poe1Prices.exchangeValues = new Map();
     poe1Prices.cardChaosPerHour.clear();
+    poe1Prices.cardExchangePairs.clear();
     poe1Prices.chaosPerDivine = 0;
     poe1Prices.fetchedAt = 0;
     poe1Prices.league = league;
@@ -12734,6 +12740,10 @@ function wealthUnit(name, slot) {
   if (namesMatch(name, "Divine Orb")) return 1;
   if (activeGame() === "poe1") {
     const quote = poe1WealthQuote(slot || { name });
+    if (slot?.frameType === 6 || quote?.type === "DivinationCard") {
+      const pairValue = poe1WealthCardExchangeValue(name);
+      if (pairValue != null) return pairValue;
+    }
     if (quote) {
       if (quote.type === "DivinationCard" && !poe1CardQuoteSupported(name, quote)) return null;
       const converted = quote.unit
@@ -12749,6 +12759,25 @@ function wealthUnit(name, slot) {
   }
   const divine = hitDivine(lookupPrice(canonicalName(name)));
   return Number.isFinite(divine) && divine > 0 ? divine : null;
+}
+
+function poe1WealthCardExchangeValue(name) {
+  if (poe1Prices.league !== wealthLeague()) return null;
+  const pairs = poe1Prices.cardExchangePairs.get(priceKey(name));
+  if (!pairs) return null;
+  const now = Date.now();
+  const recentValue = pair => {
+    const age = now - pair?.timestamp * 1000;
+    return pair?.lowConfidence === false && pair.volume > 0 &&
+      Number.isFinite(pair.value) && pair.value > 0 && age >= 0 && age <= 24 * 60 * 60 * 1000
+      ? pair.value : null;
+  };
+  const chaos = recentValue(pairs.chaos);
+  const divine = recentValue(pairs.divine);
+  const rate = poe1Prices.chaosPerDivine;
+  if (chaos == null || !(rate > 0)) return divine;
+  const converted = chaos / rate;
+  return converted < 1 ? converted : divine ?? converted;
 }
 
 function ignoredWealth(name) {
@@ -13215,13 +13244,13 @@ function wealthSamples(draft) {
   const ignored = poe1 ? new Set(state.poe1IgnoredWealth || []) : null;
   const rows = [];
   const push = (row, includePreviousScopes = false) => {
+    if (poe1 && row?.priceArchived) return;
     if (includePreviousScopes ? row?.league !== draft.league : !wealthHistoryMatches(row, draft.league, scope)) return;
     const at = Number(row.at);
     let total = Number(row.total);
     if (!Number.isFinite(at) || !Number.isFinite(total)) return;
     let stashes = Array.isArray(row.stashes) ? row.stashes : [];
-    const hasCardValues = poe1 && Array.isArray(row.cardValues);
-    if (hasCardValues) {
+    if (poe1 && Array.isArray(row.cardValues)) {
       const changes = new Map();
       for (const entry of row.cardValues) {
         if (!Array.isArray(entry)) continue;
@@ -13234,8 +13263,7 @@ function wealthSamples(draft) {
       else if (changes.size) stashes = stashes.map(stash => ({ ...stash, total: Math.max(0, stash.total + (changes.get(stash.id) || 0)) }));
       total = Math.max(0, total);
     }
-    rows.push({ at, total, stashes,
-      ...(poe1 ? { scope: poe1WealthScopeId(row.poe1Scope), hasCardValues: hasCardValues && !row.partialCardValues } : {}) });
+    rows.push({ at, total, stashes, ...(poe1 ? { scope: poe1WealthScopeId(row.poe1Scope) } : {}) });
   };
   for (const row of (poe1 ? state.poe1WealthSeries : state.wealthSeries) || []) push(row, poe1);
   for (const row of state.wealthSnapshots || []) push(row);
@@ -13769,7 +13797,6 @@ function renderWealth() {
   const days = WEALTH_HISTORY_PERIODS.includes(Number(draft.days)) ? Number(draft.days) : poe1 && draft.days !== "league" ? 7 : null;
   const from = days == null ? 0 : Date.now() - days * 86400000;
   const points = allPoints.filter(p => p.at >= from);
-  const partialHistory = poe1 && state.poe1IgnoredWealth?.length && points.some(point => !point.hasCardValues);
   const perHour = poe1 ? poe1WealthRate(points) : wealthPerHour(allPoints);
   const value = wealthValue(slots);
   const categories = new Map();
@@ -13828,7 +13855,6 @@ function renderWealth() {
           <span class="wealth-replay-label" hidden><span data-wealth-replay-value></span><span class="wealth-rate" data-wealth-replay-date></span></span>
         </p>
         ${wealthChart(points)}
-        ${partialHistory ? '<small class="muted">Older readings without saved card values may still include excluded cards.</small>' : ""}
       </article>
       <article class="panel${poe1 ? " wealth-breakdown-panel" : ""}">
         <div class="wealth-panel-title"><h3>Value breakdown</h3>${poe1 ? `<select data-wealth-option="breakdown" aria-label="Breakdown by"><option value="categories" ${draft.breakdown !== "tabs" ? "selected" : ""}>Categories</option><option value="tabs" ${draft.breakdown === "tabs" ? "selected" : ""}>Tabs</option></select>` : ""}</div>
