@@ -395,7 +395,6 @@ function loadState() {
       hotkeyNext: parsed.hotkeyNext || "F9",
       poe1HotkeyPrice: parsed.poe1HotkeyPrice || "",
       poe1IgnoredWealth: Array.isArray(parsed.poe1IgnoredWealth) ? parsed.poe1IgnoredWealth : [],
-      poe1IncludedLowVolumeCards: Array.isArray(parsed.poe1IncludedLowVolumeCards) ? parsed.poe1IncludedLowVolumeCards : [],
       hotkeyPrice: parsed.hotkeyPrice || "Ctrl+D",
       hotkeyHideout: parsed.hotkeyHideout || "F6",
       overlayClickAway: parsed._clickAwaySet ? !!parsed.overlayClickAway : true,
@@ -539,11 +538,17 @@ function restorePoe1WealthState(saved) {
     saved.wealthSeries = series.filter(row => row?.poe1Scope == null);
   }
   if (saved.wealthSnapshots != null && !Array.isArray(saved.wealthSnapshots)) saved.wealthSnapshots = [];
-  for (const field of ["poe1IgnoredWealth", "poe1IncludedLowVolumeCards"]) {
-    if (saved[field] == null) continue;
-    saved[field] = Array.isArray(saved[field])
-      ? [...new Set(saved[field].filter(name => typeof name === "string" && name.trim()))]
+  if (saved.poe1IgnoredWealth != null) {
+    saved.poe1IgnoredWealth = Array.isArray(saved.poe1IgnoredWealth)
+      ? [...new Set(saved.poe1IgnoredWealth.filter(name => typeof name === "string" && name.trim()))]
       : [];
+  }
+  if (saved.poe1ImportedCardFilters != null) {
+    const imported = saved.poe1ImportedCardFilters;
+    saved.poe1ImportedCardFilters = imported && typeof imported === "object" && !Array.isArray(imported)
+      ? Object.fromEntries(Object.values(imported).filter(name => typeof name === "string" && priceKey(name))
+        .map(name => [priceKey(name), name.trim()]))
+      : {};
   }
 }
 
@@ -12780,18 +12785,19 @@ function poe1WealthCardExchangeValue(name) {
   return converted < 1 ? converted : divine ?? converted;
 }
 
-function ignoredWealth(name) {
-  return activeGame() === "poe1" && state.poe1IgnoredWealth?.includes(name);
+function importedWealthCard(name) {
+  const filters = state.poe1ImportedCardFilters;
+  return !!filters && Object.hasOwn(filters, priceKey(name));
+}
+
+function ignoredWealth(name, slot) {
+  return activeGame() === "poe1" && (state.poe1IgnoredWealth?.includes(name) ||
+    (slot && importedWealthCard(name) && isPoe1WealthCard(slot)));
 }
 
 function poe1WealthMinChaos() {
   const value = Number(state.poe1WealthMinChaos);
   return Number.isFinite(value) ? Math.max(0, Math.min(1000000000, Math.round(value))) : 0;
-}
-
-function poe1WealthMinCardVolume() {
-  const value = Number(state.poe1WealthMinCardChaosPerHour);
-  return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
 function isPoe1WealthCard(slot) {
@@ -12809,6 +12815,10 @@ function poe1WealthCardStash(draft) {
   return stacks.length > 0 && stacks.every(isPoe1WealthCard);
 }
 
+function poe1WealthCardView(draft) {
+  return draft.categoryFilter === "DivinationCard" || poe1WealthCardStash(draft);
+}
+
 function poe1WealthCardVolume(slot) {
   if (!isPoe1WealthCard(slot)) return undefined;
   if (poe1Prices.league !== wealthLeague()) return null;
@@ -12821,37 +12831,142 @@ function poe1CardQuoteSupported(name, quote) {
     (volume > 0 || (volume == null && quote.kind !== "exchange" && quote.listings >= 5));
 }
 
-function belowWealthCardVolume(slot) {
-  if (activeGame() !== "poe1") return false;
-  const minimum = poe1WealthMinCardVolume();
-  if (!minimum) return false;
-  const volume = poe1WealthCardVolume(slot);
-  return volume !== undefined && (volume === null || volume < minimum);
+function filteredWealthCardNames(slots) {
+  const names = new Map(Object.entries(state.poe1ImportedCardFilters || {}));
+  for (const slot of slots) {
+    if (isPoe1WealthCard(slot) && ignoredWealth(slot.name, slot)) {
+      names.set(priceKey(slot.name), slot.name);
+    }
+  }
+  return [...names.values()].sort((a, b) => a.localeCompare(b));
 }
 
-function excludedWealthCardVolume(slot) {
-  return belowWealthCardVolume(slot) && !state.poe1IncludedLowVolumeCards?.includes(slot.name);
+let wealthCardRewardsTask;
+const wealthCardCatalogDataUrl = "https://cdn.jsdelivr.net/npm/@navali/poe1-divination-cards@3.30.0/data";
+
+function loadWealthCardRewards() {
+  wealthCardRewardsTask ??= fetch(`${wealthCardCatalogDataUrl}/cards.json`, {
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+    signal: AbortSignal.timeout(10000),
+  }).then(async response => {
+    if (!response.ok) throw new Error("Card rewards unavailable");
+    const rows = await response.json();
+    const text = document.createElement("template");
+    const cards = new Map();
+    for (const row of rows) {
+      if (typeof row?.name !== "string" || !priceKey(row.name)) continue;
+      text.innerHTML = String(row.reward_html || row.description || "")
+        .replace(/<br\s*\/?>/gi, "\n")
+        .replace(/\[\[File:[^\]]*\]\]/gi, "")
+        .replace(/\[\[(?:[^|\]]+\|)?([^\]]+)\]\]/g, "$1");
+      const cardRewards = text.content.textContent.split("\n").map(cleanMod).filter(line => line && line !== "—");
+      if (!cardRewards.length && row.name === "The Void") cardRewards.push("Reward from a random divination card set");
+      const cardCatalogArt = typeof row.art_src === "string" && /^[^/\\]+\.png$/i.test(row.art_src)
+        ? `${wealthCardCatalogDataUrl}/images/${encodeURIComponent(row.art_src)}` : "";
+      cards.set(priceKey(row.name), { name: row.name, cardSetSize: Number(row.stack_size), cardRewards, cardCatalogArt });
+    }
+    return cards;
+  }).catch(() => {
+    wealthCardRewardsTask = null;
+    return null;
+  });
+  return wealthCardRewardsTask;
 }
 
-function excludedWealthSlot(slot) {
-  return ignoredWealth(slot.name) || excludedWealthCardVolume(slot);
+function wealthCardCatalogEntries(catalog, draft, rewards) {
+  const cards = new Map();
+  const add = (name, details = {}) => {
+    const key = priceKey(name);
+    if (!key) return;
+    const previous = cards.get(key) || rewards?.get(key);
+    cards.set(key, { ...previous, ...details, name, frameType: 6,
+      cardSetSize: details.cardSetSize || previous?.cardSetSize,
+      cardRewards: details.cardRewards?.length ? details.cardRewards : previous?.cardRewards,
+      count: (previous?.count || 0) + (Number(details.count) || 0) });
+  };
+  for (const [key, row] of catalog || []) {
+    if (key.startsWith("card:")) add(row.type);
+  }
+  if (!cards.size) {
+    for (const row of rewards?.values() || []) add(row.name);
+  }
+  if (poe1Prices.league === draft.league) {
+    for (const row of poe1Prices.tables.DivinationCard || []) add(row.name, { icon: row.icon });
+  }
+  for (const slot of draft.slots) {
+    if (isPoe1WealthCard(slot)) add(slot.name, slot);
+  }
+  for (const name of Object.values(state.poe1ImportedCardFilters || {})) {
+    if (!cards.has(priceKey(name))) add(name);
+  }
+  return [...cards.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function setWealthSelection(names, selected, overrideVolume) {
+function setWealthCatalogCard(name, excluded) {
+  if (!excluded) {
+    setWealthSelection([name], true, { cards: true });
+    return;
+  }
+  state.poe1ImportedCardFilters = { ...state.poe1ImportedCardFilters, [priceKey(name)]: name };
+  savePoe1WealthSelection();
+}
+
+function exportFilteredWealthCards() {
+  const draft = wealthDraft();
+  const slots = trackedWealthSlots(draft);
+  const names = filteredWealthCardNames(slots);
+  if (!names.length) return;
+  const url = URL.createObjectURL(new Blob([names.join("\r\n") + "\r\n"], { type: "text/plain;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "sse-filtered-divination-cards.txt";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function importFilteredWealthCards(file) {
+  if (activeGame() !== "poe1") return;
+  try {
+    if (file.size > 256_000) throw new Error("Choose a card list under 256 KB.");
+    const text = (await file.text()).trim();
+    if (activeGame() !== "poe1") return;
+    const names = text.split(/\r\n?|\n/).map(name => name.trim()).filter(Boolean);
+    if (!names.length || /^[\[{]/.test(text) || names.some(name => name.length > 160 || /[\u0000-\u001f\u007f\ufffd]/.test(name) || !priceKey(name))) {
+      throw new Error("Choose a text file with one card name per line.");
+    }
+    const filters = { ...state.poe1ImportedCardFilters };
+    let added = 0;
+    for (const name of names) {
+      const key = priceKey(name);
+      if (Object.hasOwn(filters, key)) continue;
+      filters[key] = name;
+      added++;
+    }
+    if (!added) {
+      showToast("These card filters are already saved.");
+      return;
+    }
+    state.poe1ImportedCardFilters = filters;
+    if (savePoe1WealthSelection()) showToast(`Imported ${added} card filter${added === 1 ? "" : "s"}.`);
+  } catch (error) {
+    showToast(error.message || "Could not import card filters.");
+  }
+}
+
+function setWealthSelection(names, selected, { cards = false } = {}) {
   if (!names.length) return;
   const ignored = new Set(state.poe1IgnoredWealth || []);
-  const included = new Set(state.poe1IncludedLowVolumeCards || []);
+  const imported = selected && cards && state.poe1ImportedCardFilters;
   for (const name of names) {
     if (selected) {
       ignored.delete(name);
-      if (overrideVolume) included.add(name);
+      if (imported) delete imported[priceKey(name)];
     } else {
       ignored.add(name);
-      included.delete(name);
     }
   }
   state.poe1IgnoredWealth = [...ignored];
-  state.poe1IncludedLowVolumeCards = [...included];
   savePoe1WealthSelection();
 }
 
@@ -12887,13 +13002,10 @@ function poe1WealthScope() {
   const ignored = [...(state.poe1IgnoredWealth || [])].sort();
   const minimum = poe1WealthMinChaos();
   const scope = [minimum, disabled, ignored];
+  const imported = Object.keys(state.poe1ImportedCardFilters || {}).sort();
+  if (imported.length) scope.push("imported-card-filters", imported);
   const tracked = poe1WealthTabs().map(tab => tab.index).sort((a, b) => a - b);
   if (tracked.length) scope.push("tracked-tabs", tracked);
-  const volume = poe1WealthMinCardVolume();
-  if (volume > 0) scope.push("card-chaos-per-hour", volume);
-  if (volume > 0 && state.poe1IncludedLowVolumeCards?.length) {
-    scope.push([...state.poe1IncludedLowVolumeCards].sort());
-  }
   if (minimum > 0) scope.push("stack-value-minimum");
   return JSON.stringify(scope);
 }
@@ -12907,7 +13019,7 @@ function wealthValue(slots) {
   let total = 0;
   let unpriced = 0;
   for (const slot of slots) {
-    if (excludedWealthSlot(slot)) continue;
+    if (ignoredWealth(slot.name, slot)) continue;
     const count = Number(slot.count);
     if (!(count > 0)) continue;
     const price = wealthUnit(slot.name, slot);
@@ -13255,7 +13367,9 @@ function wealthSamples(draft) {
       for (const entry of row.cardValues) {
         if (!Array.isArray(entry)) continue;
         const [name, stash, value] = entry;
-        if (typeof name !== "string" || !Number.isFinite(value) || (value > 0) === !ignored.has(name)) continue;
+        if (typeof name !== "string" || !Number.isFinite(value)) continue;
+        const excluded = ignored.has(name) || (!row.partialCardValues && importedWealthCard(name));
+        if ((value > 0) === !excluded) continue;
         total -= value;
         changes.set(stash, (changes.get(stash) || 0) - value);
       }
@@ -13389,8 +13503,10 @@ function wealthLiveLabel() {
     rows.push({ at, total });
   }
   rows.sort((a, b) => a.at - b.at);
-  if (!rows.length && !draft?.completeRead) return "";
-  const total = draft?.completeRead ? wealthValue(trackedWealthSlots(draft)).total : rows.at(-1).total;
+  const slots = draft?.completeRead ? trackedWealthSlots(draft) : null;
+  const live = slots && poe1WealthPricesReady(draft, slots);
+  if (!rows.length && !live) return "";
+  const total = live ? wealthValue(slots).total : rows.at(-1).total;
   const perHour = poe1 ? poe1WealthRate(rows) : wealthPerHour(rows);
   const rate = perHour == null ? "" : `   ${wealthRateText(perHour)}`;
   return `Total wealth  ${wealthAmountText(total, wealthDisplayUnit(total))}${rate}`;
@@ -13407,7 +13523,7 @@ function wealthStashTotals(slots) {
     const id = String(slot.stash || "");
     if (!id) continue;
     const count = Number(slot.count);
-    const price = excludedWealthSlot(slot) ? 0 : wealthUnit(slot.name, slot);
+    const price = ignoredWealth(slot.name, slot) ? 0 : wealthUnit(slot.name, slot);
     const row = byStash.get(id) || { id, name: poe1TabName(slot.stashName || "Stash"), total: 0 };
     if (count > 0 && price != null && !belowWealthMinimum(price, count)) row.total += count * price;
     if (slot.stashName) row.name = poe1TabName(slot.stashName);
@@ -13419,16 +13535,22 @@ function wealthStashTotals(slots) {
 function poe1WealthCardValues(slots) {
   const byCard = new Map();
   for (const slot of slots) {
-    if (!isPoe1WealthCard(slot) || excludedWealthCardVolume(slot)) continue;
+    if (!isPoe1WealthCard(slot)) continue;
     const count = Number(slot.count);
     const unit = wealthUnit(slot.name, slot);
     if (!(count > 0) || !(unit > 0) || belowWealthMinimum(unit, count)) continue;
     const key = JSON.stringify([slot.name, slot.stash]);
     const entry = byCard.get(key) || [slot.name, slot.stash, 0];
-    entry[2] += (ignoredWealth(slot.name) ? -1 : 1) * count * unit;
+    entry[2] += (ignoredWealth(slot.name, slot) ? -1 : 1) * count * unit;
     byCard.set(key, entry);
   }
   return [...byCard.values()].map(([name, stash, value]) => [name, stash, Number(value.toFixed(6))]);
+}
+
+function poe1WealthPricesReady(draft, slots) {
+  if (!slots.length) return true;
+  if (poe1Prices.league !== draft.league || !poe1Prices.fetchedAt || !(poe1Prices.chaosPerDivine > 0)) return false;
+  return !slots.some(isPoe1WealthCard) || !!poe1Prices.tables.DivinationCard?.length;
 }
 
 function rememberWealthPoint(draft) {
@@ -13436,7 +13558,7 @@ function rememberWealthPoint(draft) {
   const slots = trackedWealthSlots(draft);
   const { total, unpriced } = wealthValue(slots);
   if (!Number.isFinite(total) || (poe1 ? !draft.completeRead || (!total && unpriced > 0) : !slots.length)) return false;
-  if (poe1 && slots.length && (poe1Prices.league !== draft.league || !poe1Prices.fetchedAt || poe1Prices.status !== "ready")) return false;
+  if (poe1 && !poe1WealthPricesReady(draft, slots)) return false;
   const point = { at: Date.now(), league: draft.league, total, stashes: wealthStashTotals(slots) };
   if (poe1) {
     point.poe1Scope = poe1WealthScope();
@@ -13708,22 +13830,175 @@ function poe1WealthCategory(slot) {
 
 const WEALTH_HISTORY_PERIODS = [1, 3, 7];
 
+function wealthCardRewardLines(slot) {
+  return (slot.cardRewards || []).flatMap(text => text.split(/\r?\n/))
+    .map(text => cleanMod(text.replace(/<+[^<>]*>+|[{}]/g, ""))).filter(Boolean);
+}
+
+function wealthCardTipHtml(slot) {
+  const art = gameIcon(slot.icon);
+  const rewards = wealthCardRewardLines(slot);
+  const setSize = slot.cardSetSize;
+  return `<div class="item-tip-card" role="tooltip">
+    <div class="item-tip-head">
+      ${art ? `<img class="item-icon lg" src="${esc(art)}" alt="">` : itemIconHtml(slot.name, "lg")}
+      <div>
+        <div class="item-tip-name">${esc(slot.name)}</div>
+        <div class="item-tip-base">Divination card${setSize > 0 ? ` · ${esc(setSize)} in a set` : ""}</div>
+      </div>
+    </div>
+    ${rewards.length ? rewards.map(text => `<div class="item-tip-mod">${esc(text)}</div>`).join("") :
+      '<div class="item-tip-descr">Reward details unavailable.</div>'}
+  </div>`;
+}
+
+function wealthCardCatalogArt(card) {
+  const name = card.name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  const known = String(card.cardArtFilename || "").replace(/\.png$/i, "");
+  const filename = /^[a-z0-9_-]+$/i.test(known) ? known : name.split(/\s+/).map(word => {
+    const clean = word.replace(/[^a-z0-9]/gi, "");
+    return clean.charAt(0).toUpperCase() + clean.slice(1);
+  }).join("");
+  return filename ? `https://web.poecdn.com/image/divination-card/${filename}.png` : "";
+}
+
+function wealthCardCatalogTile(card) {
+  const excluded = ignoredWealth(card.name, card);
+  const value = wealthUnit(card.name, card);
+  const owned = wealthCountText(card.count);
+  const progress = card.cardSetSize > 0 ? `${owned}/${card.cardSetSize} owned` : `${owned} owned`;
+  const art = wealthCardCatalogArt(card) || card.cardCatalogArt;
+  const rewards = wealthCardRewardLines(card);
+  return `<article class="wealth-catalog-tile">
+    <div class="wealth-catalog-face">
+      <h3>${esc(card.name)}</h3>
+      <div class="wealth-catalog-art">
+        ${art ? `<img src="${esc(art)}" alt="" loading="lazy" decoding="async"${card.cardCatalogArt && card.cardCatalogArt !== art ? ` data-fallback-src="${esc(card.cardCatalogArt)}"` : ""}>` : ""}
+        <span class="wealth-catalog-art-unavailable">Artwork unavailable</span>
+        <span class="wealth-catalog-owned">${esc(progress)}</span>
+      </div>
+      ${rewards.length ? `<p class="wealth-catalog-reward">${rewards.map(line => `<span>${esc(line)}</span>`).join("")}</p>` : ""}
+    </div>
+    <footer class="wealth-catalog-footer">
+      ${value > 0 ? `<span class="wealth-catalog-price" title="Estimated market price per card">${wealthShown(value)} each</span>` : '<span>Unpriced</span>'}
+    </footer>
+    <button type="button" class="wealth-catalog-action" data-wealth-catalog-card="${esc(card.name)}"
+      aria-label="Exclude ${esc(card.name)} from Wealth" aria-pressed="${excluded}"
+      title="${excluded ? "Restore to Wealth" : "Exclude from Wealth"}"></button>
+  </article>`;
+}
+
+function openWealthCardCatalog() {
+  const dialog = document.getElementById("wealth-card-catalog");
+  if (!dialog || dialog.open) return;
+  dialog.innerHTML = `<div class="sheet-inner">
+    <header><h2 id="wealth-card-catalog-title">Divination cards</h2>
+      <form method="dialog"><button type="submit" class="close" aria-label="Close card catalog">×</button></form>
+    </header>
+    <div class="wealth-toolbar">
+      <input type="search" aria-label="Search cards" placeholder="Search cards" autofocus>
+      <select aria-label="Show cards"><option value="all">All cards</option><option value="filtered">Filtered cards</option></select>
+      <span class="wealth-catalog-status muted" role="status"></span>
+    </div>
+    <div class="wealth-catalog-grid"></div>
+  </div>`;
+  const find = dialog.querySelector("input");
+  const show = dialog.querySelector("select");
+  const status = dialog.querySelector("[role=status]");
+  const results = dialog.querySelector(".wealth-catalog-grid");
+  results.addEventListener("error", event => {
+    const image = event.target;
+    if (!image.matches(".wealth-catalog-art img")) return;
+    const fallback = image.dataset.fallbackSrc;
+    if (fallback) {
+      delete image.dataset.fallbackSrc;
+      image.src = fallback;
+    } else {
+      image.hidden = true;
+    }
+  }, true);
+  let cards = wealthCardCatalogEntries(null, wealthDraft());
+  let loading = true;
+  let fullCatalog = false;
+  let catalog = null;
+  let rewards = null;
+  const paint = () => {
+    const query = priceKey(find.value);
+    const shown = cards.filter(card => priceKey(card.name).includes(query) &&
+      (show.value === "all" || ignoredWealth(card.name, card)));
+    status.textContent = loading ? "Loading card catalog…" :
+      `${shown.length} card${shown.length === 1 ? "" : "s"}${fullCatalog ? "" : " · trade catalog unavailable"}`;
+    results.innerHTML = shown.map(wealthCardCatalogTile).join("") ||
+      `<p class="muted">${loading ? "Loading cards…" : "No matching cards."}</p>`;
+  };
+  find.addEventListener("input", () => { results.scrollTop = 0; paint(); });
+  show.addEventListener("change", () => { results.scrollTop = 0; paint(); });
+  results.addEventListener("click", event => {
+    const card = event.target.closest("[data-wealth-catalog-card]");
+    if (!card || activeGame() !== "poe1") return;
+    const excluded = card.getAttribute("aria-pressed") !== "true";
+    setWealthCatalogCard(card.dataset.wealthCatalogCard, excluded);
+    if (show.value === "filtered") {
+      paint();
+      show.focus({ preventScroll: true });
+    } else {
+      card.setAttribute("aria-pressed", String(excluded));
+      card.title = excluded ? "Restore to Wealth" : "Exclude from Wealth";
+    }
+  });
+  paint();
+  dialog.showModal();
+  dialog.addEventListener("close", () => document.querySelector("[data-wealth-browse-cards]")?.focus({ preventScroll: true }), { once: true });
+  const update = () => {
+    if (!dialog.open || !results.isConnected || activeGame() !== "poe1") return;
+    cards = wealthCardCatalogEntries(catalog, wealthDraft(), rewards);
+    paint();
+  };
+  poe1TradeCatalog().then(result => {
+    catalog = result;
+    fullCatalog = !!catalog && [...catalog.keys()].some(key => key.startsWith("card:"));
+    loading = false;
+    update();
+  });
+  loadWealthCardRewards().then(result => {
+    if (!result) return;
+    rewards = result;
+    update();
+  });
+  maybeRefreshPoe1();
+  poe1RefreshTask?.then(update, () => {});
+}
+
+function poe1WealthSlotVisible(slot, draft, cardView, waitingPrices) {
+  if (cardView && !isPoe1WealthCard(slot)) return false;
+  const ignored = ignoredWealth(slot.name, slot);
+  if (draft.itemFilter === "filtered-items") return ignored;
+  if (ignored) return false;
+  if (waitingPrices) return true;
+  const unit = wealthUnit(slot.name, slot);
+  const count = Number(slot.count);
+  if (!(count > 0)) return false;
+  if (unit == null ? !isPoe1WealthCard(slot) && !poe1SlotBeast(slot) : belowWealthMinimum(unit, count)) return false;
+  return !draft.categoryFilter || poe1WealthCategory(slot) === draft.categoryFilter;
+}
+
 function renderWealth() {
   const draft = wealthDraft();
   const poe1 = activeGame() === "poe1";
   const slots = trackedWealthSlots(draft);
+  const waitingPrices = poe1 && !!draft.completeRead && !poe1WealthPricesReady(draft, slots);
   const scope = poe1 ? poe1WealthScope() : null;
   const history = (Array.isArray(state.wealthSnapshots) ? state.wealthSnapshots : [])
     .filter(snapshot => wealthHistoryMatches(snapshot, draft.league, scope) && Number.isFinite(snapshot.total));
   const query = priceKey(draft.find || "");
-  const cardStash = poe1 && poe1WealthCardStash(draft);
-  const itemOptions = [["all", "All items"], ["filtered-items", "Filtered items"]];
-  if (cardStash) itemOptions.push(["card-volume", "Filtered cards"]);
-  const itemFilter = itemOptions.some(([key]) => key === draft.itemFilter) ? draft.itemFilter : "all";
-  const filteredCardView = itemFilter === "card-volume";
-  const cardView = poe1 && (cardStash || draft.categoryFilter === "DivinationCard");
+  const cardView = poe1 && poe1WealthCardView(draft);
+  const itemOptions = [["all", "All items"], ["filtered-items", cardView ? "Filtered cards" : "Filtered items"]];
+  const itemFilter = draft.itemFilter === "filtered-items" ? "filtered-items" : "all";
+  const filteredCardView = cardView && itemFilter === "filtered-items";
+  const exportCards = filteredCardView && filteredWealthCardNames(slots).length > 0;
   const sort = poe1 ? draft.sort || "value" : "value";
   const sortValue = slot => {
+    if (waitingPrices) return 0;
     const unit = wealthUnit(slot.name, slot);
     if (sort === "unit-value") return unit ?? -1;
     const count = Number(slot.count);
@@ -13731,30 +14006,22 @@ function renderWealth() {
   };
   const shown = slots.filter(slot => {
     if (!wealthSlotMatches(slot, draft.stashFilter, query)) return false;
-    if (!poe1) return true;
-    const lowVolume = belowWealthCardVolume(slot);
-    if (filteredCardView) return lowVolume;
-    if (itemFilter === "filtered-items") return ignoredWealth(slot.name);
-    if (lowVolume || ignoredWealth(slot.name)) return false;
-    const unit = wealthUnit(slot.name, slot);
-    const count = Number(slot.count);
-    if (!(count > 0)) return false;
-    if (unit == null ? !isPoe1WealthCard(slot) && !poe1SlotBeast(slot) : belowWealthMinimum(unit, count)) return false;
-    return !draft.categoryFilter || poe1WealthCategory(slot) === draft.categoryFilter;
+    return !poe1 || poe1WealthSlotVisible(slot, draft, cardView, waitingPrices);
   }).sort((a, b) => {
     if (sort === "name") return a.name.localeCompare(b.name);
     if (sort === "quantity") return Number(b.count) - Number(a.count);
     return sortValue(b) - sortValue(a);
   });
-  const bulkSelection = filteredCardView ? `
-    <button type="button" class="btn ghost" data-wealth-card-select="all" title="Include all matching cards regardless of volume" ${shown.some(excludedWealthSlot) ? "" : "disabled"}>Select all</button>
-    <button type="button" class="btn ghost" data-wealth-card-select="none" title="Exclude all matching cards" ${shown.some(slot => !excludedWealthSlot(slot)) ? "" : "disabled"}>Deselect all</button>` : "";
+  const bulkSelection = filteredCardView
+    ? `<button type="button" class="btn ghost" data-wealth-card-select="all" title="Include all matching cards" ${shown.length ? "" : "disabled"}>Select all</button>`
+    : '<button type="button" class="btn ghost" data-wealth-card-select="none" title="Exclude all matching cards">Deselect all</button>';
   const limit = poe1 ? (draft.limit || 100) : shown.length;
   const rows = shown.slice(0, limit).map(slot => {
+    const card = poe1 && isPoe1WealthCard(slot);
     const count = Number(slot.count);
-    const unit = wealthUnit(slot.name, slot);
-    const each = unit != null ? wealthShown(unit) : !poe1 ? '<span class="muted">unpriced</span>' :
-      isPoe1WealthCard(slot) ? '<span class="muted" title="No reliable market price">Unpriced</span>' : "—";
+    const unit = waitingPrices ? null : wealthUnit(slot.name, slot);
+    const each = waitingPrices ? "—" : unit != null ? wealthShown(unit) : !poe1 ? '<span class="muted">unpriced</span>' :
+      card ? '<span class="muted" title="No reliable market price">Unpriced</span>' : "—";
     const line = unit == null || !(count > 0) ? "—" : wealthShown(unit * count);
     const art = poe1 && slot.icon ? gameIcon(slot.icon) : "";
     const beastLabel = poe1 ? poe1BeastPriceName(slot) : "";
@@ -13768,18 +14035,16 @@ function renderWealth() {
       const { sacrifice, sacrificeAmount, challenge } = slot.ultimatum;
       variant = `<small>${esc(sacrifice)} ×${esc(String(sacrificeAmount).replace(/^x/i, ""))} · ${esc(challenge)}</small>`;
     }
-    const volume = poe1 ? poe1WealthCardVolume(slot) : undefined;
+    const volume = poe1 && !waitingPrices ? poe1WealthCardVolume(slot) : undefined;
     const volumeLabel = typeof volume === "number" ? volume.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "";
-    const lowVolume = belowWealthCardVolume(slot);
-    const excluded = poe1 && excludedWealthSlot(slot);
-    if (lowVolume) {
-      const reason = volume === null ? "Volume unavailable" : `${volumeLabel}c/h · Low volume`;
-      variant = `<small class="wealth-card-warning" title="${excluded ? "Excluded from wealth" : "Selected manually"}"><span aria-hidden="true">⚠</span> ${esc(reason)}</small>`;
-    } else if (typeof volume === "number") {
+    const ignored = poe1 && ignoredWealth(slot.name, slot);
+    if (typeof volume === "number") {
       variant = `<small title="Exchange volume per hour in Chaos Orbs">${esc(volumeLabel)}c/h</small>`;
     }
-    return `<tr${poe1 && ignoredWealth(slot.name) ? ' class="wealth-excluded"' : ""}>
-      <td><div class="wealth-item">${poe1 ? `<button type="button" class="wealth-include" data-wealth-ignore="${esc(slot.name)}"${lowVolume ? ' data-wealth-low-volume' : ""} aria-label="${excluded ? "Include" : "Exclude"} ${esc(itemLabel)}" aria-pressed="${!excluded}" title="Include or exclude all stacks with this name">${excluded ? "−" : "✓"}</button>` : ""}${art ? `<img class="item-icon" src="${esc(art)}" alt="">` : itemIconHtml(itemLabel)}<span>${esc(itemLabel)}${variant}</span></div></td>
+    const item = `${art ? `<img class="item-icon" src="${esc(art)}" alt="">` : itemIconHtml(itemLabel)}<span>${esc(itemLabel)}${variant}</span>`;
+    const preview = card ? `<span class="wealth-card-preview" data-tip="${esc(slot.name)}" tabindex="0" aria-describedby="item-tip">${item}</span>` : item;
+    return `<tr${ignored ? ' class="wealth-excluded"' : ""}>
+      <td><div class="wealth-item">${poe1 ? `<button type="button" class="wealth-include" data-wealth-ignore="${esc(slot.name)}" aria-label="${ignored ? "Include" : "Exclude"} ${esc(itemLabel)}" aria-pressed="${!ignored}"${card ? ' data-wealth-card' : ""} title="Include or exclude all stacks with this name">${ignored ? "−" : "✓"}</button>` : ""}${preview}</div></td>
       <td><span class="wealth-stash">${esc(poe1TabName(slot.stashName || ""))}</span></td>
       <td class="num">${esc(wealthCountText(count))}</td>
       <td class="num">${each}</td>
@@ -13791,20 +14056,22 @@ function renderWealth() {
     ? draft.poe1Tabs.length ? poe1WealthTabs().map(tab => ({ ...tab, id: String(tab.index) }))
       : [...new Map(slots.map(slot => [slot.stash, poe1TabName(slot.stashName || "Stash")])).entries()].map(([id, name]) => ({ id, name }))
     : WEALTH_STASHES.map(stash => ({ id: stash.id, name: stash.name }));
-  const totalsById = new Map(wealthStashTotals(slots).map(row => [row.id, row.total]));
-  const byStash = stashRows.map(stash => ({ name: stash.name, value: totalsById.get(stash.id) || 0 }));
   const allPoints = wealthSamples(draft);
+  const lastValuation = allPoints.at(-1);
+  const stashValues = waitingPrices ? lastValuation?.stashes || [] : wealthStashTotals(slots);
+  const totalsById = new Map(stashValues.map(row => [row.id, row.total]));
+  const byStash = stashRows.map(stash => ({ name: stash.name, value: totalsById.get(stash.id) || 0 }));
   const days = WEALTH_HISTORY_PERIODS.includes(Number(draft.days)) ? Number(draft.days) : poe1 && draft.days !== "league" ? 7 : null;
   const from = days == null ? 0 : Date.now() - days * 86400000;
   const points = allPoints.filter(p => p.at >= from);
   const perHour = poe1 ? poe1WealthRate(points) : wealthPerHour(allPoints);
-  const value = wealthValue(slots);
+  let value = (poe1 ? points : allPoints).at(-1)?.total ?? 0;
+  if (waitingPrices) value = lastValuation?.total;
+  else if (slots.length || (poe1 && draft.completeRead)) value = wealthValue(slots).total;
   const categories = new Map();
   let belowMinimum = 0;
-  let filteredCards = 0;
-  if (poe1) for (const slot of slots) {
-    if (ignoredWealth(slot.name)) continue;
-    if (excludedWealthCardVolume(slot)) { filteredCards++; continue; }
+  if (poe1 && !waitingPrices) for (const slot of slots) {
+    if (ignoredWealth(slot.name, slot)) continue;
     const unit = wealthUnit(slot.name, slot);
     const count = Number(slot.count);
     if (unit == null || !(count > 0)) continue;
@@ -13812,10 +14079,10 @@ function renderWealth() {
     const key = poe1WealthCategory(slot);
     categories.set(key, (categories.get(key) || 0) + unit * count);
   }
-  const byCategory = poe1 && draft.breakdown !== "tabs";
+  const byCategory = poe1 && !waitingPrices && draft.breakdown !== "tabs";
   const breakdown = byCategory
     ? [...categories].map(([key, value]) => ({ key, name: econTypeLabel(key), value })).sort((a, b) => b.value - a.value) : byStash;
-  const ignored = poe1 ? slots.filter(slot => ignoredWealth(slot.name)).length : 0;
+  const ignored = poe1 ? slots.filter(slot => ignoredWealth(slot.name, slot)).length : 0;
   if (poe1) queuePoe1Tabs(draft);
   const readStatus = `<p id="wealth-status" role="status">${esc(draft.message)}</p>`;
   return `<section class="wealth-view${poe1 ? " poe1-wealth" : ""}">
@@ -13839,8 +14106,8 @@ function renderWealth() {
         <button type="button" class="btn gold" data-wealth-read-tab ${draft.busy ? "disabled" : ""}>${draft.busy ? "Reading…" : "Read tabs"}</button>`}
       </div>
       ${poe1 ? `${readStatus}<div class="wealth-market-status">
-        <span>${poe1Prices.fetchedAt && poe1Prices.league === draft.league ? "Prices checked " + esc(formatWhen(poe1Prices.fetchedAt)) : "Prices not loaded"}</span>
-        <span>${ignored} filtered items${belowMinimum ? " · " + belowMinimum + " below minimum" : ""}${filteredCards ? " · " + filteredCards + " filtered by card volume" : ""}</span>
+        <span>${waitingPrices ? (lastValuation ? "Prices unavailable. Showing the last valued stash read." : "Waiting for market prices.") : poe1Prices.fetchedAt && poe1Prices.league === draft.league ? "Prices checked " + esc(formatWhen(poe1Prices.fetchedAt)) : "Prices not loaded"}</span>
+        <span>${ignored} filtered items${belowMinimum ? " · " + belowMinimum + " below minimum" : ""}</span>
         ${poe1Prices.error || poe1Prices.watchError ? '<span>Some prices could not be refreshed.</span>' : ""}
       </div>` : ""}
     </header>
@@ -13851,14 +14118,14 @@ function renderWealth() {
           <button type="button" class="btn ghost" data-wealth-replay ${points.length < 2 ? 'disabled title="Replay needs at least two points"' : ""}>Replay</button>
           <select data-wealth-option="days" aria-label="History period">${WEALTH_HISTORY_PERIODS.map(d => `<option value="${d}" ${days === d ? "selected" : ""}>${d} day${d > 1 ? "s" : ""}</option>`).join("")}<option value="league" ${days == null ? "selected" : ""}>League</option></select>
         </div></div>
-        <p class="wealth-headline">${wealthTotalHtml(slots.length || (poe1 && draft.completeRead) ? value.total : (poe1 ? points : allPoints).at(-1)?.total ?? 0)}${perHour == null ? "" : `<span class="wealth-rate"${poe1 ? ' title="Estimated change per hour, including market price changes"' : ""}>${esc(wealthRateText(perHour))}</span>`}
+        <p class="wealth-headline">${value == null ? "—" : wealthTotalHtml(value)}${perHour == null ? "" : `<span class="wealth-rate"${poe1 ? ' title="Estimated change per hour, including market price changes"' : ""}>${esc(wealthRateText(perHour))}</span>`}
           <span class="wealth-replay-label" hidden><span data-wealth-replay-value></span><span class="wealth-rate" data-wealth-replay-date></span></span>
         </p>
         ${wealthChart(points)}
       </article>
       <article class="panel${poe1 ? " wealth-breakdown-panel" : ""}">
         <div class="wealth-panel-title"><h3>Value breakdown</h3>${poe1 ? `<select data-wealth-option="breakdown" aria-label="Breakdown by"><option value="categories" ${draft.breakdown !== "tabs" ? "selected" : ""}>Categories</option><option value="tabs" ${draft.breakdown === "tabs" ? "selected" : ""}>Tabs</option></select>` : ""}</div>
-        ${byCategory ? '<p class="muted wealth-breakdown-hint">Items across tracked tabs</p>' : ""}
+        ${waitingPrices && lastValuation ? '<p class="muted wealth-breakdown-hint">Last valued stash read</p>' : byCategory ? '<p class="muted wealth-breakdown-hint">Items across tracked tabs</p>' : ""}
         ${wealthDonut(breakdown, byCategory ? draft.categoryFilter || "" : null)}
       </article>
     </div>` : ""}
@@ -13875,12 +14142,12 @@ function renderWealth() {
         ${poe1 ? `<select data-wealth-option="itemFilter" aria-label="Item visibility">${itemOptions.map(([v,t]) => `<option value="${v}" ${itemFilter === v ? "selected" : ""}>${t}</option>`).join("")}</select><select data-wealth-option="sort" aria-label="Sort items">${[["value","Highest total value"],["unit-value","Highest unit value"],["quantity","Most items"],["name","Name"]].map(([v,t]) => `<option value="${v}" ${sort === v ? "selected" : ""}>${t}</option>`).join("")}</select>` : ""}
       </div>
       ${cardView ? `<div class="wealth-toolbar" role="group" aria-label="Divination card options">
-        <label class="wealth-card-volume" for="wealth-min-card-volume" title="A minimum above zero excludes cards with low or unavailable exchange volume from totals.">
-          <span>Minimum card volume</span>
-          <input type="number" id="wealth-min-card-volume" min="0" step="0.01" value="${esc(poe1WealthMinCardVolume())}" ${draft.busy ? "disabled" : ""}>
-          <span>Chaos/h</span>
-        </label>
-        ${bulkSelection}
+        ${filteredCardView || shown.length ? bulkSelection : ""}
+        ${filteredCardView ? `
+          <button type="button" class="btn ghost" data-wealth-export-cards ${exportCards ? "" : "disabled"} title="Export excluded card names across tracked tabs">Export filtered cards</button>
+          <button type="button" class="btn ghost" data-wealth-import-cards>Import filtered cards</button>
+        ` : ""}
+        <button type="button" class="btn ghost wealth-browse-cards" data-wealth-browse-cards>Browse cards</button>
       </div>` : ""}
       <table class="rate-table wealth-counts"><thead><tr><th>Item</th><th>Stash</th><th>Units</th><th>Unit value</th><th>Total value</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="5" class="muted">${poe1 && !draft.slots.length ? "Read stash to see your items." : "Nothing matches."}</td></tr>`}</tbody></table>
@@ -13953,6 +14220,7 @@ function paintWealthSetup() {
 
 function repaintWealth() {
   if (ui.view !== "wealth" || wealthDraft().drawing) return;
+  if (activeGame() === "poe1") hideItemTip();
   document.getElementById("main").innerHTML = renderWealth();
   const draft = wealthDraft();
   if (draft.focus) {
@@ -14345,7 +14613,8 @@ async function readWealthTab(opts) {
     }
     draft.slots = groups.flatMap(group => (Array.isArray(group?.stacks) ? group.stacks : []).filter(row => row && row.name).map(row => ({
       ...(poe1 ? { frameType: row.frameType, gemLevel: row.gemLevel, gemQuality: row.gemQuality,
-        corrupted: row.corrupted, identified: row.identified, baseType: row.baseType, icon: row.icon, ultimatum: row.ultimatum } : {}),
+        corrupted: row.corrupted, identified: row.identified, baseType: row.baseType, icon: row.icon,
+        ultimatum: row.ultimatum, cardRewards: row.cardRewards, cardSetSize: row.cardSetSize, cardArtFilename: row.cardArtFilename } : {}),
       name: String(row.name),
       count: String(row.count ?? ""),
       stash: String(group.id || ""),
@@ -15018,6 +15287,7 @@ function onClick(event) {
     const category = event.target.closest("[data-wealth-category]");
     if (category) {
       const draft = wealthDraft();
+      const wasCardView = poe1WealthCardView(draft);
       const key = category.dataset.wealthCategory;
       const next = key === draft.categoryFilter ? "" : key;
       draft.categoryFilter = next;
@@ -15036,8 +15306,8 @@ function onClick(event) {
           for (const [stash, value] of totals) if (value > bestValue) { best = stash; bestValue = value; }
           if (best) draft.stashFilter = best;
         }
-        if (draft.itemFilter === "card-volume" && !poe1WealthCardStash(draft)) draft.itemFilter = "all";
       }
+      if (wasCardView && !poe1WealthCardView(draft)) draft.itemFilter = "all";
       draft.limit = 100;
       repaintWealth();
       return;
@@ -15067,8 +15337,9 @@ function onClick(event) {
     const tab = event.target.closest("[data-wealth-select-tab]");
     if (tab) {
       const draft = wealthDraft();
+      const wasCardView = poe1WealthCardView(draft);
       draft.stashFilter = tab.dataset.wealthSelectTab;
-      if (draft.itemFilter === "card-volume" && !poe1WealthCardStash(draft)) draft.itemFilter = "all";
+      if (wasCardView && !poe1WealthCardView(draft)) draft.itemFilter = "all";
       draft.limit = 100;
       repaintWealth();
       return;
@@ -15076,12 +15347,20 @@ function onClick(event) {
     const selectCards = event.target.closest("[data-wealth-card-select]");
     if (selectCards) {
       const draft = wealthDraft();
-      if (draft.itemFilter !== "card-volume" || !poe1WealthCardStash(draft)) return;
+      const selected = selectCards.dataset.wealthCardSelect === "all";
+      if (selected !== (draft.itemFilter === "filtered-items") || !poe1WealthCardView(draft)) return;
       const query = priceKey(draft.find || "");
-      const names = trackedWealthSlots(draft)
-        .filter(slot => wealthSlotMatches(slot, draft.stashFilter, query) && belowWealthCardVolume(slot))
-        .map(slot => slot.name);
-      setWealthSelection(names, selectCards.dataset.wealthCardSelect === "all", true);
+      const slots = trackedWealthSlots(draft);
+      const waitingPrices = !!draft.completeRead && !poe1WealthPricesReady(draft, slots);
+      const matching = slots.filter(slot => wealthSlotMatches(slot, draft.stashFilter, query) &&
+        poe1WealthSlotVisible(slot, draft, true, waitingPrices));
+      setWealthSelection(matching.map(slot => slot.name), selected, { cards: true });
+      return;
+    }
+    if (event.target.closest("[data-wealth-export-cards]")) { exportFilteredWealthCards(); return; }
+    if (event.target.closest("[data-wealth-browse-cards]")) { openWealthCardCatalog(); return; }
+    if (event.target.closest("[data-wealth-import-cards]")) {
+      document.getElementById("wealth-card-import-file")?.click();
       return;
     }
     if (event.target.closest("[data-wealth-more]")) { wealthDraft().limit = (wealthDraft().limit || 100) + 100; repaintWealth(); return; }
@@ -15511,8 +15790,9 @@ function onClick(event) {
   }
   const ignore = event.target.closest("[data-wealth-ignore]");
   if (ignore && activeGame() === "poe1") {
-    setWealthSelection([ignore.dataset.wealthIgnore], ignore.getAttribute("aria-pressed") === "false",
-      ignore.hasAttribute("data-wealth-low-volume"));
+    const name = ignore.dataset.wealthIgnore;
+    setWealthSelection([name], ignore.getAttribute("aria-pressed") === "false",
+      { cards: ignore.hasAttribute("data-wealth-card") });
     return;
   }
   if (event.target.closest("[data-econ-more]")) {
@@ -15645,15 +15925,6 @@ function onChange(event) {
     savePoe1WealthSelection();
     return;
   }
-  if (activeGame() === "poe1" && target.id === "wealth-min-card-volume") {
-    state.poe1WealthMinCardChaosPerHour = Number(target.value);
-    state.poe1WealthMinCardChaosPerHour = poe1WealthMinCardVolume();
-    const draft = wealthDraft();
-    if (!state.poe1WealthMinCardChaosPerHour && draft.itemFilter === "card-volume") draft.itemFilter = "all";
-    draft.limit = 100;
-    savePoe1WealthSelection();
-    return;
-  }
   if (activeGame() === "poe1" && target.matches("[data-econ-low-confidence]")) {
     ui.econShowLowConfidence = target.checked;
     if (!target.checked && ui.econChart?.lowConfidence) ui.econChart = null;
@@ -15669,7 +15940,7 @@ function onChange(event) {
     const draft = wealthDraft();
     const option = target.dataset.wealthOption;
     draft[option] = target.value;
-    if (option === "itemFilter" && target.value !== "all") draft.categoryFilter = "";
+    if (option === "itemFilter" && target.value !== "all" && draft.categoryFilter !== "DivinationCard") draft.categoryFilter = "";
     draft.limit = 100;
     repaintWealth();
     return;
@@ -15954,6 +16225,12 @@ document.getElementById("import-file").addEventListener("change", (event) => {
   event.target.value = "";
 });
 
+document.getElementById("wealth-card-import-file").addEventListener("change", event => {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (file) importFilteredWealthCards(file);
+});
+
 document.addEventListener("keydown", (event) => {
   if (ui.hotkeyCapture) {
     event.preventDefault();
@@ -16118,6 +16395,16 @@ function hideItemTip() {
 function showItemTip(anchor, name) {
   const tip = document.getElementById("item-tip");
   if (!tip || !name) return;
+  if (anchor.matches(".wealth-card-preview")) {
+    if (!anchor.isConnected || activeGame() !== "poe1" || ui.view !== "wealth") return;
+    const slot = wealthDraft().slots.find(slot => slot.name === name && isPoe1WealthCard(slot));
+    if (!slot) return;
+    tip.dataset.for = name;
+    tip.innerHTML = wealthCardTipHtml(slot);
+    tip.hidden = false;
+    placeItemTip(anchor, tip);
+    return;
+  }
   if (isBasicCurrency(name)) { hideItemTip(); return; }
   const lore = lookupLore(name);
   tip.hidden = false;
@@ -16286,6 +16573,15 @@ document.addEventListener("pointerout", (event) => {
   if (event.relatedTarget?.closest?.("[data-tip]")) return;
   clearTimeout(tipTimer);
   hideItemTip();
+});
+document.addEventListener("focusin", event => {
+  const card = event.target.closest?.(".wealth-card-preview");
+  if (!card) return;
+  clearTimeout(tipTimer);
+  showItemTip(card, card.dataset.tip);
+});
+document.addEventListener("focusout", event => {
+  if (event.target.closest?.(".wealth-card-preview")) hideItemTip();
 });
 document.addEventListener("scroll", hideItemTip, true);
 

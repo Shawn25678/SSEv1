@@ -7203,14 +7203,170 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
 .poe1-wealth .wealth-include[aria-pressed="true"] { border-color: var(--gold); }
 .poe1-wealth .wealth-excluded { opacity: .55; }
 .poe1-wealth .wealth-item small, .poe1-wealth .wealth-source { display: block; color: var(--muted); font-size: .73rem; }
-.poe1-wealth .wealth-item .wealth-card-warning { color: var(--gold-2); }
 .poe1-wealth .wealth-counts { width: 100%; table-layout: fixed; }
 .poe1-wealth .wealth-counts th:first-child { width: 38%; }
 .poe1-wealth .wealth-counts td, .poe1-wealth .wealth-counts th { white-space: normal; overflow-wrap: anywhere; padding: 10px 6px; }
 .poe1-wealth .wealth-item { min-width: 0; }
 .poe1-wealth .wealth-item .item-icon { flex-shrink: 0; }
+.poe1-wealth .wealth-card-preview { display: inline-flex; align-items: center; gap: 8px; min-width: 0; cursor: help; }
+.poe1-wealth .wealth-card-preview:hover > span,
+.poe1-wealth .wealth-card-preview:focus-visible > span { text-decoration: underline; text-underline-offset: .18em; }
 .poe1-wealth .wealth-stash { max-width: 100%; }
 .poe1-wealth .wealth-toolbar > * { min-width: 0; max-width: 100%; }
+.poe1-wealth .wealth-browse-cards { margin-inline-start: auto; }
+.wealth-card-catalog {
+  width: min(960px, calc(100% - 24px));
+}
+.wealth-card-catalog .sheet-inner { gap: 12px; }
+.wealth-card-catalog header h2 { margin: 0; }
+.wealth-card-catalog input[type="search"] { flex: 1 1 220px; min-width: 0; }
+.wealth-card-catalog .wealth-toolbar { margin-bottom: 0; }
+.wealth-catalog-status { font-size: .82rem; }
+.wealth-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 232px), 1fr));
+  grid-auto-rows: max-content;
+  gap: 14px;
+  max-height: min(66vh, 680px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 2px 8px 2px 2px;
+}
+.wealth-catalog-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.wealth-catalog-tile:has(.wealth-catalog-action:hover) { border-color: var(--gold); }
+.wealth-catalog-tile:has(.wealth-catalog-action[aria-pressed="true"]) { border-color: #90605a; }
+.wealth-catalog-tile:has(.wealth-catalog-action[aria-pressed="true"]) :is(.wealth-catalog-face, .wealth-catalog-footer) {
+  opacity: .45;
+}
+.wealth-catalog-face {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #786648;
+  border-radius: 5px;
+  background: linear-gradient(150deg, #282620, #151617 74%);
+  box-shadow: inset 0 0 0 2px #121211, inset 0 0 0 3px #4e4637;
+}
+.wealth-catalog-tile h3 {
+  display: grid;
+  place-items: center;
+  min-height: 2.6em;
+  margin: 7px 8px 6px;
+  padding: 6px 12px;
+  border: 1px solid #8b724e;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #e3d2ae, #c5ae85);
+  text-align: center;
+  font-family: Georgia, serif;
+  font-size: 1.12rem;
+  font-variant: small-caps;
+  line-height: 1.14;
+  color: #221a13;
+}
+.wealth-catalog-art {
+  position: relative;
+  flex: none;
+  aspect-ratio: 7 / 5;
+  background: radial-gradient(ellipse at 50% 25%, var(--panel-2), var(--bg));
+  border-block: 1px solid #786648;
+}
+.wealth-catalog-art img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.wealth-catalog-art-unavailable {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: .82rem;
+}
+.wealth-catalog-art:has(img:not([hidden])) .wealth-catalog-art-unavailable { display: none; }
+.wealth-catalog-owned {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  padding: 2px 7px;
+  border: 1px solid #9b8155;
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: .78rem;
+  font-weight: 700;
+}
+.wealth-catalog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 30px;
+  padding: 5px 4px 0;
+  font-size: .78rem;
+  color: var(--muted);
+}
+.wealth-catalog-price {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--gold-2);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.wealth-catalog-reward {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-height: 100px;
+  margin: 0;
+  padding: 12px 15px 16px;
+  font-size: .83rem;
+  color: var(--muted);
+  line-height: 1.3;
+  text-align: center;
+}
+.wealth-catalog-reward span:first-child {
+  color: var(--gold-2);
+  font-family: Georgia, serif;
+  font-size: 1.02rem;
+  font-variant: small-caps;
+}
+.wealth-catalog-action {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.wealth-catalog-action:focus-visible { outline: 2px solid var(--gold); outline-offset: -3px; }
+.wealth-catalog-action[aria-pressed="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  pointer-events: none;
+  --strike: rgb(230 116 102 / 75%);
+  background:
+    linear-gradient(to bottom right, transparent calc(50% - 2px), var(--strike) calc(50% - 2px) calc(50% + 2px), transparent calc(50% + 2px)),
+    linear-gradient(to bottom left, transparent calc(50% - 2px), var(--strike) calc(50% - 2px) calc(50% + 2px), transparent calc(50% + 2px));
+}
 .poe1-wealth .wealth-price-options {
   display: grid;
   gap: 6px;
@@ -7218,18 +7374,12 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
   border-bottom: 1px solid var(--line);
   font-size: .85rem;
 }
-.poe1-wealth .wealth-price-options > span,
-.poe1-wealth .wealth-card-volume {
+.poe1-wealth .wealth-price-options > span {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.poe1-wealth .wealth-card-volume {
-  flex-wrap: wrap;
-  font-size: .85rem;
-}
-.poe1-wealth .wealth-price-options input,
-.poe1-wealth .wealth-card-volume input {
+.poe1-wealth .wealth-price-options input {
   width: 100%;
   min-width: 0;
   max-width: 7rem;
@@ -7239,7 +7389,6 @@ body.top-navigation .settings > div:first-child { grid-column: 1 / -1; }
   background: var(--bg);
   color: var(--ink);
 }
-.poe1-wealth .wealth-card-volume input { width: 7rem; }
 .poe1-wealth .wealth-track-panel {
   min-width: 0;
   padding-top: 10px;

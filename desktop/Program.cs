@@ -3075,6 +3075,27 @@ sealed class TrackerWindow : Form
                 if (item.TryGetProperty("icon", out var iconEl)) row["icon"] = JsonString(iconEl);
                 totals[key] = row;
             }
+            if (frame == 6)
+            {
+                var card = existing ?? row;
+                if (card["cardArtFilename"] is null && item.TryGetProperty("artFilename", out var artFilename)
+                    && JsonString(artFilename) is { Length: > 0 } cardArt)
+                    card["cardArtFilename"] = cardArt;
+                if (card["cardSetSize"] is null && item.TryGetProperty("maxStackSize", out var maxStack)
+                    && JsonInt(maxStack, out var setSize) && setSize > 0)
+                    card["cardSetSize"] = setSize;
+                if (card["cardRewards"] is null && item.TryGetProperty("explicitMods", out var mods) && mods.ValueKind == JsonValueKind.Array)
+                {
+                    var rewards = new JsonArray();
+                    foreach (var mod in mods.EnumerateArray())
+                    {
+                        var text = mod.ValueKind == JsonValueKind.Object && mod.TryGetProperty("description", out var description)
+                            ? JsonString(description) : JsonString(mod);
+                        if (!string.IsNullOrWhiteSpace(text)) rewards.Add(text);
+                    }
+                    if (rewards.Count > 0) card["cardRewards"] = rewards;
+                }
+            }
         }
         var stacks = new JsonArray();
         foreach (var row in totals.Values.OrderByDescending(row => (long)row["count"]!)) stacks.Add(row);

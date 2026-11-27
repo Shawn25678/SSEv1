@@ -8,7 +8,7 @@
       if (window.sseStartup?.testerUnlocked === true) document.documentElement.classList.add("tester-unlocked");
     </script>
     <link rel="icon" href="still-sane-sigil.png" />
-    <link rel="stylesheet" href="styles.css?v=105" />
+    <link rel="stylesheet" href="styles.css?v=116" />
   </head>
   <body class="top-navigation">
     <div class="win-chrome">
@@ -118,14 +118,16 @@
     </dialog>
 
     <dialog id="wealth-setup" class="sheet wealth-setup-dialog"></dialog>
+    <dialog id="wealth-card-catalog" class="sheet wealth-card-catalog" aria-labelledby="wealth-card-catalog-title"></dialog>
 
     <input id="wealth-screenshot-file" type="file" accept="image/png,image/jpeg,image/webp" hidden />
     <input id="import-file" type="file" accept="application/json" hidden />
+    <input id="wealth-card-import-file" type="file" accept=".txt,text/plain" hidden />
     <div id="toast" class="toast" hidden></div>
     <div id="price-overlay" class="price-overlay" hidden></div>
     <div id="item-tip" class="item-tip" hidden></div>
 
     <script src="bosses.js"></script>
-    <script src="app.js?v=142"></script>
+    <script src="app.js?v=155"></script>
   </body>
 </html>
