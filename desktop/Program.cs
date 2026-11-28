@@ -16,27 +16,51 @@ namespace ExileLedger;
 static class Program
 {
     static Mutex? SingleInstance;
+    const string ResetLocalDataOption = "--reset-local-data";
 
     [STAThread]
-    static void Main()
+    static void Main(string[] args)
     {
         SingleInstance = new Mutex(true, @"Local\StillSaneExile.SingleInstance", out var created);
         if (!created) { SingleInstance.Dispose(); return; }
+        bool resetRequested;
         try
         {
             ApplicationConfiguration.Initialize();
-            Application.Run(new TrackerWindow());
+            if (args is [ResetLocalDataOption])
+            {
+                try { AppDataProfile.ClearLocalData(); }
+                catch (Exception)
+                {
+                    MessageBox.Show("SSE could not clear all local data. Close any Path of Exile sign-in window, then try the reset again.",
+                        "Still Sane, Exile?", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            using var window = new TrackerWindow();
+            Application.Run(window);
+            resetRequested = window.ResetLocalDataRequested;
         }
         finally
         {
             SingleInstance.ReleaseMutex();
             SingleInstance.Dispose();
         }
+        if (!resetRequested) return;
+        try
+        {
+            using var restarted = Process.Start(new ProcessStartInfo(Environment.ProcessPath!, ResetLocalDataOption));
+        }
+        catch (Exception)
+        {
+            MessageBox.Show("SSE could not restart to clear local data. Open SSE and try again.",
+                "Still Sane, Exile?", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 }
 
 sealed class TrackerWindow : Form
 {
+    internal bool ResetLocalDataRequested { get; private set; }
     static readonly HttpClient Http = CreateHttp();
     static readonly SemaphoreSlim Gate = new(3, 3);
     static readonly ConcurrentDictionary<string, (DateTime at, int status, string body)> Cache = new();
@@ -3702,6 +3726,21 @@ sealed class TrackerWindow : Form
             if (type == "quit")
             {
                 BeginInvoke(Close);
+                return;
+            }
+            if (type == "reset-local-data")
+            {
+                if (!Uri.TryCreate(e.Source, UriKind.Absolute, out var source)
+                    || !source.IsFile || !SamePath(source.LocalPath, _indexPage)) return;
+                if (MessageBox.Show(this,
+                    "Clear SSE settings, history, filters, and saved sign-in for both games?\n\n"
+                    + "Your tester activation and exported files will be kept. SSE will restart.",
+                    "Clear all local data?", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+                {
+                    ResetLocalDataRequested = true;
+                    BeginInvoke(Close);
+                }
                 return;
             }
             if (type == "close-with-game")

@@ -14448,21 +14448,6 @@ function askPoe1Session() {
     .catch(() => { poe1SessionAsked = false; });
 }
 
-function clearPoe1StashCache() {
-  if (activeGame() !== "poe1") return false;
-  const previous = state.poe1StashTabs;
-  state.poe1StashTabs = { ...previous };
-  delete state.poe1StashTabs[wealthLeague()];
-  try { save(); }
-  catch {
-    state.poe1StashTabs = previous;
-    return false;
-  }
-  ui.wealth = null;
-  scheduleWealthRefresh();
-  return true;
-}
-
 function wealthLastReadAt() {
   let latest = 0;
   const series = activeGame() === "poe1" ? state.poe1WealthSeries : state.wealthSeries;
@@ -14820,7 +14805,7 @@ function renderSettings() {
           <span>Close SSE when the game closes</span>
         </label>` : ""}
         <div class="row-actions">
-          ${poe1 && window.chrome?.webview ? '<button class="btn ghost" data-poe1-clear-stash-cache type="button">Clear stash cache</button>' : ""}
+          ${window.chrome?.webview ? '<button class="btn ghost" id="settings-reset-data-btn" type="button">Clear all local data</button>' : ""}
           <button class="btn ghost" id="settings-check-btn" type="button"${window.chrome?.webview ? "" : " hidden"}>Check</button>
           <button class="btn gold" id="settings-update-btn" type="button" hidden>Update</button>
         </div>
@@ -15978,9 +15963,8 @@ function onClick(event) {
     setBackupFolder(backupWhere.dataset.backupWhere);
     return;
   }
-  if (event.target.closest("[data-poe1-clear-stash-cache]")) {
-    if (clearPoe1StashCache()) showToast("Stash cache cleared. Open Wealth to reload the tab list.");
-    else showToast("Could not clear the stash cache.");
+  if (event.target.closest("#settings-reset-data-btn")) {
+    window.chrome?.webview?.postMessage({ type: "reset-local-data" });
     return;
   }
   if (event.target.closest("#settings-check-btn")) {

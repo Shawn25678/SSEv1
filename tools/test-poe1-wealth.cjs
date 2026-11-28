@@ -1190,15 +1190,13 @@ Eater of Worlds Item`);
   await c.readWealthTab({auto:true});
   assert.equal(stashRequests.length,4);
   assert.equal(c.wealthDraft().completeRead,true,'a resumed scan completes even if its tabs are empty');
-  run('state.poe1StashOn={Covens:{1:false}}; state.poe1StashTabs.Standard=[{index:2,name:"Standard tab"}];');
-  const history = run('JSON.stringify(state.poe1WealthSeries)');
-  assert.equal(c.clearPoe1StashCache(),true);
-  assert.equal(c.wealthDraft().poe1Tabs.length,0);
-  assert.equal(run('state.poe1StashTabs.Standard[0].name'),'Standard tab');
-  assert.equal(run('state.poe1StashOn.Covens[1]'),false);
-  assert.equal(run('poe1SignedIn'),true);
-  assert.equal(run('JSON.stringify(state.poe1WealthSeries)'),history);
-  run('state.activeGame="poe2";');
-  assert.equal(c.clearPoe1StashCache(),false);
-  console.log('Passed: first stash read, cooldown resume and scoped cache reset.');
+  let resetMessage;
+  c.window.chrome.webview.postMessage = message => { resetMessage = message; };
+  for (const game of ["poe1","poe2"]) {
+    run('state.activeGame=' + JSON.stringify(game));
+    assert.match(c.renderSettings(),/id="settings-reset-data-btn"/);
+  }
+  c.onClick({target:{closest:selector => selector === '#settings-reset-data-btn'}});
+  assert.equal(resetMessage?.type,'reset-local-data');
+  console.log('Passed: first stash read, cooldown resume and Settings reset action.');
 })().catch(e=>{console.error(e);process.exitCode=1});

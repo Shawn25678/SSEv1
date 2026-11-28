@@ -53,4 +53,57 @@ static class AppDataProfile
             (Path.GetFileName(data).Equals(LegacyName, StringComparison.OrdinalIgnoreCase) || !Directory.Exists(integrated))
             ? separated : integrated;
     }
+
+    public static void ClearLocalData()
+    {
+        var data = DataPath();
+        // Reset the legacy browser too, so removing the integrated one cannot
+        // cause the next sign-in to fall back to an old browser session.
+        var browser = OverridePath is null
+            ? Path.Combine(LocalRoot, "StillSane", "poe1-browser")
+            : Path.Combine(data, "poe1-browser");
+        ClearLocalData(data, browser);
+    }
+
+    internal static void ClearLocalData(string data, string browser)
+    {
+        data = Path.TrimEndingDirectorySeparator(Path.GetFullPath(data));
+        if (Path.GetPathRoot(data) == data || (File.GetAttributes(data) & FileAttributes.ReparsePoint) != 0)
+            throw new IOException("The SSE profile folder could not be verified.");
+
+        // Use only SSE-owned paths. Keep the profile marker, the path-bound
+        // tester code and installation ID, and any saved export files.
+        string[] files =
+        [
+            "launcher-position.json", "poe1-session.json", "prices.json",
+            "trade-static.json", "trade-static-poe1.json", "trade-stats.json",
+            "trade-stats-poe1.json", "trade-items-poe1.json", "json-folder.txt",
+            "last-backup-folder.txt", "build-folder.txt", "build-bookmarks.json",
+            "build-bookmarks.json.tmp",
+        ];
+        var integratedBrowser = Path.Combine(data, "poe1-browser");
+        var directories = new List<string> { Path.Combine(data, "EBWebView"), integratedBrowser, Path.Combine(data, "www") };
+        if (!string.Equals(browser, integratedBrowser, StringComparison.OrdinalIgnoreCase)
+            && File.Exists(Path.Combine(browser, "sse-profile")))
+            directories.Add(browser);
+
+        // WebView can still be releasing its profile files from the previous process.
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                foreach (var directory in directories)
+                {
+                    if (!Directory.Exists(directory)) continue;
+                    if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                        throw new IOException("An SSE data folder points to another location.");
+                    Directory.Delete(directory, recursive: true);
+                }
+                foreach (var file in files) File.Delete(Path.Combine(data, file));
+                return;
+            }
+            catch (IOException) when (attempt < 12) { Thread.Sleep(500); }
+            catch (UnauthorizedAccessException) when (attempt < 12) { Thread.Sleep(500); }
+        }
+    }
 }
